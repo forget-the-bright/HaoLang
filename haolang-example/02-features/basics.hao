@@ -1,0 +1,60 @@
+// 语言基础：插值、空安全、控制流、when、接口与类
+package main;
+
+func main() {
+    val name = "HaoLang";
+    var count: Int = 3;
+    val nothing: String? = null;
+
+    fmt.println($"Hello {name}!");
+    fmt.println($"count={count}, double={count * 2}");
+
+    val len = nothing?.length ?? 0;
+    fmt.println($"nullable len={len}");
+
+    if (count > 2) {
+        fmt.println("big");
+    } else {
+        fmt.println("small");
+    }
+
+    while (count > 0) {
+        count -= 1;
+    }
+
+    for (i in [1, 2, 3]) {
+        fmt.println($"i={i}");
+    }
+
+    val kind = when (count) {
+        0 -> "zero"
+        1, 2 -> "few"
+        else -> "many"
+    };
+    fmt.println($"kind={kind}");
+
+    val p = new Point(1, 2);
+    fmt.println(p.describe());
+}
+
+interface Shape {
+    func area(): Double;
+}
+
+public class Point : Shape {
+    private var x: Int = 0;
+    private var y: Int = 0;
+
+    constructor(x: Int, y: Int) {
+        this.x = x;
+        this.y = y;
+    }
+
+    public override func area(): Double {
+        return 0.0;
+    }
+
+    public func describe(): String {
+        return $"Point({this.x}, {this.y})";
+    }
+}

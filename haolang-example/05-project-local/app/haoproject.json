@@ -1,0 +1,11 @@
+{
+  "project": {
+    "name": "example-local-app",
+    "module": "example/local-app",
+    "version": "0.1.0",
+    "main": "main.hao"
+  },
+  "localReferences": [
+    "../greeter"
+  ]
+}

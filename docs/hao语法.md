@@ -435,14 +435,15 @@ import shapes as s;
 
 | 概念 | 说明 |
 |------|------|
-| `haoproject.json` | 项目清单（**不用** `hao.mod`） |
-| `dependencies` | 精确版或 `^` / `~` / `>=` / `=`；tidy 解析为精确版写入 lock |
+| `haoproject.json` | **工程清单**（应用根；**不用** `hao.mod`） |
+| `haopkg.json` | **发布包元数据**（仓内 `<module>/<version>/`；与工程清单不同文件） |
+| `dependencies` | 写在工程清单上；精确版或 `^` / `~` / `>=` / `=`；tidy 解析为精确版写入 lock |
 | 传递依赖 | 被依赖包的 `haopkg.json` → `dependencies` 一并解析；冲突硬失败 |
-| `localReferences` | 本地工程互引（对标 ProjectReference），不进 cache |
+| `localReferences` | 本地工程互引（对标 ProjectReference），不进 cache，**不要求**对方有 `haopkg.json` |
 | `exclude` | 从图中排除某模块（勿 exclude 仍被 `import` 的包） |
 | stdlib | 永远随工具链，**不走** registry |
 
-命令、仓库协议、本地私服（`script/haoreg_server.py`）见 [`hao命令.md`](hao命令.md) §4。
+二者区别详见 [`hao命令.md`](hao命令.md) **§4.0**。命令、仓库协议、本地私服见同文档 §4。
 
 ---
 

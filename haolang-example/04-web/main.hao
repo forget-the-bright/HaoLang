@@ -1,0 +1,45 @@
+// MVC 演示：扫描 demo/web（含 api 子包），自测几条 HTTP 后退出。
+// 若要常驻服务：把文末自测段换成 app.serve()，Ctrl+C 结束。
+package main;
+
+import demo.web;
+import demo.web.api;
+import net;
+import thread;
+
+func main() {
+    val app = new net.HttpApp();
+    val port = 18080;
+    if (!app.listen(port)) {
+        fmt.println($"listen fail on {port}");
+        return;
+    }
+    val n = app.scan("demo/web");
+    fmt.println($"routes registered ≈ {n} (expect >= 2)");
+    fmt.println($"try: http://127.0.0.1:{port}/web/home");
+
+    // 后台各接一次请求，主线程用 Http 客户端自测
+    val th1 = new thread.Thread();
+    th1.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r1 = net.Http.get($"http://127.0.0.1:{port}/web/home");
+    fmt.println($"GET /web/home -> {r1.status} {r1.body}");
+    th1.join();
+
+    val th2 = new thread.Thread();
+    th2.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r2 = net.Http.get($"http://127.0.0.1:{port}/web/api/v1");
+    fmt.println($"GET /web/api/v1 -> {r2.body}");
+    th2.join();
+
+    val th3 = new thread.Thread();
+    th3.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r3 = net.Http.post($"http://127.0.0.1:{port}/web/api/echo", "zz");
+    fmt.println($"POST /web/api/echo -> {r3.body}");
+    th3.join();
+
+    app.close();
+    fmt.println("web demo done");
+}

@@ -1,0 +1,8 @@
+{
+  "example.com/demo/greetpkg": {
+    "version": "1.0.0",
+    "registry": "local",
+    "sha256": "ba70841973c628fabea93d4150746d1ba5e8cd3d15e987aa3a811455a6635ba4",
+    "requiredBy": ["<root>"]
+  }
+}

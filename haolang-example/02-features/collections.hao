@@ -1,0 +1,21 @@
+// 标准库 collections：List / Map 最小演示
+package main;
+
+import collections;
+
+func main() {
+    val list = new collections.List<Int>();
+    list.add(10);
+    list.add(20);
+    list.add(30);
+    fmt.println($"list size={list.size()} first={list.get(0)}");
+
+    val map = new collections.Map<String, Int>();
+    map.put("a", 1);
+    map.put("b", 2);
+    fmt.println($"map a={map.get("a")!!} size={map.size()}");
+
+    for (n in list) {
+        fmt.println($"item={n}");
+    }
+}

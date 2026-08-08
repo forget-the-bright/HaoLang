@@ -1,0 +1,6 @@
+package hi;
+
+// 经 localReferences 被 app 引用（本地互引，不进 HAO_REPO）
+public func greet(): String {
+    return "hello-from-greeter";
+}

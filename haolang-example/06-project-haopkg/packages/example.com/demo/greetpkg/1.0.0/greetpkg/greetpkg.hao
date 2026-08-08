@@ -1,0 +1,5 @@
+package greetpkg;
+
+public func mark(): String {
+    return "greetpkg-1.0.0";
+}

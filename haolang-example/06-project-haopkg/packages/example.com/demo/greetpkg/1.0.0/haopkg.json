@@ -1,0 +1,5 @@
+{
+  "module": "example.com/demo/greetpkg",
+  "version": "1.0.0",
+  "description": "示例库迷你发布包（教学用）"
+}

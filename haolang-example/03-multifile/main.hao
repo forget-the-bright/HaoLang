@@ -1,0 +1,18 @@
+// 多文件：同目录下的本地包 calc / shapes
+package main;
+
+import calc;
+import calc.*;
+import shapes as s;
+
+func main() {
+    fmt.println(calc.add(2, 3));
+    fmt.println(mul(4, 5));
+
+    val c = new s.Circle(1.0);
+    fmt.println(c.area());
+    fmt.println(c.name());
+
+    val r = new s.Rect(3.0, 4.0);
+    fmt.println(c.area() + r.area());
+}

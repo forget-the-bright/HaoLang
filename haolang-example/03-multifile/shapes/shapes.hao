@@ -1,0 +1,21 @@
+package shapes;
+
+public interface Shape {
+    func area(): Double;
+}
+
+public class Circle : Shape {
+    var radius: Double = 0.0;
+    constructor(r: Double) { this.radius = r; }
+    public func area(): Double {
+        return 3.14159 * this.radius * this.radius;
+    }
+    public func name(): String { return "圆"; }
+}
+
+public class Rect : Shape {
+    var w: Double = 0.0;
+    var h: Double = 0.0;
+    constructor(w: Double, h: Double) { this.w = w; this.h = h; }
+    public func area(): Double { return this.w * this.h; }
+}

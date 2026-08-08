@@ -1,44 +1,45 @@
 ﻿# ============================================================
 #  打包 HaoLang 分发版到 target 目录
 # ------------------------------------------------------------
-#  用法:
-#    script\win\package.ps1                        打包宿主平台
-#    script\win\package.ps1 -Target linux-amd64    打包指定平台
+#  用法（仓库根）:
+#    script\win\package.ps1                        打包 win-amd64
 #    script\win\package.ps1 -Zip                   同时生成 zip
+#    script\win\package.ps1 -SkipSelfCheck         跳过运行自检
+#    script\win\package.ps1 -Target linux-amd64    （当前会失败并说明原因）
 #
-#  产出: target\{os}-{arch}-haolang-{版本}\
-#        例如 target\win-amd64-haolang-0.3.0\
+#  前置: haobuild → build_runtime.ps1 → fetch_winlibs.ps1
+#  产出: target\win-amd64-haolang-{版本}\
+#        例如 target\win-amd64-haolang-0.48.0\
 # ============================================================
 
 param(
     [string]$Target = "",
-    [switch]$Zip
+    [switch]$Zip,
+    [switch]$SkipSelfCheck
 )
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path (Join-Path $PSScriptRoot '..') '..')).Path
 
 # ---------- 读取版本号（VERSION 是唯一来源）----------
-$version = (Get-Content "$root\VERSION" -Raw).Trim()
+$version = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
 
 # ---------- 确定目标平台 ----------
-if (-not $Target) {
-    # 宿主平台：Windows x64
-    $Target = if ([Environment]::Is64BitOperatingSystem) { "win-amd64" } else { "win-386" }
-}
+# 本脚本仅能产出 Windows x64 宿主分发包（本机 hao.exe + LLVM 均为 win-amd64）
+$hostTarget = 'win-amd64'
+if (-not $Target) { $Target = $hostTarget }
 
 $knownTargets = @('win-amd64','win-arm64','linux-amd64','linux-arm64','darwin-amd64','darwin-arm64')
 if ($Target -notin $knownTargets) {
     Write-Host "未知目标平台: $Target" -ForegroundColor Red
     Write-Host "支持: $($knownTargets -join ', ')" -ForegroundColor Yellow
+    Write-Host "当前可打包: $hostTarget" -ForegroundColor Yellow
     exit 1
 }
 
 $distName = "$Target-haolang-$version"
-$out      = "$root\target\$distName"
-$isWin    = $Target.StartsWith('win-')
-$exeExt   = if ($isWin) { '.exe' } else { '' }
-$hostTarget = "win-amd64"
+$out      = Join-Path $root "target\$distName"
+$exeExt   = '.exe'
 
 # ------------------------------------------------------------
 #  非宿主平台的分发包：当前无法产出
@@ -69,6 +70,8 @@ if ($Target -ne $hostTarget) {
     Write-Host "      - 完成自举后交叉编译 hao 自身（Stage 10），或"
     Write-Host "      - 在 $Target 平台 / WSL / CI 上执行本脚本"
     Write-Host ""
+    Write-Host "当前可打包: $hostTarget" -ForegroundColor Cyan
+    Write-Host ""
     exit 1
 }
 
@@ -76,22 +79,21 @@ Write-Host "打包 HaoLang $version -> $Target" -ForegroundColor Cyan
 Write-Host "  输出目录: $out"
 
 # ---------- 前置检查 ----------
-# 运行时库名：宿主用 libhaort.a，交叉编译用 libhaort-{target}.a
-$rtName = if ($Target -eq $hostTarget) { "libhaort.a" } else { "libhaort-$Target.a" }
+$rtName = 'libhaort.a'
+$crtLibs = @('libcmt.lib', 'libvcruntime.lib', 'libucrt.lib', 'kernel32.lib', 'oldnames.lib', 'uuid.lib')
+$sysrootLib = Join-Path $root "lib\sysroot\$Target\lib"
 
 $required = @(
-    @{ Path = "$root\output\hao.exe";              Desc = "编译器（需先执行 haobuild）" }
-    @{ Path = "$root\stdlib\$rtName";              Desc = "运行时库（需先执行 build_runtime.ps1 -Target $Target）" }
-    @{ Path = "$root\lib\llvm\bin\clang.exe";      Desc = "LLVM clang" }
+    @{ Path = (Join-Path $root 'output\hao.exe');              Desc = "编译器（需先执行 haobuild）" }
+    @{ Path = (Join-Path $root "stdlib\$rtName");              Desc = "运行时库（需先执行 script\win\build_runtime.ps1）" }
+    @{ Path = (Join-Path $root 'lib\llvm\bin\clang.exe');      Desc = "LLVM clang（需先执行 script\win\fetch_llvm.ps1 或 setup_env）" }
+    @{ Path = (Join-Path $root 'lib\llvm\bin\lld-link.exe');   Desc = "COFF 链接器 lld-link" }
 )
-# Windows 目标用 lld-link（COFF），其他平台用 ld.lld（ELF）
-if ($isWin) {
-    $required += @{ Path = "$root\lib\llvm\bin\lld-link.exe"; Desc = "COFF 链接器" }
-    # CRT 最小集：无 VS 目标机链接必需（fetch_winlibs.ps1）
-    $required += @{ Path = "$root\lib\sysroot\$Target\lib\libcmt.lib"; Desc = "Win CRT 最小集（script\\fetch_winlibs.ps1 -Target $Target）" }
-    $required += @{ Path = "$root\lib\sysroot\$Target\lib\kernel32.lib"; Desc = "Win CRT 最小集（kernel32.lib）" }
-} else {
-    $required += @{ Path = "$root\lib\llvm\bin\ld.lld.exe";   Desc = "ELF 链接器" }
+foreach ($lib in $crtLibs) {
+    $required += @{
+        Path = (Join-Path $sysrootLib $lib)
+        Desc = "Win CRT 最小集（script\win\fetch_winlibs.ps1 -Target $Target）"
+    }
 }
 
 $missing = $false
@@ -102,7 +104,17 @@ foreach ($r in $required) {
         $missing = $true
     }
 }
-if ($missing) { exit 1 }
+if ($missing) {
+    Write-Host ""
+    Write-Host "打包配方（仓库根）:" -ForegroundColor Cyan
+    Write-Host "  . .\env.ps1"
+    Write-Host "  haobuild"
+    Write-Host "  powershell -ExecutionPolicy Bypass -File script\win\build_runtime.ps1"
+    Write-Host "  powershell -ExecutionPolicy Bypass -File script\win\fetch_winlibs.ps1 -Target win-amd64"
+    Write-Host "  powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip"
+    Write-Host ""
+    exit 1
+}
 
 # ---------- 建立目录 ----------
 if (Test-Path $out) {
@@ -123,54 +135,73 @@ if (Test-Path $out) {
     }
 }
 if (Test-Path $out) { Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue }
-foreach ($d in @('bin','stdlib','stdlib\src','lib\llvm\bin','examples')) {
-    New-Item -ItemType Directory -Path "$out\$d" -Force | Out-Null
+foreach ($d in @('bin','stdlib','stdlib\src','lib\llvm\bin','examples','docs')) {
+    New-Item -ItemType Directory -Path (Join-Path $out $d) -Force | Out-Null
 }
-if ($isWin) {
-    New-Item -ItemType Directory -Path "$out\lib\sysroot\$Target\lib" -Force | Out-Null
-}
+New-Item -ItemType Directory -Path (Join-Path $out "lib\sysroot\$Target\lib") -Force | Out-Null
 
 # ---------- 拷贝 ----------
 # 编译器本体（放 bin 便于加入 PATH）
-Copy-Item "$root\output\hao.exe" "$out\bin\hao$exeExt"
+Copy-Item (Join-Path $root 'output\hao.exe') (Join-Path $out "bin\hao$exeExt")
 
 # 运行时库：分发时统一命名为 libhaort.a，
 # 因为在目标机上它就是"宿主"平台的库
-Copy-Item "$root\stdlib\$rtName" "$out\stdlib\libhaort.a"
+Copy-Item (Join-Path $root "stdlib\$rtName") (Join-Path $out 'stdlib\libhaort.a')
 # 运行时源码（按功能拆分的模块）
-Copy-Item "$root\stdlib\runtime_internal.h" "$out\stdlib\"
-Get-ChildItem "$root\stdlib\runtime_*.c" | ForEach-Object {
-    Copy-Item $_.FullName "$out\stdlib\"
+Copy-Item (Join-Path $root 'stdlib\runtime_internal.h') (Join-Path $out 'stdlib\')
+Get-ChildItem (Join-Path $root 'stdlib') -Filter 'runtime_*.c' | ForEach-Object {
+    Copy-Item $_.FullName (Join-Path $out 'stdlib\')
 }
 
 # 标准库 .hao 源码包（必需！hao.exe 依赖 ../stdlib/src 定位 os/sync/
 # collections/exception/fmt 等 import 包，缺了它们，目标机上这些
 # 标准库全部无法使用。见 DriverResolve.cpp stdlibSrcDir()）
-Get-ChildItem "$root\stdlib\src" -Directory | ForEach-Object {
-    Copy-Item $_.FullName "$out\stdlib\src\" -Recurse
+Get-ChildItem (Join-Path $root 'stdlib\src') -Directory | ForEach-Object {
+    Copy-Item $_.FullName (Join-Path $out 'stdlib\src\') -Recurse
 }
 
-# 后端工具链
-Copy-Item "$root\lib\llvm\bin\clang.exe" "$out\lib\llvm\bin\"
-if ($isWin) {
-    Copy-Item "$root\lib\llvm\bin\lld-link.exe" "$out\lib\llvm\bin\"
-    # Windows CRT 最小集（按 arch 分目录，禁止混放）
-    Copy-Item "$root\lib\sysroot\$Target\lib\*.lib" "$out\lib\sysroot\$Target\lib\"
-    if (Test-Path "$root\lib\sysroot\$Target\lib\MANIFEST.json") {
-        Copy-Item "$root\lib\sysroot\$Target\lib\MANIFEST.json" "$out\lib\sysroot\$Target\lib\"
+# 后端工具链（win-amd64：clang + lld-link）
+Copy-Item (Join-Path $root 'lib\llvm\bin\clang.exe') (Join-Path $out 'lib\llvm\bin\')
+Copy-Item (Join-Path $root 'lib\llvm\bin\lld-link.exe') (Join-Path $out 'lib\llvm\bin\')
+# Windows CRT 最小集（按 arch 分目录，禁止混放）
+Copy-Item (Join-Path $sysrootLib '*.lib') (Join-Path $out "lib\sysroot\$Target\lib\")
+$manifestSrc = Join-Path $sysrootLib 'MANIFEST.json'
+if (Test-Path $manifestSrc) {
+    Copy-Item $manifestSrc (Join-Path $out "lib\sysroot\$Target\lib\")
+}
+
+# 示例库：整树拷贝 haolang-example/ → examples/（勿用 test/suite、oldcase）
+$exampleRoot = Join-Path $root 'haolang-example'
+$helloEx = Join-Path $exampleRoot '01-hello\hello.hao'
+if (-not (Test-Path $helloEx)) {
+    Write-Host "  缺少必需示例: $helloEx" -ForegroundColor Red
+    Write-Host "        请维护仓库根 haolang-example\01-hello\hello.hao" -ForegroundColor Yellow
+    exit 1
+}
+Copy-Item (Join-Path $exampleRoot '*') (Join-Path $out 'examples\') -Recurse -Force
+
+# 用户文档：语法与命令手册
+foreach ($doc in @('hao语法.md', 'hao命令.md')) {
+    $srcDoc = Join-Path $root "docs\$doc"
+    if (-not (Test-Path $srcDoc)) {
+        Write-Host "  缺少文档: $srcDoc" -ForegroundColor Red
+        exit 1
     }
-} else {
-    Copy-Item "$root\lib\llvm\bin\ld.lld.exe" "$out\lib\llvm\bin\"
-}
-
-# 示例代码：单文件示例 + 多文件/跨包目录示例
-Copy-Item "$root\test\*" "$out\examples\" -ErrorAction SilentlyContinue
-foreach ($d in @('multifile','pkgdemo','pkgshapes')) {
-    if (Test-Path "$root\test\$d") { Copy-Item "$root\test\$d" "$out\examples\" -Recurse }
+    Copy-Item $srcDoc (Join-Path $out 'docs\')
 }
 
 # ---------- 版本清单 ----------
-$stdlibPkgs = (Get-ChildItem "$root\stdlib\src" -Directory | ForEach-Object { $_.Name }) -join ', '
+$llvmVersion = '22.1.8'
+try {
+    $clangVerOut = & (Join-Path $root 'lib\llvm\bin\clang.exe') --version 2>&1 | Out-String
+    if ($clangVerOut -match 'clang version\s+(\d+\.\d+\.\d+)') {
+        $llvmVersion = $Matches[1]
+    }
+} catch {
+    # 保留回退字面量
+}
+
+$stdlibPkgs = (Get-ChildItem (Join-Path $root 'stdlib\src') -Directory | ForEach-Object { $_.Name }) -join ', '
 $manifest = [ordered]@{
     name           = 'haolang'
     version        = $version
@@ -179,12 +210,12 @@ $manifest = [ordered]@{
     arch           = $Target.Split('-')[1]
     buildTime      = (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
     buildHost      = "$([Environment]::OSVersion.VersionString) / $env:PROCESSOR_ARCHITECTURE"
-    llvmVersion    = '22.1.8'
+    llvmVersion    = $llvmVersion
     antlrVersion   = '4.13.2'
     stdlibPackages = $stdlibPkgs
 }
-$manifest | ConvertTo-Json | Set-Content "$out\VERSION.json" -Encoding UTF8
-$version | Set-Content "$out\VERSION" -Encoding UTF8 -NoNewline
+$manifest | ConvertTo-Json | Set-Content (Join-Path $out 'VERSION.json') -Encoding UTF8
+$version | Set-Content (Join-Path $out 'VERSION') -Encoding UTF8 -NoNewline
 
 # ---------- 使用说明 ----------
 $readme = @"
@@ -195,11 +226,13 @@ $('=' * 40)
 
 快速开始
 --------
-  bin\hao$exeExt run   examples\hello.hao      编译并运行
-  bin\hao$exeExt build examples\hello.hao      编译为可执行文件
-  bin\hao$exeExt emit  examples\hello.hao      生成 LLVM IR
-  bin\hao$exeExt env                           查看工具链信息
-  bin\hao$exeExt version                       查看版本
+  bin\hao$exeExt run   examples\01-hello\hello.hao   编译并运行
+  bin\hao$exeExt build examples\01-hello\hello.hao   编译为可执行文件
+  bin\hao$exeExt emit  examples\01-hello\hello.hao   生成 LLVM IR
+  bin\hao$exeExt env                                 查看工具链信息
+  bin\hao$exeExt version                             查看版本
+
+更多示例见 examples\README.md；语法/命令见 docs\hao语法.md、docs\hao命令.md。
 
 把 bin 目录加入 PATH 后可直接使用 hao 命令。
 
@@ -209,7 +242,8 @@ $('=' * 40)
   lib\llvm\bin\   后端工具链（clang + 链接器）
   lib\sysroot\    链接用 CRT/sysroot（Windows：CRT 最小集；按目标 arch 分目录）
   stdlib\         运行时库 libhaort.a
-  examples\       示例代码
+  examples\       示例库（来自仓库 haolang-example/）
+  docs\           hao语法.md / hao命令.md
 
 注意
 ----
@@ -224,28 +258,36 @@ lib\sysroot\<平台>\lib（Windows 无 VS 时链接必需）。
 控制台输出会自动切换到 UTF-8 代码页，
 中文与 Emoji 均可正确显示。
 "@
-$readme | Set-Content "$out\README.txt" -Encoding UTF8
+$readme | Set-Content (Join-Path $out 'README.txt') -Encoding UTF8
 
 # ---------- 自检（仅宿主平台可执行）----------
-if ($Target -eq $hostTarget) {
+if ($SkipSelfCheck) {
+    Write-Host "`n（-SkipSelfCheck：跳过运行自检）" -ForegroundColor Yellow
+} else {
     Write-Host "`n验证打包结果..." -ForegroundColor Cyan
+    $probeDir = Join-Path $root 'target\test\package_selfcheck'
+    $probe = Join-Path $probeDir 'probe.hao'
+    New-Item -ItemType Directory -Path $probeDir -Force | Out-Null
     Push-Location $out
     try {
         & ".\bin\hao.exe" env |
             Select-String -Pattern '(''hao''|compiler|stdio|toolchain|version)' |
             ForEach-Object { "  " + $_.Line }
 
-        # 1) 基础示例
-        $r = & ".\bin\hao.exe" run "examples\hello.hao" 2>&1
+        # 1) 基础示例（来自 haolang-example/01-hello）
+        $r = & ".\bin\hao.exe" run "examples\01-hello\hello.hao" 2>&1
         if ($LASTEXITCODE -ne 0) { throw "hello 自检失败: $r" }
-        Write-Host "  run hello.hao      -> OK: $r" -ForegroundColor Green
+        Write-Host "  run 01-hello      -> OK: $r" -ForegroundColor Green
+        foreach ($doc in @('docs\hao语法.md', 'docs\hao命令.md')) {
+            if (-not (Test-Path ".\$doc")) { throw "发行包缺少 $doc" }
+        }
+        Write-Host "  docs 手册         -> OK" -ForegroundColor Green
 
         # 2) 验证标准库包打包完整：os + sync + net（缺 stdlib/src 会「找不到包」）
-        #    必须用发行包内相对路径；勿依赖本机 D:\buildLang\stdlib 绝对路径兜底
+        #    必须用发行包内相对路径；勿依赖开发树 stdlib 绝对路径兜底
         if (-not (Test-Path ".\stdlib\src\net")) {
             throw "发行包缺少 stdlib\src\net（import net 会失败）"
         }
-        $probe = "$root\script\package_selfcheck.hao"
         @"
 package main;
 import os;
@@ -264,7 +306,6 @@ func main() {
         $r2 = & ".\bin\hao.exe" run $probe 2>&1
         if ($LASTEXITCODE -ne 0) { throw "标准库自检失败: $r2" }
         Write-Host "  run stdlib 自检    -> OK: $r2" -ForegroundColor Green
-        Remove-Item $probe -Force -ErrorAction Ignore
 
         # 3) 标准库路径必须落在发行包内（相对 bin/../stdlib），不能指向开发树。
         #    用 ASCII 路径片段匹配，避免 PS5.1 中文编码导致 -match 误失败。
@@ -272,21 +313,20 @@ func main() {
         if ($envOut -notmatch 'stdlib[/\\]src') {
             throw "hao env 未显示标准库源码路径（输出中应含 stdlib/src）:`n$envOut"
         }
-        # 开发树兜底特征：.../buildLang/stdlib/src 且路径中无 target\
+        # 开发树兜底特征：.../stdlib/src 落在仓库根且路径中无 target\
         if ($envOut -match 'buildLang[/\\]stdlib[/\\]src' -and $envOut -notmatch 'target[/\\]') {
-            throw "发行包仍回退到开发树绝对路径 D:\buildLang\stdlib（便携布局探测失败）:`n$envOut"
+            throw "发行包仍回退到开发树绝对路径（便携布局探测失败）:`n$envOut"
         }
         Write-Host "  hao env 标准库路径 -> OK" -ForegroundColor Green
     } finally {
         Pop-Location
+        Remove-Item $probeDir -Recurse -Force -ErrorAction Ignore
     }
-} else {
-    Write-Host "`n（交叉编译包，跳过运行自检）" -ForegroundColor Yellow
 }
 
 # ---------- 打 zip ----------
 if ($Zip) {
-    $zipPath = "$root\target\$distName.zip"
+    $zipPath = Join-Path $root "target\$distName.zip"
     if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
     Compress-Archive -Path $out -DestinationPath $zipPath
     $zipMB = (Get-Item $zipPath).Length / 1MB

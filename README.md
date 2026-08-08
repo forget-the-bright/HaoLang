@@ -76,9 +76,9 @@ haoenv               # 环境自检
 haobuild             # 构建编译器
 powershell -ExecutionPolicy Bypass -File script\win\build_runtime.ps1
 
-# 运行示例
-.\output\hao.exe run test\hello.hao
-.\output\hao.exe run test\features.hao
+# 运行示例（教学示例库；CI 套件仍在 test/）
+.\output\hao.exe run haolang-example\01-hello\hello.hao
+.\output\hao.exe run haolang-example\02-features\basics.hao
 ```
 
 `haobuild` 等价于（路径相对仓库根）：
@@ -108,7 +108,7 @@ hao env / hao version                     环境与版本信息
 - `hao run/build` 接受**文件或目录**：传文件只编译列出的文件（`go run a.go b.go` 语义）；传目录编译该目录全部 `.hao`（**不含** `*_test.hao`）。
 - `hao test`：发现 `func TestXxx(t: testing.T)`，合成入口运行；**不跑业务 main**。详见 [命令文档 §5](docs/hao命令.md#5-hao-test对标-go-test--v042) 与记忆文档 **5.16**。
 - `hao fmt`：去行尾空白、统一 LF、末换行、按 `{}` 深度 4 空格缩进；目录递归；`-w`/`--check`；不断行重排。
-- 入口旁若有 **`haoproject.json`**：`localReferences` + 精确版 `dependencies`；见 [命令文档 §4](docs/hao命令.md#4-包管理hao-mod--haoprojectjson)（设计权威：记忆文档 **5.15**）。
+- 入口旁若有 **`haoproject.json`**（工程清单）：`localReferences` + `dependencies`；仓内发布包元数据是 **`haopkg.json`**（二者不同，见 [命令文档 §4.0](docs/hao命令.md#40-haoprojectjson-与-haopkgjson-的区别)）。设计权威：记忆文档 **5.15**。
 - 测试产物一律进 **`target/test/`**（规则 7）。
 - 用户程序默认以 `-O2` 编译（GC 的保守栈扫描依赖合理的栈布局）。
 - 语法/语义长文与 Go·Java·C# 对照：[`docs/hao语法.md`](docs/hao语法.md)。
@@ -266,7 +266,8 @@ hao build test\hello.hao --target linux-amd64 -o hello
 ├── repo/
 │   ├── LocalRepo/          测试本地仓（HAO_REPO）
 │   └── RegisterRepo/       私服远程源数据（仅 haoreg）
-├── docs/                   文档治理 / 坑债 / 项目时间线合订
+├── docs/                   文档治理 / 坑债 / 项目时间线；hao语法.md / hao命令.md
+├── haolang-example/        **用户向示例库**（hello / 特性 / 多文件 / Web / 项目 / 测试）
 ├── 记忆文档.md             AI 工作规则与设计决策（权威）
 ├── test/
 │   ├── suite/              多文件集成套件（基线 954 行；含 demo/web、corp 多包）
@@ -282,11 +283,17 @@ hao build test\hello.hao --target linux-amd64 -o hello
 
 ### 打包发行版（Windows x64，无 VS 目标机可用）
 
+仅宿主 **`win-amd64`** 可打包（本机 `hao.exe` + LLVM 均为 Windows x64）。`-Target` 其它平台会明确失败（交叉编译「用户程序」已支持，交叉打包「编译器自身」尚未支持）。
+
 ```powershell
-# 先采集 CRT（含 uuid）；.ps1 须 UTF-8 BOM
+# 仓库根；.ps1 须 UTF-8 BOM
+. .\env.ps1
+haobuild
+powershell -ExecutionPolicy Bypass -File script\win\build_runtime.ps1
 powershell -ExecutionPolicy Bypass -File script\win\fetch_winlibs.ps1 -Target win-amd64
-# 打包前：不要把终端 cwd 停在 target\...\bin（会锁目录）；在仓库根执行
+# 打包前：不要把终端 cwd 停在 target\...\bin（会锁目录）
 powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
+# 调试可加 -SkipSelfCheck 跳过运行自检
 ```
 
 发行版目录须完整保留：
@@ -294,6 +301,8 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 - `lib\llvm\bin\`（clang + lld-link）
 - `lib\sysroot\win-amd64\lib\`（CRT 最小集：libcmt / libvcruntime / libucrt / kernel32 / oldnames / **uuid**）
 - `stdlib\`（`libhaort.a` + `src\` 下全部 `.hao` 包，含 **net**）
+- `examples\`（整树来自仓库 [`haolang-example/`](haolang-example/)，含 `01-hello` 等；不含 `test/suite` / `oldcase`）
+- `docs\`（`hao语法.md`、`hao命令.md`）
 
 整目录拷到任意 Windows x64 即可用。`hao` 按自身相对路径查找工具链与标准库；**不要只拷贝 `hao.exe`**。
 

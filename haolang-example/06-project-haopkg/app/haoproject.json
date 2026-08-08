@@ -1,0 +1,14 @@
+{
+  "project": {
+    "name": "example-haopkg-app",
+    "module": "example/haopkg-app",
+    "version": "0.1.0",
+    "main": "main.hao"
+  },
+  "dependencies": {
+    "example.com/demo/greetpkg": "1.0.0"
+  },
+  "registry": {
+    "includeDefault": false
+  }
+}

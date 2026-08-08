@@ -1,0 +1,24 @@
+// haoroutine + channel：缓冲发送 / 主线程接收
+package main;
+
+import channel;
+import thread;
+
+func main() {
+    val ch = channel.make(4);
+    haoroutine {
+        ch.sendInt(11);
+        ch.sendInt(22);
+        ch.sendStr("hi-chan");
+    }
+    thread.sleep(200);
+    fmt.println(ch.recvInt());
+    fmt.println(ch.recvInt());
+    fmt.println(ch.recvStr()!!);
+
+    val sync = channel.make(0);
+    haoroutine {
+        sync.sendInt(99);
+    }
+    fmt.println(sync.recvInt());
+}

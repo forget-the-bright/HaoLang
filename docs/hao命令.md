@@ -166,8 +166,33 @@ hao fmt [选项] <文件或目录...>
 
 ## 4. 包管理（`hao mod` + `haoproject.json`）
 
-> **硬性决策**：不用 `hao.mod` / 自研 mod 文法。清单文件名固定为 **`haoproject.json`**（标准 JSON）。  
+> **硬性决策**：不用 `hao.mod` / 自研 mod 文法。工程清单文件名固定为 **`haoproject.json`**（标准 JSON）。  
 > 命令仍叫 **`hao mod`**，仅对标 `go mod` 的交互习惯。
+
+### 4.0 `haoproject.json` 与 `haopkg.json` 的区别
+
+二者**都是标准 JSON，但角色不同，文件名刻意分开**（不要统一成同一个名字）：
+
+| | `haoproject.json` | `haopkg.json` |
+|--|-------------------|---------------|
+| **是什么** | **工程清单**（你正在构建的应用/可执行项目） | **发布包元数据**（放进仓、被人 `dependencies` 引用的库） |
+| **放哪里** | 应用根目录（入口旁；`hao mod init` 生成） | 本地仓/源仓：`<HAO_REPO>/<module>/<version>/haopkg.json` |
+| **谁加载** | `hao build` / `run` / `test` / `hao mod tidy` | tidy 解析依赖图时读；编译从该版本目录取源码 |
+| **典型字段** | `project`（name/module/version/`main`…）、`localReferences`、`dependencies`、`registry`、`exclude` | `module`、`version`、`description`；可选自己的 `dependencies`（传递依赖） |
+| **对标** | Go `go.mod` / .NET `.csproj` / Maven 工程 `pom` | 包仓里「某一版本的包描述」（不是工程文件） |
+| **锁文件** | 旁路生成 `haoproject.lock.json`（应提交） | 无独立 lock；版本由消费方的 lock 钉死 |
+
+**关系（一条链路）**：
+
+1. 应用在 `haoproject.json` 里写 `dependencies`（或只用 `localReferences` 本地互引）。
+2. `hao mod tidy`：对每个依赖去 `HAO_REPO` 找 `<module>/<version>/`，读其中的 **`haopkg.json`**（及子依赖）→ 写出 `haoproject.lock.json`。
+3. 编译：`localReferences` 目录 + lock 对应的仓内包目录 + `stdlib/src` 作为 import 搜索根。
+
+**不要混淆**：
+
+- `localReferences` 指向的本地目录**不需要** `haopkg.json`（对标 ProjectReference，不进仓）。
+- 只有要被别人用模块路径 + 版本依赖的包，才在仓布局里放 `haopkg.json`。
+- 教学示例：[`haolang-example/05-project-local`](../haolang-example/05-project-local/)（仅工程清单）与 [`haolang-example/06-project-haopkg`](../haolang-example/06-project-haopkg/)（工程清单 + 迷你仓内 `haopkg.json`）。
 
 ### 4.1 设计原理（终局不变 · v0.48 Maven 模型）
 

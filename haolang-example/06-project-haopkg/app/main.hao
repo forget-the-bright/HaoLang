@@ -1,0 +1,7 @@
+package main;
+
+import greetpkg;
+
+func main() {
+    fmt.println(greetpkg.mark());
+}
