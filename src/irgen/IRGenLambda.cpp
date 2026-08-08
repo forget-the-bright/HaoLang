@@ -31,6 +31,15 @@ static bool isGlobalName(SymbolTable& syms, const std::string& name) {
     return s->kind == SymbolKind::Function || s->kind == SymbolKind::Class;
 }
 
+// 可通过当前作用域 / 包前缀 / 通配导入解析到的类或顶层函数（如 lang.Integer）
+// —— 与 genPrimary 的 resolveTopLevelName 对齐，勿当闭包自由变量。
+bool IRGen::isResolvableTypeOrFuncName(const std::string& name) {
+    if (isGlobalName(syms_, name)) return true;
+    auto sym = resolveTopLevelName(name, /*ctx=*/nullptr);
+    if (!sym) return false;
+    return sym->kind == SymbolKind::Class || sym->kind == SymbolKind::Function;
+}
+
 // ------------------------------------------------------------
 //  自由变量收集（scope-aware）
 // ------------------------------------------------------------
@@ -54,10 +63,12 @@ std::set<std::string> IRGen::collectFreeNames(antlr4::tree::ParseTree* node,
         std::string name = id->IDENT()->getText();
         // 包名（import 别名 / 隐式预导入的 fmt / 全局函数类）不是自由变量，
         // 不需要捕获。否则 lambda 里 `fmt.println(...)` 会把 fmt 误当捕获变量。
-        bool isPkg = (name == "fmt");
+        bool isPkg = (name == "fmt" || name == "lang" || name == "object");
         for (const auto& im : currentImports_)
             if (im.alias == name || im.importPath == name) { isPkg = true; break; }
-        if (!declared.count(name) && !isGlobalName(syms_, name) && !isPkg)
+        // 类名静态接收者（Integer.toStr / String.valueOf）与 Java/C# 一致：不捕获。
+        // 旧逻辑只查 global() 裸名，漏掉 lang.* 通配导出的包装类。
+        if (!declared.count(name) && !isPkg && !isResolvableTypeOrFuncName(name))
             free.insert(name);
         return free;
     }

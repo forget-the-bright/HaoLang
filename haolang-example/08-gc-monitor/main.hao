@@ -5,6 +5,7 @@ package main;
 import monitor;
 import net;
 import collections;
+import thread;
 
 func main() {
     val app = new net.HttpApp();
@@ -19,13 +20,19 @@ func main() {
     fmt.println("API: GET /api/gc  |  POST /api/gc/collect");
     fmt.println("Ctrl+C 结束");
 
-    // 预热一点堆分配，便于面板上看到非零变化
-    var junk = new collections.List<Object>();
-    var i = 0;
-    while (i < 200) {
-        junk.add(String.valueOf("warm-" + Integer.toStr(i)));
-        i += 1;
-    }
+    // 后台持续分配（lambda 内可用 Integer/String 静态方法，v0.49.2）
+    val th1 = new thread.Thread();
+    th1.start({
+        while (true) {
+            var junk = new collections.List<Object>();
+            var i = 0;
+            while (i < 200) {
+                junk.add(String.valueOf("warm-" + Integer.toStr(i)));
+                i += 1;
+            }
+            thread.sleep(50);
+        }
+    });
 
     app.serve();
 }

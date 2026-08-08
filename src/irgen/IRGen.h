@@ -334,6 +334,8 @@ private:
     // 与内部局部声明生效，而外层变量成为自由变量。declared 跨语句累积。
     std::set<std::string> collectFreeNames(antlr4::tree::ParseTree* node,
                                            std::set<std::string>& declared);
+    // 类名/顶层函数名（含通配导入 lang.Integer 等）不应记入闭包捕获
+    bool isResolvableTypeOrFuncName(const std::string& name);
 
     // 生成一个 lambda 实现函数的完整 define，并登记到 IREmitter。
     void genLambdaImpl(const LambdaInfo& li);

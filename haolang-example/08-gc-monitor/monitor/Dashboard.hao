@@ -70,8 +70,8 @@ class GcSnapshot {
         this.gcThreads = gc.GC.registeredThreads();
         this.summary = gc.GC.summary();
         this.note = "对标说明：工作集/专用内存/句柄/OS线程/CPU/时长来自 os.Process；"
-            + "liveBytes≈托管堆；minor≈Gen0、major≈Gen2（无 Gen1）；"
-            + "栈为保守扫描，无逐帧堆栈 API。";
+        + "liveBytes≈托管堆；minor≈Gen0、major≈Gen2（无 Gen1）；"
+        + "栈为保守扫描，无逐帧堆栈 API。";
         var pct: Int = 0;
         if (this.threshold > 0) {
             val thr = this.threshold;

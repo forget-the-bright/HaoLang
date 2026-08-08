@@ -5,8 +5,8 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.49.1**（`os.Process` 进程资源 + GC minor/major；Web 监控示例）
-- 测试基线：`test/suite` **979** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.49.1
+- 当前版本：**v0.49.2**（lambda 不误捕类型名；对标 Java/C#）
+- 测试基线：`test/suite` **981** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.49.2
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
 - **下一批（默认）**：select 真多路 wait / 泛型 channel——见 [`记忆文档.md`](记忆文档.md) 第 **10** 章
 
@@ -363,7 +363,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | **v0.49.1** os.Process + GC minor/major + 08-gc-monitor；反向 28/28 |
+| ✅ 已完成 | **v0.49.2** lambda 类型名不捕获；**v0.49.1** os.Process + GC；反向 28/28 |
 | 🔥 **下一批（默认开干）** | select 真多路 wait / 泛型 channel / 注释清债 |
 | 其后 | 自举（Stage 10） |
 

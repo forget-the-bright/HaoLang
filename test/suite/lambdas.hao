@@ -113,4 +113,10 @@ func lambdasTest() {
     fmt.println(total);                // 15
     var product = lReduce(nums, 1, { acc, x -> acc * x });
     fmt.println(product);              // 120
+
+    // 9. lambda 内静态类方法（Integer/String）：对标 Java/C#，勿误捕类型名
+    val fmtN: (Int) -> String = { n: Int -> "x=" + Integer.toStr(n) };
+    fmt.println(fmtN(7));              // x=7
+    val wrap: (Int) -> String = { n: Int -> String.valueOf($"k={n}").toString() };
+    fmt.println(wrap(3));              // k=3
 }
