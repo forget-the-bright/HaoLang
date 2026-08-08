@@ -1,0 +1,12 @@
+// ============================================================
+//  corp.service.api：@Service + 实现 Plugin（嵌套于 service 下）
+// ============================================================
+package corp.service.api;
+
+import corp.marker.*;
+
+@Service(value = "api")
+class ApiBean implements Plugin {
+    func pluginId(): String { return "api-plugin"; }
+    func name(): String { return "api-bean"; }
+}

@@ -1,0 +1,104 @@
+// ============================================================
+//  多文件测试套件 · generics：泛型类 / 泛型函数 / 嵌套泛型
+//  覆盖：generic
+// ============================================================
+package main;
+
+// ---- 单类型参数 ----
+class GBox<T> {
+    var value: T;
+    constructor(v: T) { this.value = v; }
+    func get(): T { return this.value; }
+    func set(v: T) { this.value = v; }
+    func isSame(other: T): Bool {
+        return this.value == other;
+    }
+}
+
+// ---- 多类型参数 ----
+class GPair<K, V> {
+    var key: K;
+    var value: V;
+    constructor(k: K, v: V) { this.key = k; this.value = v; }
+    func getKey(): K { return this.key; }
+    func getValue(): V { return this.value; }
+    func swap(): GPair<V, K> {
+        return new GPair<V, K>(this.value, this.key);
+    }
+}
+
+// ---- 泛型与数组 ----
+class GHolder<T> {
+    var items: [T];
+    constructor(a: [T]) { this.items = a; }
+    func first(): T { return this.items[0]; }
+    func last(): T { return this.items[this.items.length - 1]; }
+    func size(): Int { return this.items.length; }
+}
+
+// ---- 泛型函数：类型参数由实参推断 ----
+func gFirstOf<T>(a: [T]): T {
+    return a[0];
+}
+
+func gCountIf<T>(values: [T], target: T): Int {
+    var n = 0;
+    var i = 0;
+    while (i < values.length) {
+        if (values[i] == target) {
+            n += 1;
+        }
+        i += 1;
+    }
+    return n;
+}
+
+func genericsTest() {
+    // ---- 基本单态化 ----
+    val bi = new GBox<Int>(42);
+    fmt.println(bi.get());           // 42
+    val bs = new GBox<String>("你好");
+    fmt.println(bs.get());           // 你好
+    bi.set(99);
+    fmt.println(bi.get());           // 99
+    fmt.println(bi.isSame(99));      // true
+
+    // ---- 多类型参数 ----
+    val p = new GPair<String, Int>("年龄", 30);
+    fmt.println(p.getKey());         // 年龄
+    fmt.println(p.getValue());       // 30
+
+    // ---- 泛型实例作返回值（swap 交换类型参数）----
+    val swapped = p.swap();
+    fmt.println(swapped.getKey());   // 30
+    fmt.println(swapped.getValue()); // 年龄
+
+    // ---- 泛型 + 数组 ----
+    val h = new GHolder<Int>([10, 20, 30]);
+    fmt.println(h.first());          // 10
+    fmt.println(h.last());           // 30
+    fmt.println(h.size());           // 3
+
+    val hs = new GHolder<String>(["甲", "乙", "丙"]);
+    fmt.println(hs.last());          // 丙
+
+    // ---- 链式调用 ----
+    fmt.println(new GBox<Int>(7).get());  // 7
+    val p2 = new GPair<String, Int>("x", 1);
+    fmt.println(p2.swap().getKey());    // 1
+
+    // ---- 嵌套泛型 GBox<GBox<Int>> ----
+    val nested = new GBox<GBox<Int>>(new GBox<Int>(5));
+    fmt.println(nested.get().get());    // 5
+
+    // ---- 各值类型 ----
+    val bd = new GBox<Double>(3.5);
+    fmt.println(bd.get());             // 3.5
+    val bb = new GBox<Bool>(true);
+    fmt.println(bb.get());             // true
+
+    // ---- 泛型函数（T 由实参推断）----
+    fmt.println(gFirstOf([7, 8, 9]));     // 7
+    fmt.println(gFirstOf(["a", "b"]));     // a
+    fmt.println(gCountIf([1, 2, 1, 3, 1], 1));  // 3
+}

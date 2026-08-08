@@ -1,0 +1,101 @@
+package main;
+
+interface Speaker {
+    func speak(): String;
+}
+
+class Animal {
+    var name: String = "";
+    func kind(): String { return "动物"; }
+}
+
+class Dog : Animal, Speaker {
+    override func kind(): String { return "狗"; }
+    override func speak(): String { return "汪汪"; }
+    func fetch(): String { return "捡球"; }
+}
+
+class Cat : Animal, Speaker {
+    override func kind(): String { return "猫"; }
+    override func speak(): String { return "喵喵"; }
+}
+
+class Rock {
+    func kind(): String { return "石头"; }
+}
+
+// ---------- is 判定 ----------
+func identify(a: Animal): String {
+    if (a is Dog) {
+        return "这是狗";
+    }
+    if (a is Cat) {
+        return "这是猫";
+    }
+    return "未知动物";
+}
+
+// ---------- as 向下转型 ----------
+func tryFetch(a: Animal): String {
+    if (a is Dog) {
+        val d = a as Dog;
+        return d.fetch();
+    }
+    return "不会捡球";
+}
+
+func main() {
+    val d = new Dog();
+    val c = new Cat();
+
+    // ---------- is：精确判定 ----------
+    fmt.println(d is Dog);            // true
+    fmt.println(d is Cat);            // false
+
+    // ---------- is：父类型变量 ----------
+    val a: Animal = new Dog();
+    fmt.println(a is Dog);            // true
+    fmt.println(a is Cat);            // false
+
+    // ---------- is：接口判定 ----------
+    fmt.println(a is Speaker);        // true
+    val r = new Rock();
+
+    // ---------- 多态 + is ----------
+    fmt.println(identify(d));         // 这是狗
+    fmt.println(identify(c));         // 这是猫
+
+    // ---------- as 向下转型 ----------
+    fmt.println(tryFetch(d));         // 捡球
+    fmt.println(tryFetch(c));         // 不会捡球
+
+    // ---------- as 后调用子类专有方法 ----------
+    val a2: Animal = new Dog();
+    val d2 = a2 as Dog;
+    fmt.println(d2.fetch());          // 捡球
+    fmt.println(d2.kind());           // 狗
+
+    // ---------- as 转接口 ----------
+    val s = a2 as Speaker;
+    fmt.println(s.speak());           // 汪汪
+
+    // ---------- 数组中混合判定 ----------
+    val zoo = [new Dog(), new Cat(), new Dog()];
+    var dogs = 0;
+    for (x in zoo) {
+        if (x is Dog) {
+            dogs += 1;
+        }
+    }
+    fmt.println($"狗的数量：{dogs}");   // 2
+
+    // ---------- when 中使用 is ----------
+    for (x in zoo) {
+        val desc = when {
+            x is Dog -> "犬科";
+            x is Cat -> "猫科";
+            else -> "其他";
+        };
+        fmt.println(desc);
+    }
+}

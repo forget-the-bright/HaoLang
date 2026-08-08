@@ -1,0 +1,5 @@
+{
+  "module": "example.com/demo/leafpkg",
+  "version": "2.0.0",
+  "description": "叶子包 2.x（冲突用例）"
+}

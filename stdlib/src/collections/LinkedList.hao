@@ -1,0 +1,204 @@
+package collections;
+
+import exception;
+
+// ============================================================
+//  LinkedList<T> —— 双向链表（对标 Java LinkedList 的链表语义）
+// ------------------------------------------------------------
+//  职责：任意位置插入/删除友好的序列；头尾 O(1)，按下标访问 O(n)。
+//  线程安全：否（单线程）。
+//  不是：随机访问数组（请用 List）；也不是并发队列。
+// ============================================================
+
+// 链表节点：value + 前后指针。
+class LinkedListNode<T> {
+    var value: T;
+    var prev: LinkedListNode<T>?;
+    var next: LinkedListNode<T>?;
+
+    constructor(v: T) {
+        this.value = v;
+        this.prev = null;
+        this.next = null;
+    }
+}
+
+class LinkedList<T> : Iterable<T> {
+    var head: LinkedListNode<T>?;
+    var tail: LinkedListNode<T>?;
+    var count: Int;
+
+    // 构造空链表。
+    // 复杂度：O(1)
+    constructor() {
+        this.head = null;
+        this.tail = null;
+        this.count = 0;
+    }
+
+    // Iterable：快照为数组后迭代（迭代期间改链表不影响已返回迭代器）。
+    // @return ArrayIterator
+    // 复杂度：O(n) 拷贝
+    func iterator(): Iterator<T> {
+        return new ArrayIterator<T>(this.toArray());
+    }
+
+    // @return 元素个数
+    // 复杂度：O(1)
+    func size(): Int { return this.count; }
+
+    // @return 是否为空
+    // 复杂度：O(1)
+    func isEmpty(): Bool { return this.count == 0; }
+
+    // 在头部插入。
+    // @param item 元素
+    // 复杂度：O(1)
+    func addFirst(item: T) {
+        val n = new LinkedListNode<T>(item);
+        if (this.head == null) {
+            this.head = n;
+            this.tail = n;
+        } else {
+            n.next = this.head;
+            val h = this.head!!;
+            h.prev = n;
+            this.head = n;
+        }
+        this.count += 1;
+    }
+
+    // 在尾部插入（与 add 相同）。
+    // @param item 元素
+    // 复杂度：O(1)
+    func addLast(item: T) {
+        val n = new LinkedListNode<T>(item);
+        if (this.tail == null) {
+            this.head = n;
+            this.tail = n;
+        } else {
+            n.prev = this.tail;
+            val t = this.tail!!;
+            t.next = n;
+            this.tail = n;
+        }
+        this.count += 1;
+    }
+
+    // 尾部追加（对标 List.add / Java LinkedList.add）。
+    // @param item 元素
+    // 复杂度：O(1)
+    func add(item: T) { this.addLast(item); }
+
+    // 按 0-based 下标定位节点；越界抛异常。
+    // 复杂度：O(n)
+    func nodeAt(index: Int): LinkedListNode<T> {
+        if (index < 0 || index >= this.count) {
+            throw new exception.Exception("LinkedList 下标越界");
+        }
+        // 从更近的一端走
+        if (index < this.count / 2) {
+            var cur = this.head!!;
+            var i = 0;
+            while (i < index) {
+                cur = cur.next!!;
+                i += 1;
+            }
+            return cur;
+        } else {
+            var cur = this.tail!!;
+            var i = this.count - 1;
+            while (i > index) {
+                cur = cur.prev!!;
+                i -= 1;
+            }
+            return cur;
+        }
+    }
+
+    // 按下标取值。
+    // @param index 0-based
+    // @return 元素
+    // 复杂度：O(n)
+    // 异常：越界 → Exception
+    func get(index: Int): T {
+        return this.nodeAt(index).value;
+    }
+
+    // 按下标改值。
+    // @param index 0-based
+    // @param item  新值
+    // 复杂度：O(n)
+    // 异常：越界 → Exception
+    func set(index: Int, item: T) {
+        val n = this.nodeAt(index);
+        n.value = item;
+    }
+
+    // 摘除已定位节点并维护 head/tail/count。
+    // 复杂度：O(1)
+    func unlink(n: LinkedListNode<T>) {
+        val p = n.prev;
+        val nx = n.next;
+        if (p != null) {
+            val pp = p!!;
+            pp.next = nx;
+        } else {
+            this.head = nx;
+        }
+        if (nx != null) {
+            val nn = nx!!;
+            nn.prev = p;
+        } else {
+            this.tail = p;
+        }
+        n.prev = null;
+        n.next = null;
+        this.count -= 1;
+    }
+
+    // 删除指定下标元素并返回被删值。
+    // @param index 0-based
+    // @return 被删除的元素
+    // 复杂度：O(n)
+    // 异常：越界 → Exception
+    func removeAt(index: Int): T {
+        val n = this.nodeAt(index);
+        val v = n.value;
+        this.unlink(n);
+        return v;
+    }
+
+    // 删除并返回首元素。
+    // @return 首元素；空表返回 null
+    // 复杂度：O(1)
+    func removeFirst(): T? {
+        if (this.head == null) { return null; }
+        val v = this.head!!.value;
+        this.unlink(this.head!!);
+        return v;
+    }
+
+    // 删除并返回尾元素。
+    // @return 尾元素；空表返回 null
+    // 复杂度：O(1)
+    func removeLast(): T? {
+        if (this.tail == null) { return null; }
+        val v = this.tail!!.value;
+        this.unlink(this.tail!!);
+        return v;
+    }
+
+    // 转为数组（从头到尾）。
+    // @return 新数组快照
+    // 复杂度：O(n)
+    func toArray(): [T] {
+        var out: [T] = [];
+        var cur = this.head;
+        while (cur != null) {
+            out += cur!!.value;
+            cur = cur!!.next;
+        }
+        return out;
+    }
+}

@@ -1,0 +1,53 @@
+// HaoLang 标准库 —— thread 包
+// 线程/池句柄为 Long（指针宽）。
+package thread;
+
+class Thread {
+    var handle: Long = 0;
+
+    func start(run: ()->Unit): Bool {
+        this.handle = hao_thread_start(run);
+        return this.handle != 0;
+    }
+    func join() {
+        hao_thread_join(this.handle);
+    }
+}
+
+class ThreadPool {
+    var pool: Long = 0;
+
+    func submit(run: ()->Unit): Bool {
+        return hao_pool_submit(this.pool, run) == 0;
+    }
+    func shutdown() {
+        hao_pool_shutdown(this.pool);
+    }
+}
+
+func newPool(n: Int): ThreadPool {
+    val p = new ThreadPool();
+    p.pool = hao_pool_new(n);
+    return p;
+}
+
+func sleep(ms: Int) {
+    hao_thread_sleep_ms(ms);
+}
+
+func sleepNanos(ns: Long) {
+    hao_thread_sleep_ns(ns);
+}
+
+func yield() {
+    hao_thread_yield();
+}
+
+extern func hao_thread_sleep_ms(ms: Int): Unit = "hao_thread_sleep_ms";
+extern func hao_thread_sleep_ns(ns: Long): Unit = "hao_thread_sleep_ns";
+extern func hao_thread_yield(): Unit = "hao_thread_yield";
+extern func hao_thread_start(run: ()->Unit): Long = "hao_thread_start";
+extern func hao_thread_join(handle: Long): Unit = "hao_thread_join";
+extern func hao_pool_new(n: Int): Long = "hao_pool_new";
+extern func hao_pool_submit(pool: Long, run: ()->Unit): Int = "hao_pool_submit";
+extern func hao_pool_shutdown(pool: Long): Unit = "hao_pool_shutdown";

@@ -1,0 +1,32 @@
+package main;
+import json;
+import exception;
+
+func main() {
+    val obj = json.JSON.parseObject("{\"name\":\"Ada\",\"age\":36,\"ok\":true,\"tags\":[1,2]}");
+    fmt.println(obj.getString("name"));
+    fmt.println(obj.getInt("age"));
+    fmt.println(obj.getBool("ok"));
+    fmt.println(obj.getJSONArray("tags")!!.size());
+    fmt.println(json.JSON.toJSONString(obj));
+
+    val arr = json.JSON.parseArray("[1,2,3]");
+    fmt.println(arr.getInt(1));
+
+    fmt.println(json.JSON.isValid("{\"a\":1}"));
+    fmt.println(json.JSON.isValid("{bad"));
+
+    val built = new json.JSONObject();
+    built.putStr("x", "y").putInt("n", 7);
+    fmt.println(built.toJSONString());
+
+    val pathHit = json.JSONPath.eval(obj, "$.tags[0]");
+    fmt.println(json.JSON.valueToInt(pathHit));
+
+    try {
+        json.JSON.parse("{");
+        fmt.println("no");
+    } catch (e: exception.Exception) {
+        fmt.println("bad-json");
+    }
+}

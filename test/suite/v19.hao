@@ -1,0 +1,108 @@
+// ============================================================
+//  v0.19.0 特性测试：delegate / annotation / reflect / time / thread
+// ------------------------------------------------------------
+//  本模块函数以 v19 前缀命名，类/注解/delegate 名加 V19 前缀，
+//  避免与套件其它模块（package main 同包）命名冲突。
+// ============================================================
+package main;
+
+import reflect;
+import time;
+import thread;
+import sync;
+
+// ---- delegate：命名函数类型 + 方法组转换 ----
+delegate (Int)->Int V19Op;
+
+class V19Calc {
+    var base: Int = 10;
+    func add(x: Int): Int { return this.base + x; }
+}
+
+func v19DelegateTest() {
+    val f: V19Op = { x -> x * 3 };
+    fmt.println(f(5));          // 15（lambda 赋给 delegate）
+    val c = new V19Calc();
+    val g: V19Op = c.add;        // 方法组转换（绑定 this）
+    fmt.println(g(1));           // 11
+}
+
+// ---- annotation + reflect：注解定义/使用 + 运行时自省与字段读写 ----
+// 注解定义用 Java 风格 @interface（v0.20.0 起，替代旧 `annotation` 关键字）
+@interface V19Info {
+    val author: String;
+}
+
+@V19Info("alice")
+class V19Person {
+    var name: String = "bob";
+    var age: Int = 30;
+}
+
+class V19Nums {
+    var u: UInt = 0;
+    var ul: ULong = 0;
+    var sb: SByte = 0;
+}
+
+func v19ReflectTest() {
+    val p = new V19Person();
+    val t = reflect.typeOf(p);
+    fmt.println(t.name());                        // V19Person
+    fmt.println(t.getSuperclass());               // object$Object
+    fmt.println(t.getAnnotationCount());          // 1
+    fmt.println((t.getField(p, "name") ?? "null")); // bob
+    fmt.println((t.getField(p, "age") ?? "null")); // 30
+    t.setField(p, "age", "99");
+    fmt.println((t.getField(p, "age") ?? "null")); // 99（已修改）
+
+    // 无符号/窄整数字段反射读写
+    val n = new V19Nums();
+    val nt = reflect.typeOf(n);
+    nt.setField(n, "u", "4000000000");
+    nt.setField(n, "ul", "99");
+    nt.setField(n, "sb", "-5");
+    fmt.println((nt.getField(n, "u") ?? "null"));  // 4000000000
+    fmt.println((nt.getField(n, "ul") ?? "null")); // 99
+    fmt.println((nt.getField(n, "sb") ?? "null")); // -5
+    // 严格解析：越界/垃圾拒绝，字段保持原值
+    fmt.println(t.setField(p, "age", "9999999999")); // false
+    fmt.println((t.getField(p, "age") ?? "null"));   // 99
+    fmt.println(t.setField(p, "age", "42x"));        // false
+    fmt.println((t.getField(p, "age") ?? "null"));   // 99
+}
+
+// ---- time：字段访问 + 自定义格式化 + 时区 ----
+func v19TimeTest() {
+    val now = time.now();
+    val utc = time.nowUtc();
+    fmt.println(now.getYear());                   // 当前年
+    fmt.println(now.format("yyyy-MM-dd HH:mm:ss"));
+    fmt.println(utc.format("yyyy/MM/dd"));
+}
+
+// ---- thread：线程创建/join + 睡眠 + 线程池 ----
+//  注意：GC v1 保守扫描只扫当前线程栈 + 分配互斥锁，worker 线程内分配
+//  GC 对象可能被其他线程触发的 GC 误回收。故 worker 只用 sync 原子计数
+//  （不分配），避免 GC 竞态；真正运行会分配对象的并发任务需 GC v2
+//  （线程暂停 + 精确扫描）支持。
+func v19ThreadTest() {
+    var counter: Long? = null;
+    counter = 0;
+    val t1 = new thread.Thread();
+    t1.start({ sync.atomicAdd(counter, 1); });
+    t1.join();                                    // 等待 worker 结束
+    fmt.println("thread " + (counter ?? 0));      // thread 1
+    thread.sleep(10);                             // 睡眠毫秒
+
+    var poolCount: Long? = null;
+    poolCount = 0;
+    val pool = thread.newPool(2);
+    var i: Int = 0;
+    while (i < 4) {
+        pool.submit({ sync.atomicAdd(poolCount, 1); });
+        i = i + 1;
+    }
+    pool.shutdown();
+    fmt.println("pool " + (poolCount ?? 0));      // pool 4
+}

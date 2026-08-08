@@ -1,0 +1,48 @@
+package main;
+
+// 静态成员：类级变量/常量 / 静态方法，ClassName.X / ClassName.f() 访问
+class Counter {
+    static var count: Int = 0;
+    static val MAX: Int = 100;
+    static val MIN: Int = -5;
+    static var label: String = "counter";
+    static var ratio: Double = 1.5;
+    static var enabled: Bool = true;
+    static var zero: Int;              // 无初始化 -> 0
+
+    static func next(): Int {
+        Counter.count += 1;
+        return Counter.count;
+    }
+    static func add(a: Int, b: Int): Int {
+        return a + b;
+    }
+    static func getCount(): Int {
+        return Counter.count;
+    }
+    static func describe(): String {
+        return Counter.label + ":" + Counter.getCount();
+    }
+}
+
+func main() {
+    fmt.println(Counter.count);       // 0
+    fmt.println(Counter.MAX);         // 100
+    fmt.println(Counter.MIN);         // -5
+    fmt.println(Counter.label);       // counter
+    fmt.println(Counter.ratio);       // 1.5
+    fmt.println(Counter.enabled);     // true
+    fmt.println(Counter.zero);        // 0
+    fmt.println(Counter.add(2, 3));   // 5
+    fmt.println(Counter.next());      // 1
+    fmt.println(Counter.next());      // 2
+    fmt.println(Counter.getCount());  // 2
+    fmt.println(Counter.describe());  // counter:2
+
+    Counter.count = 100;              // 静态字段赋值
+    fmt.println(Counter.count);       // 100
+    Counter.count += 5;               // 复合赋值
+    fmt.println(Counter.count);       // 105
+    Counter.label += "!";             // 字符串拼接
+    fmt.println(Counter.label);       // counter!
+}

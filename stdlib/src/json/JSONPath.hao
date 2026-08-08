@@ -1,0 +1,289 @@
+// ============================================================
+//  json.JSONPath —— 简易路径查询（v0.28）
+//  支持：$ .key [n] [*] ..key [start:end] 以及 [?(@.k=~/re/)]
+// ============================================================
+package json;
+
+import regex;
+import collections.*;
+import lang;
+
+class JSONPath {
+    static func eval(root: Object, path: String): Object? {
+        val hits = JSONPath.extract(root, path);
+        if (hits.size() == 0) { return null; }
+        if (hits.size() == 1) { return hits.get(0); }
+        val arr = new JSONArray();
+        var i = 0;
+        while (i < hits.size()) {
+            arr.add(hits.get(i));
+            i += 1;
+        }
+        return arr;
+    }
+
+    static func extract(root: Object, path: String): List<Object> {
+        var cur = new List<Object>();
+        cur.add(root);
+        var i = 0;
+        if (path.length > 0 && path[0] == 36) {
+            // 跳过 leading $
+            i = 1;
+        }
+        while (i < path.length) {
+            val c = path[i];
+            if (c == 46) {
+                // .key 或 ..key
+                if (i + 1 < path.length && path[i + 1] == 46) {
+                    i += 2;
+                    val name = JSONPath.readIdent(path, i);
+                    i = name.end;
+                    cur = JSONPath.descendAll(cur, name.text);
+                } else {
+                    i += 1;
+                    if (i < path.length && path[i] == 91) {
+                        // .[ 少见，当 [
+                        continue;
+                    }
+                    val name = JSONPath.readIdent(path, i);
+                    i = name.end;
+                    cur = JSONPath.childKey(cur, name.text);
+                }
+            } else if (c == 91) {
+                i += 1;
+                val step = JSONPath.readBracket(path, i);
+                i = step.end;
+                cur = JSONPath.applyBracket(cur, step.text);
+            } else {
+                i += 1;
+            }
+        }
+        return cur;
+    }
+
+    static func readIdent(path: String, from: Int): PathSlice {
+        var i = from;
+        var t = "";
+        while (i < path.length) {
+            val c = path[i];
+            if (c == 46 || c == 91 || c == 32) { break; }
+            t = t + c;
+            i += 1;
+        }
+        return new PathSlice(t, i);
+    }
+
+    static func readBracket(path: String, from: Int): PathSlice {
+        var i = from;
+        var t = "";
+        var depth = 1;
+        while (i < path.length && depth > 0) {
+            val c = path[i];
+            if (c == 91) { depth += 1; }
+            if (c == 93) {
+                depth -= 1;
+                if (depth == 0) {
+                    i += 1;
+                    break;
+                }
+            }
+            if (depth > 0) { t = t + c; }
+            i += 1;
+        }
+        return new PathSlice(t, i);
+    }
+
+    static func childKey(nodes: List<Object>, key: String): List<Object> {
+        var out = new List<Object>();
+        var i = 0;
+        while (i < nodes.size()) {
+            val n = nodes.get(i);
+            if (n is JSONObject) {
+                val v = (n as JSONObject).get(key);
+                if (v != null) { out.add(v!!); }
+            }
+            i += 1;
+        }
+        return out;
+    }
+
+    static func descendAll(nodes: List<Object>, key: String): List<Object> {
+        var out = new List<Object>();
+        var i = 0;
+        while (i < nodes.size()) {
+            JSONPath.collectKey(nodes.get(i), key, out);
+            i += 1;
+        }
+        return out;
+    }
+
+    static func collectKey(node: Object, key: String, out: List<Object>) {
+        if (node is JSONObject) {
+            val obj = node as JSONObject;
+            val v = obj.get(key);
+            if (v != null) { out.add(v!!); }
+            var i = 0;
+            while (i < obj.keys.length) {
+                val child = obj.get(obj.keys[i]);
+                if (child != null) { JSONPath.collectKey(child!!, key, out); }
+                i += 1;
+            }
+        } else if (node is JSONArray) {
+            val arr = node as JSONArray;
+            var j = 0;
+            while (j < arr.size()) {
+                JSONPath.collectKey(arr.get(j), key, out);
+                j += 1;
+            }
+        }
+    }
+
+    static func applyBracket(nodes: List<Object>, body: String): List<Object> {
+        if (body == "*") {
+            return JSONPath.expandWild(nodes);
+        }
+        // 正则过滤器：?(@.k=~/pat/)
+        if (body.length >= 2 && body[0] == 63) {
+            return JSONPath.filterRegex(nodes, body);
+        }
+        // 切片 start:end
+        val colon = String.valueOf(body).indexOf(":");
+        if (colon >= 0) {
+            return JSONPath.sliceNodes(nodes, body, colon);
+        }
+        // 下标
+        val idx = Integer.parse(body);
+        if (idx == null) { return new List<Object>(); }
+        return JSONPath.indexNodes(nodes, idx!!);
+    }
+
+    static func expandWild(nodes: List<Object>): List<Object> {
+        var out = new List<Object>();
+        var i = 0;
+        while (i < nodes.size()) {
+            val n = nodes.get(i);
+            if (n is JSONArray) {
+                val arr = n as JSONArray;
+                var j = 0;
+                while (j < arr.size()) {
+                    out.add(arr.get(j));
+                    j += 1;
+                }
+            } else if (n is JSONObject) {
+                val obj = n as JSONObject;
+                var k = 0;
+                while (k < obj.keys.length) {
+                    val v = obj.get(obj.keys[k]);
+                    if (v != null) { out.add(v!!); }
+                    k += 1;
+                }
+            }
+            i += 1;
+        }
+        return out;
+    }
+
+    static func indexNodes(nodes: List<Object>, idx: Int): List<Object> {
+        var out = new List<Object>();
+        var i = 0;
+        while (i < nodes.size()) {
+            val n = nodes.get(i);
+            if (n is JSONArray) {
+                val arr = n as JSONArray;
+                if (idx >= 0 && idx < arr.size()) {
+                    out.add(arr.get(idx));
+                }
+            }
+            i += 1;
+        }
+        return out;
+    }
+
+    static func sliceNodes(nodes: List<Object>, body: String, colon: Int): List<Object> {
+        val a = String.valueOf(body).substring(0, colon);
+        val b = String.valueOf(body).substring(colon + 1, body.length);
+        var start = 0;
+        var endv = 2147483647;
+        if (a.length > 0) {
+            val p = Integer.parse(a);
+            if (p != null) { start = p!!; }
+        }
+        if (b.length > 0) {
+            val p = Integer.parse(b);
+            if (p != null) { endv = p!!; }
+        }
+        var out = new List<Object>();
+        var i = 0;
+        while (i < nodes.size()) {
+            val n = nodes.get(i);
+            if (n is JSONArray) {
+                val arr = n as JSONArray;
+                var j = start;
+                while (j < endv && j < arr.size()) {
+                    if (j >= 0) { out.add(arr.get(j)); }
+                    j += 1;
+                }
+            }
+            i += 1;
+        }
+        return out;
+    }
+
+    // 形式：?(@.name=~/pattern/)
+    static func filterRegex(nodes: List<Object>, body: String): List<Object> {
+        var out = new List<Object>();
+        // 找 @.key=~/pat/
+        val s = body;
+        val at = String.valueOf(s).indexOf("@.");
+        val eq = String.valueOf(s).indexOf("=~");
+        if (at < 0 || eq < 0 || eq <= at) { return out; }
+        val key = String.valueOf(s).substring(at + 2, eq);
+        var rest = String.valueOf(s).substring(eq + 2, s.length);
+        // 去掉 / /
+        if (rest.length >= 2 && rest[0] == 47) {
+            rest = String.valueOf(rest).substring(1, rest.length);
+            val slash = String.valueOf(rest).lastIndexOf("/");
+            if (slash >= 0) {
+                rest = String.valueOf(rest).substring(0, slash);
+            }
+        }
+        val pat = regex.Pattern.compile(rest);
+        var i = 0;
+        while (i < nodes.size()) {
+            val n = nodes.get(i);
+            var candidates = new List<Object>();
+            if (n is JSONArray) {
+                val arr = n as JSONArray;
+                var j = 0;
+                while (j < arr.size()) {
+                    candidates.add(arr.get(j));
+                    j += 1;
+                }
+            } else {
+                candidates.add(n);
+            }
+            var c = 0;
+            while (c < candidates.size()) {
+                val item = candidates.get(c);
+                if (item is JSONObject) {
+                    val field = (item as JSONObject).getString(key);
+                    if (pat.matcher(field).find()) {
+                        out.add(item);
+                    }
+                }
+                c += 1;
+            }
+            i += 1;
+        }
+        return out;
+    }
+}
+
+class PathSlice {
+    var text: String;
+    var end: Int;
+    constructor(t: String, e: Int) {
+        this.text = t;
+        this.end = e;
+    }
+}

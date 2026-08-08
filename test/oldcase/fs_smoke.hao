@@ -1,0 +1,30 @@
+package main;
+import os;
+
+func main() {
+    val path = "output/_fs_smoke.bin";
+    val fs = os.FileStream.open(path, "wb");
+    if (fs == null) {
+        fmt.println("open-fail");
+        return;
+    }
+    val f = fs!!;
+    var buf: [Byte] = [0, 1, 255, 128];
+    fmt.println(f.writeBytes(buf));
+    f.close();
+
+    val fs2 = os.FileStream.open(path, "rb");
+    val r = fs2!!.readBytes(16);
+    fmt.println(r.length);
+    fmt.println(r[0]);
+    fmt.println(r[2]);
+    fmt.println(r[3]);
+    fs2!!.close();
+
+    val ft = os.FileStream.open(path, "w");
+    ft!!.write("hello");
+    ft!!.close();
+    val fr = os.FileStream.open(path, "r");
+    fmt.println(fr!!.read(100)!!);
+    fr!!.close();
+}

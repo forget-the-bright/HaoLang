@@ -1,0 +1,14 @@
+package calc;
+
+func add(a: Int, b: Int): Int {
+    return a + b;
+}
+
+func mul(a: Int, b: Int): Int {
+    return a * b;
+}
+
+// private 函数：跨包不可见
+func secret(): Int {
+    return 42;
+}

@@ -1,0 +1,38 @@
+package main;
+import object;
+import collections;
+
+// 不显式继承，默认继承 Object；覆写三个方法
+class Person  {
+    var name: String;
+    constructor(n: String) { this.name = n; }
+    override func hashCode(): Int { return collections.hashOf(this.name); }
+    override func equals(o: Object): Bool {
+        val other = o as Person;
+        return this.name == other.name;
+    }
+    override func toString(): String { return "Person(" + this.name + ")"; }
+}
+
+func main() {
+    // 1. Object 类型可接收任意对象，is/as 运行时判定
+    var o: Object = new Person("bob");
+    fmt.println(o is Person);          // true（静态类型 Object，运行时是 Person）
+
+    // 2. 多态：经 Object 引用调覆写后的 equals
+    val p1 = new Person("alice");
+    fmt.println(p1.equals(new Person("alice")));   // true（内容相等）
+    fmt.println(p1.equals(new Person("bob")));     // false
+
+    // 3. 默认身份语义：不覆写 equals 的两个不同对象不相等
+    val q1 = new Person("x");
+    val q2 = new Person("x");
+    fmt.println(q1.equals(p1));   // false（不同对象，身份不等）
+
+    // 4. toString 覆写生效
+    fmt.println(p1.toString());    // Person(alice)
+
+    // 5. hashCode：内容相等对象哈希一致
+    val p2 = new Person("alice");
+    fmt.println(p1.hashCode() == p2.hashCode());   // true
+}

@@ -1,0 +1,255 @@
+// ============================================================
+//  多文件测试套件 · oop：继承 / 接口 / 多态 / super / extends-implements / is-as
+//  覆盖：interfaces + inherit + typecheck + extends_impl + super_ctor
+// ============================================================
+package main;
+
+// ---------- 接口 ----------
+interface OShape {
+    func area(): Double;
+    func name(): String;
+}
+interface OPrintable {
+    func show();
+}
+interface OArmed {
+    func fire(): String;
+}
+interface OSpeaker {
+    func speak(): String;
+}
+interface OTrackable {
+    func id(): String;
+}
+
+// ---------- 抽象基类 ----------
+abstract class OAnimal {
+    var name: String = "";
+    var age: Int = 0;
+    constructor(name: String, age: Int) {
+        this.name = name;
+        this.age = age;
+    }
+    abstract func speak(): String;
+    func describe(): String {
+        return $"{this.name}（{this.age}岁）说：{this.speak()}";
+    }
+    func birthday() { this.age += 1; }
+}
+
+// ---------- 一级继承 ----------
+class ODog extends OAnimal {
+    var breed: String = "土狗";
+    constructor(name: String, age: Int) {
+        this.name = name;
+        this.age = age;
+    }
+    override func speak(): String { return "汪汪"; }
+}
+
+class OCat extends OAnimal implements OSpeaker {
+    constructor(name: String, age: Int) {
+        this.name = name;
+        this.age = age;
+    }
+    override func speak(): String { return "喵喵"; }
+    override func describe(): String {
+        return $"高贵的 {this.name} 说：{this.speak()}";
+    }
+}
+
+// ---------- 二级继承 + super ----------
+class OPuppy extends ODog {
+    constructor(name: String) {
+        this.name = name;
+        this.age = 0;
+    }
+    override func speak(): String {
+        return "奶声" + super.speak();
+    }
+}
+
+// ---------- extends + implements（新语法）----------
+class ORobot extends OAnimal implements OShape, OArmed {
+    constructor() {
+        this.name = "机器人";
+    }
+    override func speak(): String { return "哔哔"; }
+    override func area(): Double { return 9.0; }
+    override func name(): String { return "机器人"; }
+    override func fire(): String { return "开火"; }
+}
+
+// ---------- 继承 + 实现接口（extends + implements）----------
+class OGuideDog extends OAnimal implements OTrackable {
+    var code: String = "";
+    constructor(name: String, code: String) {
+        this.name = name;
+        this.age = 2;
+        this.code = code;
+    }
+    override func speak(): String { return "（安静待命）"; }
+    override func id(): String { return $"导盲犬-{this.code}"; }
+}
+
+// ---------- 接口实现：几何类 ----------
+class OCircle : OShape {
+    var r: Double = 0.0;
+    constructor(r: Double) { this.r = r; }
+    override func area(): Double { return 3.14159 * this.r * this.r; }
+    override func name(): String { return "圆"; }
+}
+class ORect : OShape {
+    var w: Double = 0.0;
+    var h: Double = 0.0;
+    constructor(w: Double, h: Double) { this.w = w; this.h = h; }
+    override func area(): Double { return this.w * this.h; }
+    override func name(): String { return "矩形"; }
+}
+class OSquare : OShape, OPrintable {
+    var side: Double = 0.0;
+    constructor(side: Double) { this.side = side; }
+    override func area(): Double { return this.side * this.side; }
+    override func name(): String { return "正方形"; }
+    override func show() {
+        fmt.println($"{this.name()} 边长={this.side} 面积={this.area()}");
+    }
+    func perimeter(): Double { return 4.0 * this.side; }
+}
+
+// ---------- 不实现接口的类（无虚表）----------
+class OPlain {
+    var v: Int = 7;
+    func get(): Int { return this.v; }
+}
+
+// ---------- 类型判定（is/as）的类 ----------
+class ORock {
+    func kind(): String { return "石头"; }
+}
+
+// ---------- super 构造链：Puppy -> Dog -> Animal ----------
+class OPet extends OAnimal {
+    var breed: String = "土狗";
+    constructor(name: String, age: Int) {
+        super(name, age);
+    }
+    override func speak(): String { return "(宠物)"; }
+}
+class OPetPuppy extends OPet {
+    constructor(name: String) {
+        super(name, 0);
+    }
+}
+
+// ---------- 多态辅助函数 ----------
+func oReport(a: OAnimal) {
+    fmt.println(a.describe());
+}
+func oMakeSound(a: OAnimal): String {
+    return a.speak();
+}
+func oDescribeShape(s: OShape) {
+    fmt.println($"{s.name()} 的面积是 {s.area()}");
+}
+func oTotalArea(a: OShape, b: OShape): Double {
+    return a.area() + b.area();
+}
+func oMakeShape(kind: Int): OShape {
+    if (kind == 1) {
+        return new OCircle(1.0);
+    }
+    return new ORect(2.0, 3.0);
+}
+func oIdentify(a: OAnimal): String {
+    if (a is ODog) return "这是狗";
+    if (a is OCat) return "这是猫";
+    return "未知动物";
+}
+func oTryFetch(a: OAnimal): String {
+    if (a is ODog) {
+        val d = a as ODog;
+        return d.breed;
+    }
+    return "不会";
+}
+
+func oopTest() {
+    // ---------- 接口：静态绑定 + 动态分派 ----------
+    val c = new OCircle(2.0);
+    fmt.println(c.area());              // 12.5664
+    oDescribeShape(c);
+    oDescribeShape(new ORect(3.0, 4.0));
+    oDescribeShape(new OSquare(5.0));
+    fmt.println(oTotalArea(new OCircle(1.0), new ORect(2.0, 5.0)));  // 13.1416
+
+    val sq = new OSquare(3.0);
+    sq.show();
+    fmt.println(sq.perimeter());        // 12
+    val p: OPrintable = new OSquare(2.0);
+    p.show();
+
+    val shapes = [new OCircle(1.0), new ORect(1.0, 1.0), new OSquare(2.0)];
+    for (sh in shapes) {
+        oDescribeShape(sh);
+    }
+
+    // ---------- 继承：字段 / 方法 / 覆写 / 多态 / super ----------
+    val d = new ODog("旺财", 3);
+    fmt.println(d.name);              // 旺财
+    fmt.println(d.breed);             // 土狗
+    fmt.println(d.speak());           // 汪汪
+    d.birthday();
+    fmt.println(d.age);               // 4
+    fmt.println(d.describe());        // 旺财（4岁）说：汪汪
+
+    val cat = new OCat("咪咪", 2);
+    fmt.println(cat.describe());      // 高贵的 咪咪 说：喵喵
+
+    oReport(d);
+    oReport(cat);
+
+    val pup = new OPuppy("小奶狗");
+    fmt.println(pup.speak());         // 奶声汪汪
+    fmt.println(pup.breed);           // 土狗
+
+    // ---------- 父类型变量 / 多态数组 ----------
+    val a: OAnimal = new OCat("影子", 5);
+    fmt.println(a.speak());           // 喵喵
+    val zoo = [new ODog("A", 1), new OCat("B", 2), new OPuppy("C")];
+    for (x in zoo) {
+        fmt.println(x.speak());       // 汪汪 / 喵喵 / 奶声汪汪
+    }
+
+    // ---------- extends + implements ----------
+    val rob = new ORobot();
+    fmt.println(rob.speak());         // 哔哔
+    fmt.println(rob.area());          // 9
+    fmt.println(rob.fire());          // 开火
+
+    // ---------- 继承 + 接口 + super.method ----------
+    val g = new OGuideDog("大黄", "A01");
+    fmt.println(g.speak());           // （安静待命）
+    fmt.println(g.id());              // 导盲犬-A01
+    oReport(g);
+
+    // ---------- super 构造链 ----------
+    val pet = new OPet("旺财", 3);
+    fmt.println(pet.name);            // 旺财
+    fmt.println(pet.age);             // 3
+    fmt.println(pet.breed);           // 土狗
+    val pp = new OPetPuppy("豆豆");
+    fmt.println(pp.name);             // 豆豆
+    fmt.println(pp.age);              // 0
+    fmt.println(pp.breed);            // 土狗
+
+    // ---------- is / as 类型判定 ----------
+    fmt.println(d is ODog);           // true
+    fmt.println(d is OCat);           // false
+    fmt.println(a is OCat);           // true
+    fmt.println(a is OSpeaker);       // true
+    fmt.println(oIdentify(d));        // 这是狗
+    fmt.println(oIdentify(cat));      // 这是猫
+    fmt.println(oTryFetch(d));        // 土狗
+    fmt.println(new OPlain().get());  // 7
+}

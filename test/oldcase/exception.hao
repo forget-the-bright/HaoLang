@@ -1,0 +1,60 @@
+package main;
+
+import exception;
+
+// 自定义异常：继承标准库 exception.Exception
+class DivideByZeroError : exception.Exception {
+    constructor(message: String) {
+        this.message = message;
+    }
+}
+
+class NotFoundError : exception.Exception {
+    constructor(message: String) {
+        this.message = message;
+    }
+}
+
+func divide(a: Int, b: Int): Int {
+    if (b == 0) {
+        throw new DivideByZeroError("除数不能为零");
+    }
+    return a / b;
+}
+
+func find(key: String): String {
+    if (key != "hao") {
+        throw new NotFoundError($"未找到键: {key}");
+    }
+    return "ok";
+}
+
+func main() {
+    // 1. 子类异常被基类 catch 捕获
+    try {
+        divide(10, 0);
+    } catch (e: exception.Exception) {
+        fmt.println(e.getMessage());       // 除数不能为零
+        fmt.println(e.toString());         // Exception: 除数不能为零
+    }
+
+    // 2. 正常路径不进 catch
+    val r = divide(10, 2);
+    fmt.println(r);                        // 5
+
+    // 3. 另一个子类，同样被 Exception 捕获
+    try {
+        find("xxx");
+    } catch (e: exception.Exception) {
+        fmt.println(e.getMessage());       // 未找到键: xxx
+    }
+
+    // 4. 基类异常本身也可直接抛
+    try {
+        throw new exception.Exception("普通异常");
+    } catch (e: exception.Exception) {
+        fmt.println(e.getMessage());       // 普通异常
+    }
+
+    fmt.println("done");                   // done
+}

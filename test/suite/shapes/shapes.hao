@@ -1,0 +1,25 @@
+// ============================================================
+//  跨包用例：shapes 包（import as + 跨包类/接口）
+//  原 test/pkgshapes/shapes，折叠进 suite 子包。
+// ============================================================
+package shapes;
+
+interface Shape {
+    func area(): Double;
+}
+
+class Circle : Shape {
+    var radius: Double = 0.0;
+    constructor(r: Double) { this.radius = r; }
+    func area(): Double {
+        return 3.14159 * this.radius * this.radius;
+    }
+    func name(): String { return "圆"; }
+}
+
+class Rect : Shape {
+    var w: Double = 0.0;
+    var h: Double = 0.0;
+    constructor(w: Double, h: Double) { this.w = w; this.h = h; }
+    func area(): Double { return this.w * this.h; }
+}

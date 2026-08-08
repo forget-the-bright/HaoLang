@@ -1,0 +1,20 @@
+// ============================================================
+//  多文件测试套件 · init：Go 式包级 init()，在 main() 前自动执行
+//  覆盖：init_func + initpkg（跨包 init 顺序见 lib/ 与 packages.hao）
+//  注意：package main 每包只允许一个 init()，故统一放本文件。
+//  lib.init 先于 main.init（依赖的包先 init），main.init 先于 main 体。
+// ============================================================
+package main;
+
+class InitT {
+    static var n: Int = 0;
+    static func next(): Int { InitT.n += 1; return InitT.n; }
+}
+
+func init() {
+    fmt.println($"init:{InitT.next()}");
+}
+
+func initTest() {
+    fmt.println($"main:{InitT.next()}");
+}

@@ -1,0 +1,11 @@
+﻿# 复制本文件为 proxy.local.ps1（已 gitignore），按本机代理修改。
+# setup_env / fetch_* 会自动点源加载。
+#
+# GitHub 下载顺序（见 script/win/hao_net.ps1）：
+#   1) 直连  2) https://ghfast.top/原URL  3) 本文件 / HAO_HTTP_PROXY
+#
+# 可选：换 GitHub 镜像前缀（默认 https://ghfast.top）
+# $env:HAO_GHFAST = 'https://ghfast.top'
+#
+# HTTP 代理（ghfast 也不通时再用）：
+$env:HAO_HTTP_PROXY = 'http://127.0.0.1:15732'

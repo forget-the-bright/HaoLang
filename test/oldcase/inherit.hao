@@ -1,0 +1,159 @@
+package main;
+
+// ---------- 抽象基类 ----------
+abstract class Animal {
+    var name: String = "";
+    var age: Int = 0;
+
+    constructor(name: String, age: Int) {
+        this.name = name;
+        this.age = age;
+    }
+
+    // 抽象方法：子类必须实现
+    abstract func speak(): String;
+
+    // 虚方法：子类可覆写
+    func describe(): String {
+        return $"{this.name}（{this.age}岁）说：{this.speak()}";
+    }
+
+    // 普通方法：所有子类共用
+    func birthday() {
+        this.age += 1;
+    }
+}
+
+// ---------- 一级继承 ----------
+class Dog : Animal {
+    var breed: String = "土狗";
+
+    constructor(name: String, age: Int) {
+        this.name = name;
+        this.age = age;
+    }
+
+    override func speak(): String {
+        return "汪汪";
+    }
+}
+
+class Cat : Animal {
+    constructor(name: String, age: Int) {
+        this.name = name;
+        this.age = age;
+    }
+
+    override func speak(): String {
+        return "喵喵";
+    }
+
+    // 覆写虚方法
+    override func describe(): String {
+        return $"高贵的 {this.name} 说：{this.speak()}";
+    }
+}
+
+// ---------- 二级继承 + super ----------
+class Puppy : Dog {
+    constructor(name: String) {
+        this.name = name;
+        this.age = 0;
+    }
+
+    override func speak(): String {
+        // 调用父类实现
+        return "奶声" + super.speak();
+    }
+}
+
+// ---------- 继承 + 实现接口 ----------
+interface Trackable {
+    func id(): String;
+}
+
+class GuideDog : Dog, Trackable {
+    var code: String = "";
+
+    constructor(name: String, code: String) {
+        this.name = name;
+        this.age = 2;
+        this.code = code;
+    }
+
+    override func speak(): String {
+        return "（安静待命）";
+    }
+
+    override func id(): String {
+        return $"导盲犬-{this.code}";
+    }
+}
+
+// ---------- 父类型参数：多态 ----------
+func report(a: Animal) {
+    fmt.println(a.describe());
+}
+
+func makeSound(a: Animal): String {
+    return a.speak();
+}
+
+func main() {
+    // ---------- 基本继承与字段 ----------
+    val d = new Dog("旺财", 3);
+    fmt.println(d.name);              // 旺财  继承字段
+    fmt.println(d.age);               // 3     继承字段
+    fmt.println(d.breed);             // 土狗  自有字段
+    fmt.println(d.speak());           // 汪汪
+
+    // ---------- 继承的方法 ----------
+    d.birthday();
+    fmt.println(d.age);               // 4
+
+    // ---------- 虚方法：父类方法内调子类实现 ----------
+    fmt.println(d.describe());        // 旺财（4岁）说：汪汪
+
+    // ---------- 覆写虚方法 ----------
+    val c = new Cat("咪咪", 2);
+    fmt.println(c.describe());        // 高贵的 咪咪 说：喵喵
+
+    // ---------- 多态：同一函数不同行为 ----------
+    report(d);
+    report(c);
+    report(new Puppy("小奶狗"));
+
+    fmt.println(makeSound(d));        // 汪汪
+    fmt.println(makeSound(c));        // 喵喵
+
+    // ---------- super 调用父类实现 ----------
+    val p = new Puppy("豆豆");
+    fmt.println(p.speak());           // 奶声汪汪
+    fmt.println(p.name);              // 豆豆
+    fmt.println(p.breed);             // 土狗   继承 Dog 的字段
+
+    // ---------- 二级继承的字段布局 ----------
+    p.birthday();
+    p.birthday();
+    fmt.println(p.age);               // 2
+
+    // ---------- 继承 + 接口 ----------
+    val g = new GuideDog("大黄", "A01");
+    fmt.println(g.speak());           // （安静待命）
+    fmt.println(g.id());              // 导盲犬-A01
+    fmt.println(g.breed);             // 土狗  继承自 Dog
+    report(g);                        // 通过 Animal
+    val t: Trackable = g;             // 通过接口
+    fmt.println(t.id());              // 导盲犬-A01
+
+    // ---------- 父类型变量装子类 ----------
+    val a: Animal = new Cat("影子", 5);
+    fmt.println(a.speak());           // 喵喵
+    fmt.println(a.name);              // 影子
+
+    // ---------- 多态数组 ----------
+    val zoo = [new Dog("A", 1), new Cat("B", 2), new Puppy("C")];
+    for (x in zoo) {
+        fmt.println(x.speak());       // 汪汪 / 喵喵 / 奶声汪汪
+    }
+}

@@ -1,0 +1,53 @@
+// ============================================================
+//  多文件测试套件 · stdlib 补充：hash 迁移 + math/random/assert/text
+// ============================================================
+package main;
+
+import math;
+import random;
+import assert;
+import text;
+import hash;
+
+func stdlibExtraTest() {
+    // ---- hash 独立包 ----
+    fmt.println(hash.hashOf(42) == hash.hashOf(42));
+    fmt.println(hash.equalsKey("a", "a"));
+    fmt.println(hash.equalsKey("a", "b") == false);
+
+    // ---- math ----
+    fmt.println(math.abs(-7));
+    fmt.println(math.abs(0 - 2147483647 - 1) == (0 - 2147483647 - 1)); // MIN_VALUE 不溢出
+    fmt.println(math.max(3, 9));
+    fmt.println(math.gcd(12, 18));
+    fmt.println(math.pow(2, 10));
+    fmt.println(math.factorial(5));
+    fmt.println(math.lcm(12, 18));                 // 36
+    fmt.println(math.pow(2, 31));                  // 0（Int 溢出）
+    fmt.println(math.factorial(13));               // 0（13! 超 Int）
+    fmt.println(math.lcm(1000000007, 1000000009)); // 0（积溢出）
+    // sqrt(4)≈2，floor 后为 2
+    fmt.println(math.floor(math.sqrt(4.0) + 0.0001));
+    fmt.println(math.floor(math.sin(0.0) + 0.5));
+    fmt.println(math.pi() > 3.0);
+
+    // ---- random（固定种子可复现）----
+    val rng = new random.Random(1);
+    val r1 = rng.nextInt(10);
+    fmt.println(r1 >= 0 && r1 < 10);
+    val rng2 = new random.Random(1);
+    fmt.println(rng2.nextInt(10) == r1);   // 同种子可复现
+
+    // ---- text ----
+    fmt.println(text.repeat("xy", 3));
+    fmt.println(text.isBlank(" \t"));
+    val parts = text.split("a,b,c", ",");
+    fmt.println(text.join(parts, "-"));
+    fmt.println(text.padStart("7", 3, "0"));
+
+    // ---- assert（成功路径）----
+    assert.that(1 + 1 == 2);
+    assert.eq(3, 3);
+    assert.eq("ok", "ok");
+    fmt.println("assert-ok");
+}

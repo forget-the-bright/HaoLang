@@ -1,0 +1,13 @@
+// ============================================================
+//  跨包用例：calc 包（import + 通配导入）
+//  原 test/pkgdemo/calc，折叠进 suite 子包。
+// ============================================================
+package calc;
+
+func add(a: Int, b: Int): Int {
+    return a + b;
+}
+
+func mul(a: Int, b: Int): Int {
+    return a * b;
+}

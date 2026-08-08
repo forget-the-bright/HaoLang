@@ -1,0 +1,61 @@
+// ============================================================
+//  lang.Double —— 基础类型 Double（f64）的包装类
+//  标注包装写 lang.Double；裸名 Double = 内建
+// ============================================================
+package lang;
+
+import hash;
+
+class Double {
+    var value: Double;
+
+    static val SIZE: Int = 64;
+    static val BYTES: Int = 8;
+    static val MAX_VALUE: Double = 1.7976931348623157e308;
+    // 对齐 Java：最小正非零值（非最负）；最负用 -MAX_VALUE
+    static val MIN_VALUE: Double = 4.9e-324;
+
+    constructor(v: Double) {
+        this.value = v;
+    }
+
+    static func valueOf(v: Double): lang.Double {
+        return new lang.Double(v);
+    }
+
+    func doubleValue(): Double {
+        return this.value;
+    }
+
+    static func parse(s: String): Double? {
+        return hao_parse_double(s);
+    }
+
+    static func toStr(v: Double): String {
+        return hao_double_to_str(v);
+    }
+
+    static func compare(a: Double, b: Double): Int {
+        if (a < b) { return -1; }
+        if (a > b) { return 1; }
+        return 0;
+    }
+
+    func compareTo(other: lang.Double): Int {
+        return Double.compare(this.value, other.value);
+    }
+
+    override func hashCode(): Int {
+        return hash.hashOf(this.value);
+    }
+
+    override func equals(o: Object): Bool {
+        if (!(o is lang.Double)) { return false; }
+        val other = o as lang.Double;
+        return this.value == other.value;
+    }
+
+    override func toString(): String {
+        return hao_double_to_str(this.value);
+    }
+}

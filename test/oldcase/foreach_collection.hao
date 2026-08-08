@@ -1,0 +1,32 @@
+package main;
+import collections;
+
+func main() {
+    // List
+    val list = new collections.List<Int>();
+    list.add(1); list.add(2); list.add(3);
+    var s = 0;
+    for (x in list) { s += x; }
+    fmt.println(s);          // 6
+
+    // Stack（栈底到栈顶）
+    val st = new collections.Stack<Int>();
+    st.push(10); st.push(20); st.push(30);
+    var ss = "";
+    for (x in st) { ss += x + ","; }
+    fmt.println(ss);         // 10,20,30,
+
+    // Queue（队首到队尾）
+    val q = new collections.Queue<Int>();
+    q.enqueue(100); q.enqueue(200);
+    var qs = "";
+    for (x in q) { qs += x + ","; }
+    fmt.println(qs);         // 100,200,
+
+    // Set（为 key 集合，顺序按哈希表）
+    val set = new collections.Set<String>();
+    set.add("a"); set.add("b"); set.add("c");
+    var ns = 0;
+    for (x in set) { if (x == "a" || x == "b" || x == "c") ns += 1; }
+    fmt.println(ns);         // 3
+}

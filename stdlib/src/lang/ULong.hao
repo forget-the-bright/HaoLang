@@ -1,0 +1,59 @@
+// ============================================================
+//  lang.ULong —— 基础类型 ULong（u64）的包装类
+// ============================================================
+package lang;
+
+import hash;
+
+class ULong {
+    var value: ULong;
+
+    static val SIZE: Int = 64;
+    static val BYTES: Int = 8;
+    static val MAX_VALUE: ULong = 0xFFFFFFFFFFFFFFFF;
+    static val MIN_VALUE: ULong = 0;
+
+    constructor(v: ULong) {
+        this.value = v;
+    }
+
+    static func valueOf(v: ULong): lang.ULong {
+        return new lang.ULong(v);
+    }
+
+    func ulongValue(): ULong {
+        return this.value;
+    }
+
+    static func toStr(v: ULong): String {
+        return hao_ulong_to_str(v);
+    }
+
+    static func parse(s: String): ULong? {
+        return hao_parse_ulong(s);
+    }
+
+    static func compare(a: ULong, b: ULong): Int {
+        if (a < b) { return -1; }
+        if (a > b) { return 1; }
+        return 0;
+    }
+
+    func compareTo(other: lang.ULong): Int {
+        return ULong.compare(this.value, other.value);
+    }
+
+    override func hashCode(): Int {
+        return hash.hashOf(this.value);
+    }
+
+    override func equals(o: Object): Bool {
+        if (!(o is lang.ULong)) { return false; }
+        val other = o as lang.ULong;
+        return this.value == other.value;
+    }
+
+    override func toString(): String {
+        return hao_ulong_to_str(this.value);
+    }
+}

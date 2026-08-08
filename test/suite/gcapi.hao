@@ -1,0 +1,38 @@
+// ============================================================
+//  多文件测试套件 · gc API（v0.34）
+//  手动 collect + 统计字段可读（轻量，非 oldcase 压力测）
+// ============================================================
+package main;
+
+import gc;
+
+class GcProbe {
+    var n: Int = 0;
+    constructor(n: Int) { this.n = n; }
+}
+
+func gcApiTest() {
+    // 先读统计（不强制 collect，避免与后续套件时序竞态）
+    val thr = gc.GC.threshold();
+    fmt.println(thr > 0);                      // true
+    fmt.println(gc.GC.blockCount() >= 0);      // true
+    fmt.println(gc.GC.liveBytes() >= 0);       // true
+    fmt.println(gc.GC.allocatedSinceGc() >= 0); // true
+    fmt.println(gc.GC.finalizerRuns() >= 0);   // true
+    fmt.println(gc.GC.finalizerSets() >= 0);   // true
+
+    val before = gc.GC.collectCount();
+    // 少量分配后手动 collect
+    var i = 0;
+    while (i < 50) {
+        val p = new GcProbe(i);
+        i += 1;
+        if (p.n < 0) { i = i; } // 防优化掉 p（保持存活到循环末）
+    }
+    gc.GC.collect();
+    val after = gc.GC.collectCount();
+    fmt.println(after > before);               // true
+
+    val s = gc.GC.summary();
+    fmt.println(s.length > 10);                // true
+}

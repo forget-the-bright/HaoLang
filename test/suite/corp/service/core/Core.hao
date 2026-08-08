@@ -1,0 +1,11 @@
+// ============================================================
+//  corp.service.core：带 @Service 的无参核心 Bean
+// ============================================================
+package corp.service.core;
+
+import corp.marker.*;
+
+@Service(value = "core")
+class CoreBean {
+    func name(): String { return "core-bean"; }
+}

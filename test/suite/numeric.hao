@@ -1,0 +1,101 @@
+// ============================================================
+//  多文件测试套件 · numeric：v0.25 数值类型体系
+//  正向：字面量/提升/位运算/紧凑数组/包装类
+//  反向边界：Byte trunc、Int 边界、Long 大字面量
+// ============================================================
+package main;
+
+import collections;
+
+func numericTest() {
+    // ---- Int i32 / Long i64 ----
+    val i: Int = 42;
+    val big: Long = 3000000000;
+    fmt.println(i);                    // 42
+    fmt.println(big);                  // 3000000000
+    fmt.println(i + 1);                // 43
+    fmt.println(big + 1);              // 3000000001
+    fmt.println(Integer.MAX_VALUE);    // 2147483647
+    fmt.println(Long.MAX_VALUE > 0);   // true
+
+    // ---- Short / Byte ----
+    var s: Short = 1000;
+    var b: Byte = 200;
+    fmt.println(s);                    // 1000
+    fmt.println(b);                    // 200
+    fmt.println(s + b);                // 1200（升 Int）
+    var wrapSrc: Int = 256;
+    var wrap: Byte = wrapSrc;
+    fmt.println(wrap);                 // 0（trunc）
+
+    // ---- Float / Double 提升 ----
+    var f: Float = 1.5;
+    var d: Double = 2.5;
+    fmt.println(f + 1);                // 2.5（Float）
+    fmt.println(d + f);                // 4（Double 提升；打印 %g）
+    fmt.println(i + d);                // 44.5
+
+    // ---- 位运算 Long ----
+    val L: Long = 15;
+    fmt.println(L & 7);                // 7
+    fmt.println(L << 1);               // 30
+
+    // ---- 紧凑数组 esz ----
+    var shorts: [Short] = [1, 2, 3];
+    fmt.println(shorts.length);        // 3
+    fmt.println(shorts[1]);            // 2
+    shorts += 4;
+    fmt.println(shorts.pop());         // 4
+
+    var floats: [Float] = [1.0, 2.0];
+    fmt.println(floats.length);        // 2
+    floats[0] = 3.5;
+    fmt.println(floats[0]);            // 3.5
+    floats += 4.5;
+    fmt.println(floats.pop());         // 4.5
+
+    var doubles: [Double] = [];
+    doubles += 9.25;
+    fmt.println(doubles.pop());        // 9.25
+
+    var longs: [Long] = [100, 200];
+    fmt.println(longs[1]);             // 200
+
+    var ints: [Int] = [10, 20, 30];
+    fmt.println(ints[2]);              // 30
+
+    // ---- 包装类 ----
+    val bi = Integer.valueOf(7);
+    fmt.println(bi.intValue());        // 7
+    fmt.println(bi.equals(Integer.valueOf(7))); // true
+
+    val bb = Byte.valueOf(255);
+    fmt.println(bb.byteValue());       // 255
+
+    val bl = Long.valueOf(99);
+    fmt.println(bl.longValue());       // 99
+
+    val bf = Float.valueOf(1.25);
+    fmt.println(bf.floatValue());      // 1.25
+
+    val p = Integer.parse("123") ?? 0;
+    fmt.println(p);                    // 123
+    val bad = Integer.parse("x");
+    fmt.println(bad == null);          // true
+
+    // ---- List 冒烟 ----
+    val list = new collections.List<Long>();
+    list.add(1);
+    list.add(2);
+    fmt.println(list.size());          // 2
+    fmt.println(list.get(1));          // 2
+
+    // ---- 有符号 MIN/-1：避免 sdiv/srem 毒值（Java 环绕）----
+    val imin = Integer.MIN_VALUE;
+    fmt.println(imin / -1);            // -2147483648
+    fmt.println(imin % -1);            // 0
+    val lmin = Long.MIN_VALUE;
+    val neg1: Long = 0 - 1;
+    fmt.println(lmin / neg1 == lmin);  // true
+    fmt.println(lmin % neg1);          // 0
+}

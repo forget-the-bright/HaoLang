@@ -1,0 +1,38 @@
+package hash;
+
+extern func hao_hash_int(x: Int): Int = "hao_hash_int";
+extern func hao_hash_long(x: Long): Int = "hao_hash_long";
+extern func hao_hash_float(x: Double): Int = "hao_hash_float";
+extern func hao_hash_f32(x: Float): Int = "hao_hash_f32";
+extern func hao_hash_bool(x: Bool): Int = "hao_hash_bool";
+extern func hao_hash_str(x: String): Int = "hao_hash_str";
+
+func hashOf(x: Int): Int { return hao_hash_int(x); }
+func hashOf(x: UInt): Int { return hao_hash_int(x); }
+func hashOf(x: Long): Int { return hao_hash_long(x); }
+func hashOf(x: ULong): Int { return hao_hash_long(x); }
+func hashOf(x: Float): Int { return hao_hash_f32(x); }
+func hashOf(x: Double): Int { return hao_hash_float(x); }
+func hashOf(x: Bool): Int { return hao_hash_bool(x); }
+func hashOf(x: Char): Int { return hao_hash_int(x); }
+func hashOf(x: String): Int { return hao_hash_str(x); }
+func hashOf(x: Object): Int { return x.hashCode(); }
+func hashOf(x: Byte): Int { return hao_hash_int(x); }
+func hashOf(x: SByte): Int { return hao_hash_int(x); }
+func hashOf(x: Short): Int { return hao_hash_int(x); }
+func hashOf(x: UShort): Int { return hao_hash_int(x); }
+
+func equalsKey(a: Int, b: Int): Bool { return a == b; }
+func equalsKey(a: UInt, b: UInt): Bool { return a == b; }
+func equalsKey(a: Long, b: Long): Bool { return a == b; }
+func equalsKey(a: ULong, b: ULong): Bool { return a == b; }
+func equalsKey(a: Float, b: Float): Bool { return a == b; }
+func equalsKey(a: Double, b: Double): Bool { return a == b; }
+func equalsKey(a: Bool, b: Bool): Bool { return a == b; }
+func equalsKey(a: Char, b: Char): Bool { return a == b; }
+func equalsKey(a: String, b: String): Bool { return a == b; }
+func equalsKey(a: Object, b: Object): Bool { return a.equals(b); }
+func equalsKey(a: Byte, b: Byte): Bool { return a == b; }
+func equalsKey(a: SByte, b: SByte): Bool { return a == b; }
+func equalsKey(a: Short, b: Short): Bool { return a == b; }
+func equalsKey(a: UShort, b: UShort): Bool { return a == b; }

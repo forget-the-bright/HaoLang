@@ -1,0 +1,9 @@
+package main;
+
+// Linux 交叉编译冒烟：链接 libm，调用 sqrt。
+// hao build test/linux_math.hao --target linux-amd64 -o /tmp/linux_math
+extern func sqrt(x: Double): Double = "sqrt" @link("m");
+
+func main() {
+    fmt.println(sqrt(9.0));   // 3
+}

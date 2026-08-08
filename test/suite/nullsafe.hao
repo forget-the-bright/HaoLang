@@ -1,0 +1,179 @@
+// ============================================================
+//  多文件测试套件 · nullsafe：可空类型 T? / ?. / ?? / !!
+//  覆盖：nullsafe
+// ============================================================
+package main;
+
+class NullDog {
+    var name: String = "";
+    var best: NullDog? = null;       // 可空字段
+    constructor(name: String) { this.name = name; }
+    func bark(): String { return this.name + ": 汪"; }
+    func friend(): NullDog? { return this.best; }
+}
+
+func nsGreet(name: String?): String {
+    val shout = name?.length ?? 0;
+    return $"len={shout}";
+}
+
+func nullsafeTest() {
+    // 1. 可空变量赋 null
+    var s: String? = null;
+    fmt.println(s == null);      // true
+
+    s = "hello";
+    fmt.println(s == null);      // false
+    fmt.println(s?.length ?? -1);  // 5
+
+    s = null;
+    fmt.println(s?.length ?? -1);  // -1（不调用，直接默认）
+
+    // 2. !! 非空断言
+    s = "world";
+    fmt.println(s!!.length);  // 5
+
+    // 3. 空合并默认值
+    var n: String? = null;
+    fmt.println(n ?? "默认");       // 默认
+
+    // 4. 可空对象 + 安全方法链
+    val a = new NullDog("阿黄");
+    val b = new NullDog("小黑");
+    a.best = b;
+    var d: NullDog? = a;
+    fmt.println(d?.bark() ?? "null");     // 阿黄: 汪
+    fmt.println(d?.best?.name ?? "null"); // 小黑
+    d = null;
+    fmt.println(d?.bark() ?? "空狗");      // 空狗
+
+    // 5. 直接非空断言访问
+    val a2 = new NullDog("旺财");
+    var maybe: NullDog? = a2;
+    fmt.println(maybe!!.name);   // 旺财
+
+    // 6. 函数参数可空（String.length 为码点数，"你好"=2）
+    fmt.println(nsGreet("你好"));  // len=2
+    fmt.println(nsGreet(null));    // len=0
+
+    // 7. 可空值类型装箱（Int?）
+    var x: Int? = null;
+    fmt.println(x == null);      // true
+    x = 42;
+    fmt.println(x!!);            // 42
+    fmt.println(x ?? 0);         // 42
+    var y: Int? = null;
+    fmt.println(y ?? 99);        // 99
+
+    // 8. 可空拆箱后再运算（直接 x+1 / x+= / !Bool? 须编译拒绝）
+    var z: Int? = 10;
+    fmt.println(z!! + 1);        // 11
+    fmt.println(z!! > 5);        // true
+
+    // 9. try/finally 返回 Int?（unwind 槽须按 ptr 存，勿 sext i32）
+    fmt.println(nsTryRet()!!);   // 7
+
+    // 10. [Int?] 装箱数组：esz=8、push/pop/下标
+    var na: [Int?] = [1, null];
+    na += 3;
+    fmt.println(na[0]!!);        // 1
+    fmt.println(na[1] == null);  // true
+    fmt.println(na[2]!!);        // 3
+    fmt.println(na.pop()!!);     // 3
+
+    // 11. 可空静态字段默认 null
+    fmt.println(NsBox.slot == null);  // true
+
+    // 12. Bool? 须 !! 后再逻辑运算
+    var bn: Bool? = true;
+    fmt.println(bn!! && true);   // true
+    fmt.println(!bn!!);          // false
+
+    // 13. if/while 条件须非空 Bool（直接 if(bn) 编译拒绝）
+    if (bn!!) { fmt.println("ifok"); }  // ifok
+
+    // 14. 下标须非空整数
+    var ni: Int? = 0;
+    var narr: [Int] = [9];
+    fmt.println(narr[ni!!]);     // 9
+
+    // 15. 装箱可空值相等（载荷，非指针身份）
+    var ea: Int? = 1;
+    var eb: Int? = 1;
+    fmt.println(ea == eb);       // true
+    fmt.println(ea != eb);       // false
+    var ec: Int? = null;
+    fmt.println(ea == ec);       // false
+    fmt.println(ec == null);     // true
+
+    // 16. String? 内容相等（hao_str_eq）
+    var es1: String? = "hi";
+    var es2: String? = "h" + "i";
+    fmt.println(es1 == es2);     // true
+
+    // 17. 可空数组须 !! 后再 for-in / 下标赋值（直接 for(a)/a[i]= 编译拒绝）
+    var narr2: [Int]? = [1, 2];
+    for (x in narr2!!) { fmt.println(x); }  // 1 / 2
+    val narr2u = narr2!!;
+    narr2u[0] = 7;
+    fmt.println(narr2u[0]);      // 7
+
+    // 18. when 分支值须非空（可空分支编译拒绝）
+    var wk: Int? = 1;
+    when (1) {
+        wk!! -> fmt.println("whenok");
+        else -> fmt.println("miss");
+    }
+
+    // 19. 整数除法正常路径（除零运行时 panic，不进套件）
+    fmt.println(10 / 2);         // 5
+    fmt.println(10 % 3);         // 1
+
+    // 20. ?. 返回已可空值类型（勿二次装箱）
+    var nh: NsHold? = new NsHold();
+    fmt.println(nh?.n ?? -1);    // 5
+    nh = null;
+    fmt.println(nh?.n ?? -1);    // -1
+
+    // 21. Float when 用 fcmp（非 icmp）
+    var wf: Float = 1.5;
+    when (wf) {
+        1.5 -> fmt.println("floatok");
+        else -> fmt.println("floatmiss");
+    }
+
+    // 22. ?? 同型默认值
+    var xi: Int? = null;
+    fmt.println(xi ?? 8);        // 8
+
+    // 23. 可空数组展开须 !!（直接 [...a?] / 无 else 的 when 表达式见 negcheck）
+    var nsArr: [Int]? = [1, 2];
+    val nsSpread = [...nsArr!!];
+    fmt.println(nsSpread.length); // 2
+
+    // 24. smart cast：if (x != null) 分支内免 !!
+    var sc: Int? = 9;
+    if (sc != null) {
+        fmt.println(sc + 1);     // 10
+    }
+    var ss: String? = "hi";
+    if (ss != null) {
+        fmt.println(ss.length);  // 2
+    }
+    // if (x == null) return 风格：后续非空
+    var se: Int? = 3;
+    if (se == null) { return; }
+    fmt.println(se * 2);         // 6
+}
+
+func nsTryRet(): Int? {
+    try { return 7; } finally {}
+}
+
+class NsBox {
+    static var slot: Int?;
+}
+
+class NsHold {
+    var n: Int? = 5;
+}

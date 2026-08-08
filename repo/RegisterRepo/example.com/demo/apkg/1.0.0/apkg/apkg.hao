@@ -1,0 +1,2 @@
+package apkg;
+public func mark(): String { return "a"; }

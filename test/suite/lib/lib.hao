@@ -1,0 +1,14 @@
+// ============================================================
+//  跨包用例：lib 包（跨包 init 顺序）
+//  原 test/initpkg/lib，折叠进 suite 子包。
+//  依赖它的 main 包会在本包 init() 之后才执行自身 init()。
+// ============================================================
+package lib;
+
+func init() {
+    fmt.println("lib.init");
+}
+
+func greet(): String {
+    return "hello from lib";
+}

@@ -1,0 +1,9 @@
+package main;
+
+// 环境变量链接（v0.11.0）：无 @link、无 -l，靠环境变量 HAO_LDFLAGS="-lws2_32"。
+//   HAO_LDFLAGS="-lws2_32" hao run test/sysenv.hao
+extern func ntohs(x: Int): Int = "ntohs";
+
+func main() {
+    fmt.println(ntohs(0x1234));   // 13330
+}

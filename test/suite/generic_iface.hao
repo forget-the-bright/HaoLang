@@ -1,0 +1,62 @@
+// 多文件测试套件 · generic_iface（v0.18.0）
+//  覆盖：自定义泛型接口声明/实例化、泛型类实现泛型接口、
+//        接口类型变量接收泛型类实例、for-in 走 Iterable 接口路径。
+package main;
+
+// 自定义泛型接口：可迭代 + 迭代器
+interface gi_Iterable<T> {
+    func iterator(): gi_Iterator<T>;
+}
+interface gi_Iterator<T> {
+    func hasNext(): Bool;
+    func next(): T;
+}
+
+// 自定义泛型类实现泛型接口
+class gi_List<T> : gi_Iterable<T> {
+    var items: [T];
+    constructor() { this.items = []; }
+    func add(x: T) { this.items += x; }
+    func size(): Int { return this.items.length; }
+    func get(i: Int): T { return this.items[i]; }
+    func iterator(): gi_Iterator<T> {
+        return new gi_ListIter<T>(this);
+    }
+}
+class gi_ListIter<T> : gi_Iterator<T> {
+    var list: gi_List<T>;
+    var index: Int;
+    constructor(list: gi_List<T>) { this.list = list; this.index = 0; }
+    func hasNext(): Bool { return this.index < this.list.size(); }
+    func next(): T { val i = this.index; this.index += 1; return this.list.get(i); }
+}
+
+func genericIfaceTest(): Unit {
+    // 泛型类实例实现泛型接口
+    val g = new gi_List<Int>();
+    g.add(5); g.add(15); g.add(25);
+
+    // 接口类型变量接收泛型类实例（isAssignable 按实例名）
+    val it: gi_Iterable<Int> = g;
+    val iter = it.iterator();
+
+    var sum = 0;
+    while (iter.hasNext()) {
+        sum += iter.next();
+    }
+    fmt.println("gi_sum=" + sum);   // 45
+
+    // for-in 走 Iterable 接口路径（类 + 接口类型变量）
+    var f1 = 0;
+    for (x in g) { f1 += x; }
+    var f2 = 0;
+    for (y in it) { f2 += y; }
+    fmt.println("gi_for=" + f1 + "," + f2);   // 45,45
+
+    // 不同元素类型的独立实例化
+    val gs = new gi_List<String>();
+    gs.add("a"); gs.add("b");
+    var cat = "";
+    for (s in gs) { cat += s; }
+    fmt.println("gi_str=" + cat);   // ab
+}

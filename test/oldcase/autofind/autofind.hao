@@ -1,0 +1,10 @@
+package main;
+
+// 默认库搜索路径（v0.11.0）：@link("mylib") 无需 -L，自动从默认路径找到。
+// 库 mylib.a 放在本包目录的 lib/ 子目录（test/autofind/lib/），
+// 编译器自动把「源码目录/lib」加入 -L 搜索路径。
+extern func autoadd(a: Int, b: Int): Int = "hao_autoadd" @link("mylib");
+
+func main() {
+    fmt.println(autoadd(1, 2));   // 1+2+1000 = 1003
+}

@@ -1,0 +1,3 @@
+package midpkg;
+import leafpkg;
+public func mark(): String { return leafpkg.mark(); }

@@ -1,0 +1,7 @@
+package main;
+
+import utilpkg;
+
+func main() {
+    fmt.println(utilpkg.mark());
+}

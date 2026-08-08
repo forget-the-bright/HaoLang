@@ -1,0 +1,57 @@
+// ============================================================
+//  lang.UInt —— 基础类型 UInt（u32）的包装类
+// ============================================================
+package lang;
+
+class UInt {
+    var value: UInt;
+
+    static val SIZE: Int = 32;
+    static val BYTES: Int = 4;
+    static val MAX_VALUE: UInt = 4294967295;
+    static val MIN_VALUE: UInt = 0;
+
+    constructor(v: UInt) {
+        this.value = v;
+    }
+
+    static func valueOf(v: UInt): lang.UInt {
+        return new lang.UInt(v);
+    }
+
+    func uintValue(): UInt {
+        return this.value;
+    }
+
+    static func toStr(v: UInt): String {
+        return hao_uint_to_str(v);
+    }
+
+    static func parse(s: String): UInt? {
+        return hao_parse_uint(s);
+    }
+
+    static func compare(a: UInt, b: UInt): Int {
+        if (a < b) { return -1; }
+        if (a > b) { return 1; }
+        return 0;
+    }
+
+    func compareTo(other: lang.UInt): Int {
+        return UInt.compare(this.value, other.value);
+    }
+
+    override func hashCode(): Int {
+        return this.value;
+    }
+
+    override func equals(o: Object): Bool {
+        if (!(o is lang.UInt)) { return false; }
+        val other = o as lang.UInt;
+        return this.value == other.value;
+    }
+
+    override func toString(): String {
+        return hao_uint_to_str(this.value);
+    }
+}

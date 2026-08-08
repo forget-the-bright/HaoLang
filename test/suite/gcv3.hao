@@ -1,0 +1,82 @@
+// ============================================================
+//  多文件测试套件 · GC v3 正确性（v0.35.1 审计）
+//  remset 跨 minor / 静态根槽 / by-ref 数组写回屏障
+// ============================================================
+package main;
+
+import gc;
+
+class Gcv3Static {
+    static var label: String = "alive-static";
+}
+
+class Gcv3Holder {
+    var kid: String = "";
+    var arr: [String] = [];
+    constructor() {}
+}
+
+class Gcv3Junk {
+    var s: String;
+    constructor(s: String) { this.s = s; }
+}
+
+// 压 nursery，触发自动 minor（v0.37 起多线程亦可阈值自动回收）
+func gcv3BurnNursery() {
+    var i = 0;
+    while (i < 400) {
+        val j = new Gcv3Junk("burn-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+        if (j.s.length < 0) { i = i; }
+        i += 1;
+    }
+}
+
+func gcv3MutArr(a: [String]) {
+    var i = 0;
+    while (i < 40) {
+        a += "e" + i;
+        i += 1;
+    }
+}
+
+func gcv3Test() {
+    // ---- 1) 静态根：collect + 堆复用后静态 String 仍存活 ----
+    val n0 = Gcv3Static.label.length;
+    if (n0 < 0) { fmt.println("x"); }
+    val c0 = gc.GC.collectCount();
+    gc.GC.collect();
+    fmt.println(gc.GC.collectCount() > c0);   // true
+    var bi = 0;
+    while (bi < 2000) {
+        val j = new Gcv3Junk("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+        if (j.s.length < 0) { bi = bi; }
+        bi += 1;
+    }
+    fmt.println(Gcv3Static.label);            // alive-static
+    fmt.println(Gcv3Static.label == "alive-static"); // true
+
+    // ---- 2) remset 跨多次 minor：old 持有 young 不漏标 ----
+    val h = new Gcv3Holder();
+    // 先让 h 经多次 minor 晋升 old（age≥2）
+    gcv3BurnNursery();
+    gcv3BurnNursery();
+    gcv3BurnNursery();
+    h.kid = "young-keep";
+    // 再压多次 minor：旧 bug 会在第一次 minor 后清 remset，第二次漏标
+    gcv3BurnNursery();
+    gcv3BurnNursery();
+    gcv3BurnNursery();
+    fmt.println(h.kid);                       // young-keep
+    fmt.println(h.kid == "young-keep");       // true
+
+    // ---- 3) by-ref 数组扩容写回字段 + 屏障 ----
+    val h2 = new Gcv3Holder();
+    gcv3BurnNursery();
+    gcv3BurnNursery();
+    gcv3BurnNursery();
+    gcv3MutArr(h2.arr);
+    gcv3BurnNursery();
+    gcv3BurnNursery();
+    fmt.println(h2.arr.length == 40);         // true
+    fmt.println(h2.arr[0] == "e0");           // true
+}

@@ -1,0 +1,11 @@
+{
+  "project": {
+    "name": "modsmoke-app",
+    "module": "example/modsmoke-app",
+    "version": "0.1.0",
+    "main": "main.hao"
+  },
+  "localReferences": [
+    "../greeter"
+  ]
+}

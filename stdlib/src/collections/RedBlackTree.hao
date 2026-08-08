@@ -1,0 +1,416 @@
+package collections;
+
+// ============================================================
+//  RedBlackTree<K,V> —— 红黑树（对标 Java TreeMap 底层思想）
+// ------------------------------------------------------------
+//  职责：自平衡有序映射；查找/插入/删除均摊 O(log n)。
+//  排序：构造器 Func<K,K,Int>；ofInt() 使用 Integer.compare。
+//  着色：red=true 为红，false 为黑；空孩子视为黑。
+//  线程安全：否。
+//  不是：哈希 Map；ConcurrentHashMap。
+// ============================================================
+
+class RBNode<K, V> {
+    var key: K;
+    var value: V;
+    var left: RBNode<K, V>?;
+    var right: RBNode<K, V>?;
+    var parent: RBNode<K, V>?;
+    var red: Bool;
+
+    constructor(k: K, v: V) {
+        this.key = k;
+        this.value = v;
+        this.left = null;
+        this.right = null;
+        this.parent = null;
+        this.red = true; // 新节点默认红
+    }
+}
+
+class RedBlackTree<K, V> {
+    var root: RBNode<K, V>?;
+    var count: Int;
+    var compare: Func<K, K, Int>;
+
+    // @param compare 键比较器（负/零/正）
+    // 复杂度：O(1)
+    constructor(compare: Func<K, K, Int>) {
+        this.root = null;
+        this.count = 0;
+        this.compare = compare;
+    }
+
+    // @return 节点数
+    func size(): Int { return this.count; }
+
+    // @return 是否为空
+    func isEmpty(): Bool { return this.count == 0; }
+
+    func isRed(n: RBNode<K, V>?): Bool {
+        if (n == null) { return false; }
+        return n!!.red;
+    }
+
+    // 左旋：n 的右孩子升为子树根。
+    func rotateLeft(n: RBNode<K, V>) {
+        val r = n.right!!;
+        n.right = r.left;
+        if (r.left != null) {
+            val rl = r.left!!;
+            rl.parent = n;
+        }
+        r.parent = n.parent;
+        if (n.parent == null) {
+            this.root = r;
+        } else {
+            val np = n.parent!!;
+            if (n == np.left) {
+                np.left = r;
+            } else {
+                np.right = r;
+            }
+        }
+        r.left = n;
+        n.parent = r;
+    }
+
+    // 右旋：n 的左孩子升为子树根。
+    func rotateRight(n: RBNode<K, V>) {
+        val l = n.left!!;
+        n.left = l.right;
+        if (l.right != null) {
+            val lr = l.right!!;
+            lr.parent = n;
+        }
+        l.parent = n.parent;
+        if (n.parent == null) {
+            this.root = l;
+        } else {
+            val np = n.parent!!;
+            if (n == np.left) {
+                np.left = l;
+            } else {
+                np.right = l;
+            }
+        }
+        l.right = n;
+        n.parent = l;
+    }
+
+    // 插入后修复红黑性质。
+    func insertFixup(z: RBNode<K, V>) {
+        var x = z;
+        while (x.parent != null && this.isRed(x.parent)) {
+            val p = x.parent!!;
+            val gp = p.parent;
+            if (gp == null) { break; }
+            val g = gp!!;
+            if (p == g.left) {
+                val y = g.right;
+                if (this.isRed(y)) {
+                    p.red = false;
+                    val yy = y!!;
+                    yy.red = false;
+                    g.red = true;
+                    x = g;
+                } else {
+                    if (x == p.right) {
+                        x = p;
+                        this.rotateLeft(x);
+                    }
+                    val xp = x.parent!!;
+                    xp.red = false;
+                    val xpp = xp.parent!!;
+                    xpp.red = true;
+                    this.rotateRight(xpp);
+                }
+            } else {
+                val y = g.left;
+                if (this.isRed(y)) {
+                    p.red = false;
+                    val yy = y!!;
+                    yy.red = false;
+                    g.red = true;
+                    x = g;
+                } else {
+                    if (x == p.left) {
+                        x = p;
+                        this.rotateRight(x);
+                    }
+                    val xp = x.parent!!;
+                    xp.red = false;
+                    val xpp = xp.parent!!;
+                    xpp.red = true;
+                    this.rotateLeft(xpp);
+                }
+            }
+        }
+        if (this.root != null) {
+            val rt = this.root!!;
+            rt.red = false;
+        }
+    }
+
+    // 插入或覆盖。
+    // @param key 键
+    // @param value 值
+    // 复杂度：O(log n)
+    func put(key: K, value: V) {
+        var y: RBNode<K, V>? = null;
+        var x = this.root;
+        while (x != null) {
+            y = x;
+            val cmp = this.compare(key, x!!.key);
+            if (cmp == 0) {
+                val node = x!!;
+                node.value = value;
+                return;
+            } else if (cmp < 0) {
+                x = x!!.left;
+            } else {
+                x = x!!.right;
+            }
+        }
+        val z = new RBNode<K, V>(key, value);
+        z.parent = y;
+        if (y == null) {
+            this.root = z;
+        } else if (this.compare(key, y!!.key) < 0) {
+            val yy = y!!;
+            yy.left = z;
+        } else {
+            val yy = y!!;
+            yy.right = z;
+        }
+        this.count += 1;
+        this.insertFixup(z);
+    }
+
+    // @param key 键
+    // @return 值或 null
+    // 复杂度：O(log n)
+    func get(key: K): V? {
+        var x = this.root;
+        while (x != null) {
+            val cmp = this.compare(key, x!!.key);
+            if (cmp == 0) { return x!!.value; }
+            if (cmp < 0) { x = x!!.left; }
+            else { x = x!!.right; }
+        }
+        return null;
+    }
+
+    // @param key 键
+    // @return 是否存在
+    // 复杂度：O(log n)
+    func containsKey(key: K): Bool {
+        var x = this.root;
+        while (x != null) {
+            val cmp = this.compare(key, x!!.key);
+            if (cmp == 0) { return true; }
+            if (cmp < 0) { x = x!!.left; }
+            else { x = x!!.right; }
+        }
+        return false;
+    }
+
+    func treeMinimum(x: RBNode<K, V>): RBNode<K, V> {
+        var n = x;
+        while (n.left != null) { n = n.left!!; }
+        return n;
+    }
+
+    // 用 v 子树替换 u 子树（CLRS transplant）。
+    func transplant(u: RBNode<K, V>, v: RBNode<K, V>?) {
+        if (u.parent == null) {
+            this.root = v;
+        } else {
+            val up = u.parent!!;
+            if (u == up.left) {
+                up.left = v;
+            } else {
+                up.right = v;
+            }
+        }
+        if (v != null) {
+            val vv = v!!;
+            vv.parent = u.parent;
+        }
+    }
+
+    // 删除后修复。
+    func deleteFixup(x: RBNode<K, V>?, xParent: RBNode<K, V>?) {
+        var cur = x;
+        var xp = xParent;
+        while ((cur == null || !cur!!.red) && cur != this.root) {
+            if (xp == null) { break; }
+            val parent = xp!!;
+            if (cur == parent.left) {
+                var w = parent.right;
+                if (this.isRed(w)) {
+                    val ww = w!!;
+                    ww.red = false;
+                    parent.red = true;
+                    this.rotateLeft(parent);
+                    w = parent.right;
+                }
+                if (w == null) { break; }
+                val sib = w!!;
+                if (!this.isRed(sib.left) && !this.isRed(sib.right)) {
+                    sib.red = true;
+                    cur = parent;
+                    xp = cur!!.parent;
+                } else {
+                    if (!this.isRed(sib.right)) {
+                        if (sib.left != null) {
+                            val wl = sib.left!!;
+                            wl.red = false;
+                        }
+                        sib.red = true;
+                        this.rotateRight(sib);
+                        w = parent.right;
+                    }
+                    if (w != null) {
+                        val w2 = w!!;
+                        w2.red = parent.red;
+                        parent.red = false;
+                        if (w2.right != null) {
+                            val wr = w2.right!!;
+                            wr.red = false;
+                        }
+                        this.rotateLeft(parent);
+                    }
+                    cur = this.root;
+                    xp = null;
+                }
+            } else {
+                var w = parent.left;
+                if (this.isRed(w)) {
+                    val ww = w!!;
+                    ww.red = false;
+                    parent.red = true;
+                    this.rotateRight(parent);
+                    w = parent.left;
+                }
+                if (w == null) { break; }
+                val sib = w!!;
+                if (!this.isRed(sib.left) && !this.isRed(sib.right)) {
+                    sib.red = true;
+                    cur = parent;
+                    xp = cur!!.parent;
+                } else {
+                    if (!this.isRed(sib.left)) {
+                        if (sib.right != null) {
+                            val wr = sib.right!!;
+                            wr.red = false;
+                        }
+                        sib.red = true;
+                        this.rotateLeft(sib);
+                        w = parent.left;
+                    }
+                    if (w != null) {
+                        val w2 = w!!;
+                        w2.red = parent.red;
+                        parent.red = false;
+                        if (w2.left != null) {
+                            val wl = w2.left!!;
+                            wl.red = false;
+                        }
+                        this.rotateRight(parent);
+                    }
+                    cur = this.root;
+                    xp = null;
+                }
+            }
+        }
+        if (cur != null) {
+            val c = cur!!;
+            c.red = false;
+        }
+    }
+
+    // 删除键。
+    // @param key 键
+    // @return 是否删除成功
+    // 复杂度：O(log n)
+    func remove(key: K): Bool {
+        var z = this.root;
+        while (z != null) {
+            val cmp = this.compare(key, z!!.key);
+            if (cmp == 0) { break; }
+            if (cmp < 0) { z = z!!.left; }
+            else { z = z!!.right; }
+        }
+        if (z == null) { return false; }
+
+        var y = z!!;
+        var yOriginalRed = y.red;
+        var x: RBNode<K, V>? = null;
+        var xParent: RBNode<K, V>? = null;
+
+        if (z!!.left == null) {
+            x = z!!.right;
+            xParent = z!!.parent;
+            this.transplant(z!!, z!!.right);
+        } else if (z!!.right == null) {
+            x = z!!.left;
+            xParent = z!!.parent;
+            this.transplant(z!!, z!!.left);
+        } else {
+            y = this.treeMinimum(z!!.right!!);
+            yOriginalRed = y.red;
+            x = y.right;
+            if (y.parent == z) {
+                xParent = y;
+                if (x != null) {
+                    val xx = x!!;
+                    xx.parent = y;
+                }
+            } else {
+                xParent = y.parent;
+                this.transplant(y, y.right);
+                y.right = z!!.right;
+                if (y.right != null) {
+                    val yr = y.right!!;
+                    yr.parent = y;
+                }
+            }
+            this.transplant(z!!, y);
+            y.left = z!!.left;
+            if (y.left != null) {
+                val yl = y.left!!;
+                yl.parent = y;
+            }
+            y.red = z!!.red;
+        }
+        this.count -= 1;
+        if (!yOriginalRed) {
+            // 若 x 被接到 y 上且 xParent 未更新
+            if (x != null) { xParent = x!!.parent; }
+            this.deleteFixup(x, xParent);
+        }
+        if (this.root != null) {
+            val rt = this.root!!;
+            rt.red = false;
+        }
+        return true;
+    }
+
+    // 中序键列表（升序）。
+    // @return 新数组
+    // 复杂度：O(n)
+    // 数组形参按引用传递：walk 内 out += 扩容会写回调用方。
+    func inorderKeys(): [K] {
+        var out: [K] = [];
+        this.walk(this.root, out);
+        return out;
+    }
+
+    func walk(n: RBNode<K, V>?, out: [K]) {
+        if (n == null) { return; }
+        this.walk(n!!.left, out);
+        out += n!!.key;
+        this.walk(n!!.right, out);
+    }
+}

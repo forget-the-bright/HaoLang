@@ -1,0 +1,239 @@
+// ============================================================
+//  多文件测试套件 · mvc：HttpApp 路由 / 注解控制层 / 过滤器 / 拦截器
+//  v0.31：多参构造 reflect.newInstanceArgs + registerNewArgs
+// ============================================================
+package main;
+
+import net;
+import reflect;
+import thread;
+
+@Controller
+@RequestMapping(path = "/api")
+class SuiteMvcController {
+    @GetMapping(path = "/ping")
+    func ping(req: net.HttpRequest): net.HttpResponse {
+        return net.HttpResponse.of(200, "pong-mvc");
+    }
+
+    @PostMapping(path = "/echo")
+    func echo(req: net.HttpRequest): net.HttpResponse {
+        return net.HttpResponse.of(200, req.body);
+    }
+
+    @GetMapping(path = "/q")
+    func query(req: net.HttpRequest): net.HttpResponse {
+        val v = req.getQuery("n") ?? "none";
+        return net.HttpResponse.of(200, v);
+    }
+}
+
+// 多参构造依赖（语言本身支持；反射/扫描须走 newInstanceArgs）
+class SuiteMvcDep {
+    var tag: String;
+    constructor(tag: String) { this.tag = tag; }
+}
+
+@Controller
+@RequestMapping(path = "/inj")
+class SuiteInjectController {
+    var dep: SuiteMvcDep?;
+    constructor(dep: SuiteMvcDep) {
+        this.dep = dep;
+    }
+    @GetMapping(path = "/tag")
+    func tag(req: net.HttpRequest): net.HttpResponse {
+        if (this.dep == null) { return net.HttpResponse.of(500, "no-dep"); }
+        return net.HttpResponse.of(200, this.dep!!.tag);
+    }
+}
+
+// 纯反射：Int + String 双参构造
+class SuiteMultiCtor {
+    var x: Int;
+    var y: String;
+    constructor(x: Int, y: String) {
+        this.x = x;
+        this.y = y;
+    }
+    func sumLen(): Int { return this.x + this.y.length; }
+}
+
+// 静态构造 + 反射 new：工厂须先 ensureInit
+class SuiteStaticNew {
+    static var ready: Int = 0;
+    static SuiteStaticNew() { SuiteStaticNew.ready = 7; }
+    var v: Int = 0;
+    constructor() { this.v = SuiteStaticNew.ready; }
+}
+
+// 反射工厂须写入 String 字面量字段默认值（hao_str_from_cstr）
+class SuiteStrDefault {
+    var label: String = "ok";
+    constructor() {}
+}
+
+// v0.33 将就债 A：工厂字段默认与语言 new 对齐（Int? 装箱 / 对象默认）
+class SuiteFactoryDefaults {
+    var n: Int? = 5;
+    var label: String = "fd";
+    var child: SuiteStrDefault = new SuiteStrDefault();
+    constructor() {}
+}
+
+func suiteFindType(name: String): reflect.Type {
+    var i = 0;
+    while (i < reflect.typeCount()) {
+        val t = reflect.typeAt(i);
+        if (t.name() == name) { return t; }
+        i += 1;
+    }
+    return reflect.typeOf(new Object());
+}
+
+class SuiteLogFilter : net.HttpFilter {
+    override func doFilter(req: net.HttpRequest, chain: net.FilterChain): net.HttpResponse {
+        val resp = chain.proceed(req);
+        // 过滤器可改写响应
+        if (req.path == "/api/ping") {
+            resp.body = resp.body + "+f";
+        }
+        return resp;
+    }
+}
+
+class SuiteAuthInterceptor : net.HandlerInterceptor {
+    override func preHandle(req: net.HttpRequest): Bool {
+        if (req.path == "/api/deny") {
+            return false;
+        }
+        return true;
+    }
+}
+
+func suiteMvcExplicit(req: net.HttpRequest): net.HttpResponse {
+    return net.HttpResponse.of(200, "explicit");
+}
+
+func mvcTest() {
+    // 注解参数可读
+    val ctrl = new SuiteMvcController();
+    val t = reflect.typeOf(ctrl);
+    fmt.println(t.getAnnotationCount() >= 1);          // true
+    var foundGet = false;
+    var mi = 0;
+    while (mi < t.getMethodCount()) {
+        var aj = 0;
+        while (aj < t.getMethodAnnotationCount(mi)) {
+            val an = t.getMethodAnnotationName(mi, aj);
+            if (net.HttpApp.annoEnds(an, "GetMapping")) {
+                foundGet = true;
+                fmt.println(t.getMethodAnnotationValue(mi, aj)); // path=/ping 或 /ping
+            }
+            aj += 1;
+        }
+        mi += 1;
+    }
+    fmt.println(foundGet);                               // true
+
+    val app = new net.HttpApp();
+    if (!app.listen(7902)) {
+        fmt.println("mvc-listen-fail");
+        return;
+    }
+    app.addFilter(new SuiteLogFilter());
+    app.addInterceptor(new SuiteAuthInterceptor());
+    app.register(ctrl);
+    app.get("/hello", suiteMvcExplicit);
+
+    val th = new thread.Thread();
+    th.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r1 = net.Http.get("http://127.0.0.1:7902/api/ping");
+    fmt.println(r1.status);                              // 200
+    fmt.println(r1.body);                                // pong-mvc+f
+    th.join();
+
+    val th2 = new thread.Thread();
+    th2.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r2 = net.Http.post("http://127.0.0.1:7902/api/echo", "xyz");
+    fmt.println(r2.body);                                // xyz
+    th2.join();
+
+    val th3 = new thread.Thread();
+    th3.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r3 = net.Http.get("http://127.0.0.1:7902/hello");
+    fmt.println(r3.body);                                // explicit
+    th3.join();
+
+    val th4 = new thread.Thread();
+    th4.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r4 = net.Http.get("http://127.0.0.1:7902/api/q?n=42");
+    fmt.println(r4.body);                                // 42
+    th4.join();
+
+    // ---- v0.31：多参构造反射 + 依赖注入式 registerNewArgs ----
+    val mt = suiteFindType("SuiteMultiCtor");
+    fmt.println(mt.hasFactory());                        // true
+    fmt.println(mt.canNewInstance());                    // false（有参，扫描不自动 new）
+    fmt.println(mt.ctorParamCount());                    // 2
+    fmt.println(mt.ctorParamType(0));                    // Int
+    fmt.println(mt.ctorParamType(1));                    // String
+    fmt.println(mt.newInstance() == null);               // true（无参路径拒绝）
+    var margs: [Long] = [];
+    margs += 3;
+    margs += reflect.ptrOfStr("ab");
+    val mo = mt.newInstanceArgs(margs);
+    fmt.println(mo != null);                             // true
+    val box = mo!! as SuiteMultiCtor;
+    fmt.println(box.sumLen());                           // 5（3+2）
+    var badArity: [Long] = [];
+    badArity += 1;
+    fmt.println(mt.newInstanceArgs(badArity) == null);   // true
+
+    // 静态构造：反射 new 后字段来自 staticinit
+    val st = suiteFindType("SuiteStaticNew");
+    fmt.println(st.canNewInstance());                    // true
+    val so = st.newInstance();
+    fmt.println(so != null);                             // true
+    fmt.println((so!! as SuiteStaticNew).v);             // 7
+
+    val sd = suiteFindType("SuiteStrDefault");
+    fmt.println(sd.canNewInstance());                    // true
+    val sdo = sd.newInstance();
+    fmt.println(sdo != null);                            // true
+    fmt.println((sdo!! as SuiteStrDefault).label);       // ok
+
+    // 将就债 A：反射 new 与语言 new 字段默认一致（含 Int? / 嵌套对象）
+    val langFd = new SuiteFactoryDefaults();
+    val ft = suiteFindType("SuiteFactoryDefaults");
+    fmt.println(ft.canNewInstance());                    // true
+    val fo = ft.newInstance();
+    fmt.println(fo != null);                             // true
+    val refFd = fo!! as SuiteFactoryDefaults;
+    fmt.println(refFd.n == langFd.n);                    // true（均为 5）
+    fmt.println(refFd.n!!);                              // 5
+    fmt.println(refFd.label);                            // fd
+    fmt.println(refFd.child.label);                      // ok
+    fmt.println(langFd.child.label);                     // ok
+
+    // 多参控制器：scan 扫不到；registerNewArgs 可绑路由
+    val it = suiteFindType("SuiteInjectController");
+    fmt.println(it.canNewInstance());                    // false
+    fmt.println(it.hasFactory());                        // true
+    val dep = new SuiteMvcDep("dep-ok");
+    var iargs: [Long] = [];
+    iargs += reflect.ptrOf(dep);
+    fmt.println(app.registerNewArgs(it, iargs));         // true
+    val th5 = new thread.Thread();
+    th5.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r5 = net.Http.get("http://127.0.0.1:7902/inj/tag");
+    fmt.println(r5.body);                                // dep-ok
+    th5.join();
+
+    app.close();
+}

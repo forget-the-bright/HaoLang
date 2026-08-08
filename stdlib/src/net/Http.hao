@@ -1,0 +1,576 @@
+// ============================================================
+//  net.Http —— Hutool 风 HTTP 客户端 / 简易服务端（v0.28）
+// ============================================================
+package net;
+
+import text;
+import json;
+
+public class HttpResponse {
+    var status: Int = 0;
+    var body: String = "";
+    var headers: String = "";
+    var contentType: String = "text/plain; charset=utf-8";
+    // true：writeResponse 用 Transfer-Encoding: chunked（与 Content-Length 互斥）
+    var chunked: Bool = false;
+
+    constructor() {
+        this.status = 0;
+        this.body = "";
+        this.headers = "";
+        this.contentType = "text/plain; charset=utf-8";
+        this.chunked = false;
+    }
+
+    func isOk(): Bool {
+        return this.status >= 200 && this.status < 300;
+    }
+
+    func bodyJSON(): json.JSONObject {
+        return json.JSON.parseObject(this.body);
+    }
+
+    static func of(status: Int, body: String): HttpResponse {
+        val r = new HttpResponse();
+        r.status = status;
+        r.body = body;
+        return r;
+    }
+
+    static func json(status: Int, body: String): HttpResponse {
+        val r = HttpResponse.of(status, body);
+        r.contentType = "application/json; charset=utf-8";
+        return r;
+    }
+}
+
+public class HttpRequest {
+    var method: String = "GET";
+    var path: String = "/";       // 不含 query
+    var query: String = "";       // ? 后原文
+    var body: String = "";
+    var headers: String = "";     // 原始头块（含状态行）
+
+    constructor() {
+        this.method = "GET";
+        this.path = "/";
+        this.query = "";
+        this.body = "";
+        this.headers = "";
+    }
+
+    func getHeader(name: String): String? {
+        val key = name + ":";
+        val lines = text.split(this.headers, "\r\n");
+        var i = 0;
+        while (i < lines.length) {
+            val line = lines[i];
+            if (HttpRequest.headerKeyEq(line, name)) {
+                var j = String.valueOf(line).indexOf(":");
+                if (j < 0) { return null; }
+                var v = String.valueOf(line).substring(j + 1, line.length);
+                return String.valueOf(v).trim();
+            }
+            i += 1;
+        }
+        return null;
+    }
+
+    static func headerKeyEq(line: String, name: String): Bool {
+        val j = String.valueOf(line).indexOf(":");
+        if (j < 0) { return false; }
+        val k = String.valueOf(String.valueOf(line).substring(0, j)).trim();
+        return String.valueOf(k).toLowerCase() == String.valueOf(name).toLowerCase();
+    }
+
+    func getQuery(name: String): String? {
+        if (this.query.length == 0) { return null; }
+        val parts = text.split(this.query, "&");
+        var i = 0;
+        while (i < parts.length) {
+            val p = parts[i];
+            val eq = String.valueOf(p).indexOf("=");
+            if (eq < 0) {
+                if (p == name) { return ""; }
+            } else {
+                val k = String.valueOf(p).substring(0, eq);
+                if (k == name) {
+                    return String.valueOf(p).substring(eq + 1, p.length);
+                }
+            }
+            i += 1;
+        }
+        return null;
+    }
+}
+
+public class Http {
+    // 硬顶：setMaxBytes 不可超过（64MiB）
+    static val ABSOLUTE_MAX_BYTES: Int = 67108864;
+    // 默认单次收发包上限（含头）；可用 setMaxBytes 调整
+    static var maxBytesLimit: Int = 8388608;
+
+    // 兼容旧名：当前生效上限
+    static func MAX_BYTES(): Int {
+        return Http.maxBytesLimit;
+    }
+
+    // @return 当前收发字节上限
+    static func maxBytes(): Int {
+        return Http.maxBytesLimit;
+    }
+
+    // 设置收发上限；夹到 [1024, ABSOLUTE_MAX_BYTES]。
+    static func setMaxBytes(n: Int) {
+        var v = n;
+        if (v < 1024) { v = 1024; }
+        if (v > Http.ABSOLUTE_MAX_BYTES) { v = Http.ABSOLUTE_MAX_BYTES; }
+        Http.maxBytesLimit = v;
+    }
+
+    // 单字段头值：禁止任意 CR/LF（防头注入）。多行头块用 isSafeHeaderBlock。
+    static func isSafeHeaderValue(s: String): Bool {
+        if (_httpByteIndexOf(s, "\r", 0) >= 0) { return false; }
+        if (_httpByteIndexOf(s, "\n", 0) >= 0) { return false; }
+        return true;
+    }
+
+    static func get(url: String): HttpResponse {
+        return Http.request("GET", url, "", 5000);
+    }
+
+    static func post(url: String, body: String): HttpResponse {
+        return Http.request("POST", url, body, 5000);
+    }
+
+    static func getJSON(url: String): json.JSONObject {
+        return Http.get(url).bodyJSON();
+    }
+
+    static func postJSON(url: String, obj: json.JSONObject): HttpResponse {
+        return Http.post(url, obj.toJSONString());
+    }
+
+    static func request(method: String, url: String, body: String, timeoutMs: Int): HttpResponse {
+        val u = Http.parseUrl(url);
+        if (!Http.isSafeHeaderValue(method) || !Http.isSafeHeaderValue(u.path)
+                || !Http.isSafeHeaderValue(u.host)) {
+            val bad = new HttpResponse();
+            bad.status = 0;
+            bad.body = "unsafe request field (CR/LF)";
+            return bad;
+        }
+        val sock = new Socket();
+        if (!sock.connect(u.host, u.port)) {
+            val fail = new HttpResponse();
+            fail.status = 0;
+            fail.body = "connect failed";
+            return fail;
+        }
+        sock.setTimeout(timeoutMs);
+        var req = method + " " + u.path + " HTTP/1.0\r\n";
+        req = req + "Host: " + u.host + "\r\n";
+        req = req + "Connection: close\r\n";
+        // Content-Length 为 UTF-8 字节数（非码点）；HTTP 头本身为 ASCII
+        val bodyBytes = _httpByteLen(body);
+        if (bodyBytes > 0) {
+            req = req + "Content-Length: " + Integer.toStr(bodyBytes) + "\r\n";
+            req = req + "Content-Type: application/json\r\n";
+        }
+        req = req + "\r\n";
+        if (bodyBytes > 0) { req = req + body; }
+        sock.send(req);
+        // 响应：无 CL 时读到对端关闭（HTTP/1.0 Connection: close）
+        var raw = Http.readMessage(sock, true);
+        sock.close();
+        return Http.parseResponse(raw);
+    }
+
+    // 头是否声明 Transfer-Encoding: chunked（行首锚定，大小写不敏感）
+    static func isChunkedEncoding(headers: String): Bool {
+        var pos = 0;
+        val n = _httpByteLen(headers);
+        while (pos < n) {
+            var lineEnd = _httpByteIndexOf(headers, "\r\n", pos);
+            if (lineEnd < 0) { lineEnd = n; }
+            val line = _httpByteSlice(headers, pos, lineEnd);
+            if (_httpByteLen(line) >= 17 && Http.asciiStartsWithCi(line, "transfer-encoding:")) {
+                val rawV = _httpByteSlice(line, 17, _httpByteLen(line));
+                val v = String.valueOf(String.valueOf(rawV).trim()).toLowerCase();
+                if (String.valueOf(v).indexOf("chunked") >= 0) { return true; }
+            }
+            if (lineEnd >= n) { break; }
+            pos = lineEnd + 2;
+        }
+        return false;
+    }
+
+    // 解析十六进制长度行（仅 [0-9a-fA-F]）；失败返回 -1
+    static func parseHexLen(s: String): Int {
+        val n = _httpByteLen(s);
+        if (n <= 0) { return -1; }
+        var v = 0;
+        var i = 0;
+        while (i < n) {
+            val one = _httpByteSlice(s, i, i + 1);
+            val c = String.valueOf(one).charAt(0);
+            var d = -1;
+            if (c >= 48 && c <= 57) { d = c - 48; }
+            else if (c >= 97 && c <= 102) { d = c - 97 + 10; }
+            else if (c >= 65 && c <= 70) { d = c - 65 + 10; }
+            else { return -1; }
+            // 防 Int 溢出
+            if (v > 268435455) { return -1; }
+            v = v * 16 + d;
+            i += 1;
+        }
+        return v;
+    }
+
+    // 将 chunked 体解码为原始字节串；不完整或非法返回已解部分（调用方截断）
+    static func decodeChunkedBody(rawBody: String): String {
+        var out = "";
+        var pos = 0;
+        val n = _httpByteLen(rawBody);
+        val lim = Http.maxBytesLimit;
+        while (pos < n && _httpByteLen(out) < lim) {
+            val lineEnd = _httpByteIndexOf(rawBody, "\r\n", pos);
+            if (lineEnd < 0) { break; }
+            var sizeTok = _httpByteSlice(rawBody, pos, lineEnd);
+            val semi = _httpByteIndexOf(sizeTok, ";", 0);
+            if (semi >= 0) { sizeTok = _httpByteSlice(sizeTok, 0, semi); }
+            val sz = Http.parseHexLen(String.valueOf(sizeTok).trim());
+            if (sz < 0) { break; }
+            pos = lineEnd + 2;
+            if (sz == 0) { break; }
+            if (pos + sz + 2 > n) { break; }
+            val piece = _httpByteSlice(rawBody, pos, pos + sz);
+            if (_httpByteLen(out) + sz > lim) {
+                val room = lim - _httpByteLen(out);
+                if (room > 0) { out = out + _httpByteSlice(piece, 0, room); }
+                break;
+            }
+            out = out + piece;
+            pos = pos + sz;
+            if (pos + 2 <= n && _httpByteSlice(rawBody, pos, pos + 2) == "\r\n") {
+                pos = pos + 2;
+            }
+        }
+        return out;
+    }
+
+    // 编码为 chunked 体（含结尾 0 块）
+    static func encodeChunkedBody(body: String): String {
+        val n = _httpByteLen(body);
+        if (n == 0) { return "0\r\n\r\n"; }
+        return Http.toHex(n) + "\r\n" + body + "\r\n0\r\n\r\n";
+    }
+
+    static func toHex(n: Int): String {
+        if (n <= 0) { return "0"; }
+        var x = n;
+        var digits = "";
+        while (x > 0) {
+            val d = x % 16;
+            var ch = "";
+            if (d < 10) { ch = Integer.toStr(d); }
+            else if (d == 10) { ch = "a"; }
+            else if (d == 11) { ch = "b"; }
+            else if (d == 12) { ch = "c"; }
+            else if (d == 13) { ch = "d"; }
+            else if (d == 14) { ch = "e"; }
+            else { ch = "f"; }
+            digits = ch + digits;
+            x = x / 16;
+        }
+        return digits;
+    }
+
+    // 裸 chunked 体是否已含终止块（0\r\n）
+    static func chunkedBodyComplete(rawBody: String): Bool {
+        var pos = 0;
+        val n = _httpByteLen(rawBody);
+        while (pos < n) {
+            val lineEnd = _httpByteIndexOf(rawBody, "\r\n", pos);
+            if (lineEnd < 0) { return false; }
+            var sizeTok = _httpByteSlice(rawBody, pos, lineEnd);
+            val semi = _httpByteIndexOf(sizeTok, ";", 0);
+            if (semi >= 0) { sizeTok = _httpByteSlice(sizeTok, 0, semi); }
+            val sz = Http.parseHexLen(String.valueOf(sizeTok).trim());
+            if (sz < 0) { return false; }
+            pos = lineEnd + 2;
+            if (sz == 0) { return true; }
+            if (pos + sz + 2 > n) { return false; }
+            pos = pos + sz + 2;
+        }
+        return false;
+    }
+
+    // 读 HTTP 消息。readToClose=true：无 Content-Length 时读到 EOF（客户端收响应）；
+    // false：无 CL 则头结束后即停（服务端收请求，避免空等超时）；chunked 则读至终止块。
+    // 预算、CL、头/体分隔一律按 UTF-8 字节（禁止码点下标切片）。
+    static func readMessage(sock: Socket, readToClose: Bool): String {
+        var raw = "";
+        val lim = Http.maxBytesLimit;
+        while (_httpByteLen(raw) < lim) {
+            val room = lim - _httpByteLen(raw);
+            var want = 4096;
+            if (want > room) { want = room; }
+            val chunk = sock.recv(want);
+            if (chunk == null) { break; }
+            if (_httpByteLen(chunk!!) == 0) { break; }
+            raw = raw + chunk!!;
+            val sep = _httpByteIndexOf(raw, "\r\n\r\n", 0);
+            if (sep >= 0) {
+                val head = _httpByteSlice(raw, 0, sep);
+                val cl = Http.contentLengthOf(head);
+                if (cl != null) {
+                    if (sep + 4 >= lim) { break; }
+                    var need = cl!!;
+                    val maxBody = lim - sep - 4;
+                    if (need > maxBody) { need = maxBody; }
+                    val have = _httpByteLen(raw) - sep - 4;
+                    if (have >= need) { break; }
+                } else if (Http.isChunkedEncoding(head)) {
+                    val bodyPart = _httpByteSlice(raw, sep + 4, _httpByteLen(raw));
+                    if (Http.chunkedBodyComplete(bodyPart)) { break; }
+                } else if (!readToClose) {
+                    break;
+                }
+            }
+        }
+        return raw;
+    }
+
+    // 按「行首字段名」取 Content-Length（大小写不敏感）；忽略头值里的同名子串。
+    // 多行时取第一次行锚定命中。解析区间为 ASCII，按字节切片。
+    static func contentLengthOf(headers: String): Int? {
+        var pos = 0;
+        val n = _httpByteLen(headers);
+        while (pos < n) {
+            var lineEnd = _httpByteIndexOf(headers, "\r\n", pos);
+            if (lineEnd < 0) { lineEnd = n; }
+            val line = _httpByteSlice(headers, pos, lineEnd);
+            val ln = _httpByteLen(line);
+            // "content-length:" 长度 15
+            if (ln >= 15 && Http.asciiStartsWithCi(line, "content-length:")) {
+                var i = 15;
+                while (i < ln) {
+                    val one = _httpByteSlice(line, i, i + 1);
+                    if (one != " " && one != "\t") { break; }
+                    i += 1;
+                }
+                var j = i;
+                while (j < ln) {
+                    val one = _httpByteSlice(line, j, j + 1);
+                    val c = String.valueOf(one).charAt(0);
+                    if (c < 48 || c > 57) { break; }
+                    j += 1;
+                }
+                if (j > i) {
+                    return Integer.parse(_httpByteSlice(line, i, j));
+                }
+                return null;
+            }
+            if (lineEnd >= n) { break; }
+            pos = lineEnd + 2;
+        }
+        return null;
+    }
+
+    // ASCII 前缀大小写不敏感（仅用于 HTTP 头名）
+    static func asciiStartsWithCi(s: String, prefix: String): Bool {
+        val n = _httpByteLen(prefix);
+        if (_httpByteLen(s) < n) { return false; }
+        val a = String.valueOf(_httpByteSlice(s, 0, n)).toLowerCase();
+        val b = String.valueOf(prefix).toLowerCase();
+        return a == b;
+    }
+
+    static func parseResponse(raw: String): HttpResponse {
+        val resp = new HttpResponse();
+        val sep = _httpByteIndexOf(raw, "\r\n\r\n", 0);
+        var head = raw;
+        var body = "";
+        if (sep >= 0) {
+            head = _httpByteSlice(raw, 0, sep);
+            body = _httpByteSlice(raw, sep + 4, _httpByteLen(raw));
+            val cl = Http.contentLengthOf(head);
+            if (cl != null && _httpByteLen(body) > cl!!) {
+                body = _httpByteSlice(body, 0, cl!!);
+            } else if (cl == null && Http.isChunkedEncoding(head)) {
+                body = Http.decodeChunkedBody(body);
+            }
+        }
+        resp.headers = head;
+        resp.body = body;
+        // 状态行：HTTP/1.x NNN
+        val sp = String.valueOf(head).indexOf(" ");
+        if (sp >= 0) {
+            val rest = String.valueOf(head).substring(sp + 1, head.length);
+            val sp2 = String.valueOf(rest).indexOf(" ");
+            var codeStr = rest;
+            if (sp2 >= 0) {
+                codeStr = String.valueOf(rest).substring(0, sp2);
+            }
+            val code = Integer.parse(codeStr);
+            if (code != null) { resp.status = code!!; }
+        }
+        return resp;
+    }
+
+    static func parseUrl(url: String): UrlParts {
+        var s = url;
+        var port = 80;
+        // 去协议
+        if (String.valueOf(s).startsWith("http://")) {
+            s = String.valueOf(s).substring(7, s.length);
+        }
+        var path = "/";
+        val slash = String.valueOf(s).indexOf("/");
+        var hostPort = s;
+        if (slash >= 0) {
+            hostPort = String.valueOf(s).substring(0, slash);
+            path = String.valueOf(s).substring(slash, s.length);
+        }
+        val colon = String.valueOf(hostPort).indexOf(":");
+        var host = hostPort;
+        if (colon >= 0) {
+            host = String.valueOf(hostPort).substring(0, colon);
+            val ps = String.valueOf(hostPort).substring(colon + 1, hostPort.length);
+            val p = Integer.parse(ps);
+            if (p != null) { port = p!!; }
+        }
+        return new UrlParts(host, port, path);
+    }
+}
+
+class UrlParts {
+    var host: String;
+    var port: Int;
+    var path: String;
+    constructor(h: String, p: Int, path: String) {
+        this.host = h;
+        this.port = p;
+        this.path = path;
+    }
+}
+
+public class HttpServer {
+    var server: ServerSocket;
+    var port: Int;
+
+    constructor() {
+        this.server = new ServerSocket();
+        this.port = 0;
+    }
+
+    func listen(port: Int): Bool {
+        this.port = port;
+        return this.server.listen(port);
+    }
+
+    func close() {
+        this.server.close();
+    }
+
+    // 处理单次请求（回环测试 / 简单服务）；按 Content-Length 读全 body
+    func serveOnce(handler: (HttpRequest) -> HttpResponse): Bool {
+        val client = new Socket();
+        if (!this.server.accept(client)) { return false; }
+        client.setTimeout(5000);
+        val raw = Http.readMessage(client, false);
+        val req = HttpServer.parseRequest(raw);
+        val resp = handler(req);
+        HttpServer.writeResponse(client, resp);
+        client.close();
+        return true;
+    }
+
+    static func writeResponse(client: Socket, resp: HttpResponse) {
+        var phrase = "OK";
+        if (resp.status == 404) { phrase = "Not Found"; }
+        if (resp.status == 400) { phrase = "Bad Request"; }
+        if (resp.status == 500) { phrase = "Error"; }
+        if (resp.status == 403) { phrase = "Forbidden"; }
+        var ct = resp.contentType;
+        if (!Http.isSafeHeaderValue(ct)) {
+            ct = "text/plain; charset=utf-8";
+        }
+        var out = "HTTP/1.0 " + Integer.toStr(resp.status) + " " + phrase + "\r\n";
+        out = out + "Content-Type: " + ct + "\r\n";
+        if (resp.headers.length > 0 && HttpServer.isSafeHeaderBlock(resp.headers)) {
+            out = out + resp.headers;
+            if (!String.valueOf(resp.headers).endsWith("\r\n")) {
+                out = out + "\r\n";
+            }
+        }
+        out = out + "Connection: close\r\n";
+        if (resp.chunked) {
+            out = out + "Transfer-Encoding: chunked\r\n\r\n";
+            out = out + Http.encodeChunkedBody(resp.body);
+        } else {
+            out = out + "Content-Length: " + Integer.toStr(_httpByteLen(resp.body)) + "\r\n\r\n";
+            out = out + resp.body;
+        }
+        client.send(out);
+    }
+
+    // 自定义头块：禁止 \r\n\r\n 提前结束；每个 LF 须紧跟在 CR 后（防头注入）
+    static func isSafeHeaderBlock(h: String): Bool {
+        if (_httpByteIndexOf(h, "\r\n\r\n", 0) >= 0) { return false; }
+        var i = 0;
+        val n = _httpByteLen(h);
+        while (i < n) {
+            val lf = _httpByteIndexOf(h, "\n", i);
+            if (lf < 0) { break; }
+            if (lf == 0) { return false; }
+            if (_httpByteSlice(h, lf - 1, lf) != "\r") { return false; }
+            i = lf + 1;
+        }
+        return true;
+    }
+
+    static func parseRequest(raw: String): HttpRequest {
+        val req = new HttpRequest();
+        val sep = _httpByteIndexOf(raw, "\r\n\r\n", 0);
+        var head = raw;
+        var body = "";
+        if (sep >= 0) {
+            head = _httpByteSlice(raw, 0, sep);
+            body = _httpByteSlice(raw, sep + 4, _httpByteLen(raw));
+            val cl = Http.contentLengthOf(head);
+            if (cl != null && _httpByteLen(body) > cl!!) {
+                body = _httpByteSlice(body, 0, cl!!);
+            } else if (cl == null && Http.isChunkedEncoding(head)) {
+                body = Http.decodeChunkedBody(body);
+            }
+        }
+        req.headers = head;
+        req.body = body;
+        val lineEnd = String.valueOf(head).indexOf("\r\n");
+        var line = head;
+        if (lineEnd >= 0) {
+            line = String.valueOf(head).substring(0, lineEnd);
+        }
+        val parts = text.split(line, " ");
+        if (parts.length >= 1) { req.method = parts[0]; }
+        if (parts.length >= 2) {
+            var uri = parts[1];
+            val q = String.valueOf(uri).indexOf("?");
+            if (q >= 0) {
+                req.path = String.valueOf(uri).substring(0, q);
+                req.query = String.valueOf(uri).substring(q + 1, uri.length);
+            } else {
+                req.path = uri;
+                req.query = "";
+            }
+        }
+        return req;
+    }
+}
+
+// HTTP 线协议按字节计量（与 HaoString.len / regex 包一致）
+extern func _httpByteLen(s: String): Int = "hao_str_byte_len";
+extern func _httpByteSlice(s: String, start: Int, end: Int): String = "hao_str_byte_slice";
+extern func _httpByteIndexOf(s: String, sub: String, from: Int): Int = "hao_str_byte_index_of";

@@ -1,0 +1,66 @@
+// ============================================================
+//  lang.UShort —— 基础类型 UShort（u16）的包装类
+// ============================================================
+package lang;
+
+class UShort {
+    var value: UShort;
+
+    static val SIZE: Int = 16;
+    static val BYTES: Int = 2;
+    static val MAX_VALUE: UShort = 65535;
+    static val MIN_VALUE: UShort = 0;
+
+    constructor(v: UShort) {
+        this.value = v;
+    }
+
+    static func valueOf(v: UShort): lang.UShort {
+        return new lang.UShort(v);
+    }
+
+    func ushortValue(): UShort {
+        return this.value;
+    }
+
+    func intValue(): Int {
+        return this.value;
+    }
+
+    static func parse(s: String): UShort? {
+        val n = Integer.parse(s);
+        if (n == null) { return null; }
+        val v = n!!;
+        if (v < 0 || v > 65535) { return null; }
+        val b: UShort = v;
+        return b;
+    }
+
+    static func toStr(v: UShort): String {
+        return hao_int_to_str(v);
+    }
+
+    static func compare(a: UShort, b: UShort): Int {
+        if (a < b) { return -1; }
+        if (a > b) { return 1; }
+        return 0;
+    }
+
+    func compareTo(other: lang.UShort): Int {
+        return UShort.compare(this.value, other.value);
+    }
+
+    override func hashCode(): Int {
+        return this.value;
+    }
+
+    override func equals(o: Object): Bool {
+        if (!(o is lang.UShort)) { return false; }
+        val other = o as lang.UShort;
+        return this.value == other.value;
+    }
+
+    override func toString(): String {
+        return hao_int_to_str(this.value);
+    }
+}

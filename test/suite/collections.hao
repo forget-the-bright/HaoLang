@@ -1,0 +1,171 @@
+// ============================================================
+//  多文件测试套件 · collections：List/Map/Set/Queue/Stack + for-in + 对象key + 泛型方法
+//  覆盖：collections + map + set_queue + stack + foreach_collection + objectkey + generic_method
+// ============================================================
+package main;
+
+import collections;
+import hash;
+import exception;
+
+// 用作 Map/Set 的 key：默认继承 Object，覆写 hashCode/equals 即按内容相等
+class CKeyPerson {
+    var name: String;
+    var age: Int;
+    constructor(n: String, a: Int) { this.name = n; this.age = a; }
+    override func hashCode(): Int {
+        return hash.hashOf(this.name) * 31 + this.age;
+    }
+    override func equals(o: Object): Bool {
+        val other = o as CKeyPerson;
+        return this.name == other.name && this.age == other.age;
+    }
+}
+
+func collectionsTest() {
+    // ---------- List<T> ----------
+    val list = new collections.List<Int>();
+    list.add(10);
+    list.add(20);
+    list.add(30);
+    fmt.println(list.size());      // 3
+    fmt.println(list.get(0));      // 10
+    fmt.println(list.get(2));      // 30
+    list.set(1, 99);
+    fmt.println(list.get(1));      // 99
+    fmt.println(list.removeAt(0)); // 10
+    fmt.println(list.size());      // 2
+    fmt.println(list.get(0));      // 99
+
+    // ---------- List 泛型方法 map/filter/forEach（R 从 lambda 推断）----------
+    val nums = new collections.List<Int>();
+    nums.add(1); nums.add(2); nums.add(3);
+    val doubled = nums.map({ it * 2 });
+    fmt.println(doubled.get(0));       // 2
+    fmt.println(doubled.get(2));       // 6
+    val labels = nums.map({ $"n={it}" });
+    fmt.println(labels.get(1));        // n=2
+    val evens = nums.filter({ it % 2 == 0 });
+    fmt.println(evens.size());         // 1
+    fmt.println(evens.get(0));         // 2
+    var sum = 0;
+    nums.forEach({ sum = sum + it });
+    fmt.println(sum);                  // 6
+
+    // ---------- Map<K,V> ----------
+    val ages = new collections.Map<Int, String>();
+    ages.put(1, "one");
+    ages.put(2, "two");
+    ages.put(3, "three");
+    fmt.println(ages.size());          // 3
+    fmt.println(ages.get(2) ?? "nil"); // two
+    fmt.println(ages.get(99) ?? "nil");// nil
+    fmt.println(ages.containsKey(1));  // true
+    ages.put(2, "TWO");
+    fmt.println(ages.get(2) ?? "nil"); // TWO
+    fmt.println(ages.remove(1));       // true
+    fmt.println(ages.size());          // 2
+    // tombstone 复用后 size 须加回（remove 已减 1）
+    ages.put(1, "one-again");
+    fmt.println(ages.size());          // 3
+    fmt.println(ages.get(1) ?? "nil"); // one-again
+
+    // Map 扩容（装载因子 0.7，>11 触发 resize）
+    val big = new collections.Map<Int, Int>();
+    var i = 0;
+    while (i < 50) {
+        big.put(i, i * i);
+        i += 1;
+    }
+    fmt.println(big.size());           // 50
+    fmt.println(big.get(49) ?? -1);    // 2401
+
+    // 大表正向：多次扩容后 size/取值仍正确（禁止静默丢键）
+    val huge = new collections.Map<Int, Int>();
+    var hi = 0;
+    while (hi < 500) {
+        huge.put(hi, hi + 1);
+        hi += 1;
+    }
+    fmt.println(huge.size());          // 500
+    fmt.println(huge.get(0) ?? -1);    // 1
+    fmt.println(huge.get(499) ?? -1);  // 500
+
+    // 反向：冻结扩容后灌满 16 槽，再 put 新键须抛异常（不得静默丢）
+    val frozen = new collections.Map<Int, Int>();
+    frozen.growthEnabled = false;
+    var fi = 0;
+    while (fi < 16) {
+        frozen.put(fi, fi);
+        fi += 1;
+    }
+    fmt.println(frozen.size());        // 16
+    var threw = false;
+    try {
+        frozen.put(99, 1);
+    } catch (ex: exception.Exception) {
+        threw = true;
+        fmt.println(ex.getMessage());  // Map.put 失败：表已满且无法扩容
+    }
+    fmt.println(threw);                // true
+    fmt.println(frozen.containsKey(99)); // false
+    fmt.println(frozen.size());        // 16
+
+    // ---------- Set<T> ----------
+    val s = new collections.Set<Int>();
+    s.add(1); s.add(2); s.add(3); s.add(2);
+    fmt.println(s.size());             // 3
+    fmt.println(s.contains(2));        // true
+    fmt.println(s.remove(2));          // true
+    fmt.println(s.size());             // 2
+
+    // ---------- Queue<T> ----------
+    val q = new collections.Queue<Int>();
+    q.enqueue(10); q.enqueue(20); q.enqueue(30);
+    fmt.println(q.size());             // 3
+    fmt.println(q.peek() ?? -1);       // 10
+    fmt.println(q.dequeue() ?? -1);    // 10
+    fmt.println(q.dequeue() ?? -1);    // 20
+    fmt.println(q.isEmpty());          // false
+    fmt.println(q.dequeue() ?? -1);    // 30
+    fmt.println(q.isEmpty());          // true
+    fmt.println(q.dequeue() ?? -1);    // -1
+
+    // ---------- Stack<T> ----------
+    val st = new collections.Stack<Int>();
+    fmt.println(st.isEmpty());         // true
+    st.push(10); st.push(20); st.push(30);
+    fmt.println(st.size());            // 3
+    fmt.println(st.peek() ?? -1);      // 30
+    fmt.println(st.pop() ?? -1);       // 30
+    fmt.println(st.pop() ?? -1);       // 20
+    fmt.println(st.pop() ?? -1);       // 10
+    fmt.println(st.pop() ?? -1);       // -1
+
+    // ---------- for-in 迭代所有集合（v0.18.0 起走 Iterable 接口）----------
+    var ss = "";
+    for (x in list) { ss += x + ","; }
+    fmt.println(ss);                   // 99,30,
+    var qs = "";
+    for (x in q) { qs += x + ","; }
+    fmt.println(qs);                   // (空，q 已 dequeue 空)
+    var ns = 0;
+    for (x in s) { if (x == 1 || x == 3) ns += 1; }
+    fmt.println(ns);                   // 2
+
+    // ---------- 对象 key（覆写 hashCode/equals 按内容相等）----------
+    val m = new collections.Map<CKeyPerson, String>();
+    m.put(new CKeyPerson("alice", 30), "engineer");
+    m.put(new CKeyPerson("bob", 25), "designer");
+    fmt.println(m.size());                       // 2
+    fmt.println(m.get(new CKeyPerson("alice", 30)) ?? "nil");  // engineer
+    fmt.println(m.get(new CKeyPerson("alice", 31)) ?? "nil");  // nil
+    fmt.println(m.containsKey(new CKeyPerson("bob", 25)));     // true
+    fmt.println(m.remove(new CKeyPerson("bob", 25)));          // true
+    fmt.println(m.size());                       // 1
+
+    val set = new collections.Set<CKeyPerson>();
+    set.add(new CKeyPerson("carol", 40));
+    fmt.println(set.contains(new CKeyPerson("carol", 40)));    // true
+    fmt.println(set.contains(new CKeyPerson("carol", 41)));    // false
+}

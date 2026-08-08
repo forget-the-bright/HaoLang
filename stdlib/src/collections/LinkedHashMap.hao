@@ -1,0 +1,299 @@
+package collections;
+
+import hash;
+import exception;
+
+// ============================================================
+//  LinkedHashMap<K,V> —— 插入序哈希表（对标 Java LinkedHashMap）
+// ------------------------------------------------------------
+//  职责：在 Map（开放寻址）之上维护双向链表，迭代/keys 按插入序。
+//  访问序（accessOrder）本版不做；更新已存在键不改变顺序。
+//  线程安全：否。删除用 tombstone + 摘链。
+//  不是：TreeMap（无排序）；也不是 ConcurrentHashMap。
+// ============================================================
+
+// 槽位同时挂在哈希表与插入序链上。
+class LinkedHashMapEntry<K, V> {
+    var key: K;
+    var value: V;
+    var occupied: Bool;
+    var before: LinkedHashMapEntry<K, V>?;
+    var after: LinkedHashMapEntry<K, V>?;
+
+    constructor(k: K, v: V) {
+        this.key = k;
+        this.value = v;
+        this.occupied = true;
+        this.before = null;
+        this.after = null;
+    }
+}
+
+class LinkedHashMap<K, V> {
+    var table: [LinkedHashMapEntry<K,V>?];
+    var count: Int;
+    var capacity: Int;
+    var head: LinkedHashMapEntry<K, V>?;
+    var tail: LinkedHashMapEntry<K, V>?;
+
+    // 构造空表，容量 16。
+    // 复杂度：O(1) 摊销
+    constructor() {
+        this.capacity = 16;
+        this.count = 0;
+        this.head = null;
+        this.tail = null;
+        this.table = [];
+        var i = 0;
+        while (i < 16) {
+            this.table += null;
+            i += 1;
+        }
+    }
+
+    // @return 有效映射数
+    // 复杂度：O(1)
+    func size(): Int { return this.count; }
+
+    // @return 是否为空
+    // 复杂度：O(1)
+    func isEmpty(): Bool { return this.count == 0; }
+
+    // 将条目接到插入序链尾。
+    // 复杂度：O(1)
+    func linkLast(e: LinkedHashMapEntry<K, V>) {
+        val last = this.tail;
+        e.before = last;
+        e.after = null;
+        this.tail = e;
+        if (last == null) {
+            this.head = e;
+        } else {
+            val lastNode = last!!;
+            lastNode.after = e;
+        }
+    }
+
+    // 从插入序链摘除（不改 occupied/count）。
+    // 复杂度：O(1)
+    func unlink(e: LinkedHashMapEntry<K, V>) {
+        val p = e.before;
+        val n = e.after;
+        if (p != null) {
+            val pp = p!!;
+            pp.after = n;
+        } else {
+            this.head = n;
+        }
+        if (n != null) {
+            val nn = n!!;
+            nn.before = p;
+        } else {
+            this.tail = p;
+        }
+        e.before = null;
+        e.after = null;
+    }
+
+    // 倍增重建：按旧插入序重新 put，以保持顺序。
+    // 复杂度：O(n)
+    func resize() {
+        if (this.capacity <= 0 || this.capacity > 1073741823) { return; }
+        // 先按插入序抽出
+        var keys: [K] = [];
+        var vals: [V] = [];
+        var cur = this.head;
+        while (cur != null) {
+            if (cur!!.occupied) {
+                keys += cur!!.key;
+                vals += cur!!.value;
+            }
+            cur = cur!!.after;
+        }
+        this.capacity = this.capacity * 2;
+        this.table = [];
+        this.count = 0;
+        this.head = null;
+        this.tail = null;
+        var i = 0;
+        while (i < this.capacity) {
+            this.table += null;
+            i += 1;
+        }
+        var j = 0;
+        while (j < keys.length) {
+            this.insertUnchecked(keys[j], vals[j]);
+            j += 1;
+        }
+    }
+
+    // 插入或覆盖；新键追加到插入序尾；已存在只改 value。
+    // @param key 键
+    // @param value 值
+    // 复杂度：摊销 O(1)
+    // 异常：满表无法扩容 → Exception
+    func put(key: K, value: V) {
+        val c: Long = this.count;
+        val cap: Long = this.capacity;
+        if (cap > 0 && c * 10 >= cap * 7) { this.resize(); }
+        this.insertUnchecked(key, value);
+    }
+
+    // 线性探测插入（内部）。
+    func insertUnchecked(key: K, value: V) {
+        if (this.capacity <= 0) {
+            throw new exception.Exception("LinkedHashMap.put 失败：无效容量");
+        }
+        var idx = hash.hashOf(key) % this.capacity;
+        if (idx < 0) idx = -idx;
+        var tomb = -1;
+        var i = 0;
+        while (i < this.capacity) {
+            val e = this.table[idx];
+            if (e == null) {
+                if (tomb >= 0) {
+                    val slot = this.table[tomb]!!;
+                    slot.key = key;
+                    slot.value = value;
+                    slot.occupied = true;
+                    this.linkLast(slot);
+                    this.count += 1;
+                } else {
+                    val ne = new LinkedHashMapEntry<K,V>(key, value);
+                    this.table[idx] = ne;
+                    this.linkLast(ne);
+                    this.count += 1;
+                }
+                return;
+            }
+            if (!e!!.occupied) {
+                if (tomb < 0) tomb = idx;
+            } else if (hash.equalsKey(e!!.key, key)) {
+                val slot = this.table[idx]!!;
+                slot.value = value;
+                return;
+            }
+            idx += 1;
+            if (idx >= this.capacity) idx = 0;
+            i += 1;
+        }
+        val oldCap = this.capacity;
+        this.resize();
+        if (this.capacity <= oldCap) {
+            throw new exception.Exception("LinkedHashMap.put 失败：表已满且无法扩容");
+        }
+        this.insertUnchecked(key, value);
+    }
+
+    // @param key 键
+    // @return 值或 null
+    // 复杂度：摊销 O(1)
+    func get(key: K): V? {
+        if (this.capacity <= 0) { return null; }
+        var idx = hash.hashOf(key) % this.capacity;
+        if (idx < 0) idx = -idx;
+        var i = 0;
+        while (i < this.capacity) {
+            val e = this.table[idx];
+            if (e == null) return null;
+            if (e!!.occupied && hash.equalsKey(e!!.key, key)) {
+                return e!!.value;
+            }
+            idx += 1;
+            if (idx >= this.capacity) idx = 0;
+            i += 1;
+        }
+        return null;
+    }
+
+    // @param key 键
+    // @return 是否存在有效映射
+    // 复杂度：摊销 O(1)
+    func containsKey(key: K): Bool {
+        if (this.capacity <= 0) { return false; }
+        var idx = hash.hashOf(key) % this.capacity;
+        if (idx < 0) idx = -idx;
+        var i = 0;
+        while (i < this.capacity) {
+            val e = this.table[idx];
+            if (e == null) return false;
+            if (e!!.occupied && hash.equalsKey(e!!.key, key)) return true;
+            idx += 1;
+            if (idx >= this.capacity) idx = 0;
+            i += 1;
+        }
+        return false;
+    }
+
+    // 删除：tombstone + 摘链。
+    // @param key 键
+    // @return 是否删除成功
+    // 复杂度：摊销 O(1)
+    func remove(key: K): Bool {
+        if (this.capacity <= 0) { return false; }
+        var idx = hash.hashOf(key) % this.capacity;
+        if (idx < 0) idx = -idx;
+        var i = 0;
+        while (i < this.capacity) {
+            val e = this.table[idx];
+            if (e == null) return false;
+            if (e!!.occupied && hash.equalsKey(e!!.key, key)) {
+                val slot = this.table[idx]!!;
+                slot.occupied = false;
+                this.unlink(slot);
+                this.count -= 1;
+                return true;
+            }
+            idx += 1;
+            if (idx >= this.capacity) idx = 0;
+            i += 1;
+        }
+        return false;
+    }
+
+    // 清空并重置容量 16。
+    // 复杂度：O(1) 相对（旧表交 GC）
+    func clear() {
+        this.capacity = 16;
+        this.count = 0;
+        this.head = null;
+        this.tail = null;
+        this.table = [];
+        var i = 0;
+        while (i < 16) {
+            this.table += null;
+            i += 1;
+        }
+    }
+
+    // 按插入序收集键。
+    // @return 新数组
+    // 复杂度：O(n)
+    func keys(): [K] {
+        var out: [K] = [];
+        var cur = this.head;
+        while (cur != null) {
+            out += cur!!.key;
+            cur = cur!!.after;
+        }
+        return out;
+    }
+
+    // 按插入序收集值。
+    // @return 新数组
+    // 复杂度：O(n)
+    func values(): [V] {
+        var out: [V] = [];
+        var cur = this.head;
+        while (cur != null) {
+            out += cur!!.value;
+            cur = cur!!.after;
+        }
+        return out;
+    }
+
+    // 按插入序的键数组（供调试/迭代）。
+    // @return 同 keys()
+    // 复杂度：O(n)
+    func toArray(): [K] { return this.keys(); }
+}

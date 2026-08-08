@@ -1,0 +1,127 @@
+// ============================================================
+//  多文件测试套件 · iohttp：FileStream + Http（v0.28）
+// ============================================================
+package main;
+
+import os;
+import net;
+import thread;
+import json;
+
+func suiteHttpHandler(req: net.HttpRequest): net.HttpResponse {
+    val resp = new net.HttpResponse();
+    resp.status = 200;
+    if (req.path == "/ping") {
+        resp.body = "pong";
+    } else if (req.path == "/echo") {
+        // 验证服务端按 Content-Length 读全 POST body
+        resp.body = req.body;
+    } else {
+        resp.body = "{\"msg\":\"hi\"}";
+    }
+    return resp;
+}
+
+func suiteHttpChunkedHandler(req: net.HttpRequest): net.HttpResponse {
+    val r = new net.HttpResponse();
+    r.status = 200;
+    r.body = "chk";
+    r.chunked = true;
+    return r;
+}
+
+func ioHttpTest() {
+    // FileStream：[Byte] 含 0x00 往返
+    val path = "output/_suite_fs.bin";
+    val w = os.FileStream.open(path, "wb");
+    var buf: [Byte] = [0, 1, 255, 128];
+    fmt.println(w!!.writeBytes(buf));               // 4
+    w!!.close();
+    val r = os.FileStream.open(path, "rb");
+    val got = r!!.readBytes(16);
+    fmt.println(got.length);                        // 4
+    fmt.println(got[0]);                            // 0
+    fmt.println(got[2]);                            // 255
+    r!!.close();
+
+    // Http 回环 GET
+    val sv = new net.HttpServer();
+    if (!sv.listen(7901)) {
+        fmt.println("listen-fail");
+        return;
+    }
+    val t = new thread.Thread();
+    t.start({ sv.serveOnce(suiteHttpHandler); });
+    thread.sleep(80);
+    val resp = net.Http.get("http://127.0.0.1:7901/ping");
+    fmt.println(resp.status);                       // 200
+    fmt.println(resp.body);                         // pong
+    t.join();
+
+    // Http 回环 POST（Content-Length body）
+    val t2 = new thread.Thread();
+    t2.start({ sv.serveOnce(suiteHttpHandler); });
+    thread.sleep(80);
+    val post = net.Http.post("http://127.0.0.1:7901/echo", "hello-body");
+    fmt.println(post.status);                       // 200
+    fmt.println(post.body);                         // hello-body
+    t2.join();
+
+    // Content-Length 按 UTF-8 字节（非码点）：多字节正文回环
+    val t3 = new thread.Thread();
+    t3.start({ sv.serveOnce(suiteHttpHandler); });
+    thread.sleep(80);
+    val postUtf = net.Http.post("http://127.0.0.1:7901/echo", "你好");
+    fmt.println(postUtf.status);                    // 200
+    fmt.println(postUtf.body);                      // 你好
+    t3.join();
+    sv.close();
+
+    // Content-Length 头名大小写不敏感
+    val cl = net.Http.contentLengthOf("x:1\r\ncontent-length: 42\r\n");
+    fmt.println(cl!!);                              // 42
+
+    // 头含多字节 UTF-8：分隔符按字节，body 不得错位
+    val rawMb = "HTTP/1.1 200 OK\r\nX-Evil: 你好\r\nContent-Length: 4\r\n\r\nABCD";
+    val respMb = net.Http.parseResponse(rawMb);
+    fmt.println(respMb.body);                       // ABCD
+
+    // CL 须行首锚定：头值里的 content-length: 不得劫持
+    val cl2 = net.Http.contentLengthOf("X-Note: content-length: 99\r\nContent-Length: 7\r\n");
+    fmt.println(cl2!!);                             // 7
+
+    // 单字段禁 CR/LF；contentType 注入被回退
+    fmt.println(net.Http.isSafeHeaderValue("text/plain"));              // true
+    fmt.println(!net.Http.isSafeHeaderValue("text/plain\r\nX:1"));      // true
+
+    // chunked 编解码往返
+    val enc = net.Http.encodeChunkedBody("hi");
+    fmt.println(net.Http.decodeChunkedBody(enc));                       // hi
+    val rawCh = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+        + "5\r\nhello\r\n0\r\n\r\n";
+    val respCh = net.Http.parseResponse(rawCh);
+    fmt.println(respCh.body);                                           // hello
+
+    // chunked 回环
+    val sv2 = new net.HttpServer();
+    if (!sv2.listen(7902)) {
+        fmt.println("listen-fail2");
+        return;
+    }
+    val t4 = new thread.Thread();
+    t4.start({ sv2.serveOnce(suiteHttpChunkedHandler); });
+    thread.sleep(80);
+    val getCh = net.Http.get("http://127.0.0.1:7902/");
+    fmt.println(getCh.status);                                          // 200
+    fmt.println(getCh.body);                                            // chk
+    t4.join();
+    sv2.close();
+
+    // maxBytes 可配（硬顶夹逼）
+    val oldLim = net.Http.maxBytes();
+    net.Http.setMaxBytes(2048);
+    fmt.println(net.Http.maxBytes());                                   // 2048
+    net.Http.setMaxBytes(999999999);
+    fmt.println(net.Http.maxBytes() == net.Http.ABSOLUTE_MAX_BYTES);    // true
+    net.Http.setMaxBytes(oldLim);
+}

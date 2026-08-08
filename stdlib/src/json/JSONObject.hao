@@ -1,0 +1,231 @@
+// ============================================================
+//  json —— Fastjson2 风格 JSON（v0.28）
+// ------------------------------------------------------------
+//  树模型：JSONObject / JSONArray；值用 Object 包装
+//  （Integer/Long/Double/Boolean/lang.String/JSONNull/嵌套）。
+//  解析纯 .hao 递归下降；非法 JSON 抛 JSONException。
+// ============================================================
+package json;
+
+import exception;
+import collections.*;
+import lang;
+import os;
+
+class JSONException : exception.Exception {
+    constructor(message: String) {
+        this.message = message;
+    }
+}
+
+// JSON null 单例（区别于「键不存在」的 Map null）
+class JSONNull {
+    static val INSTANCE: JSONNull = new JSONNull();
+    constructor() {}
+    override func toString(): String { return "null"; }
+}
+
+class JSONObject {
+    var map: Map<String, Object>;
+    var keys: [String];
+
+    constructor() {
+        this.map = new Map<String, Object>();
+        this.keys = [];
+    }
+
+    func size(): Int { return this.keys.length; }
+    func isEmpty(): Bool { return this.keys.length == 0; }
+
+    func containsKey(key: String): Bool {
+        return this.map.containsKey(key);
+    }
+
+    func put(key: String, value: Object): JSONObject {
+        if (!this.map.containsKey(key)) {
+            this.keys += key;
+        }
+        this.map.put(key, value);
+        return this;
+    }
+
+    func putStr(key: String, value: String): JSONObject {
+        return this.put(key, String.valueOf(value));
+    }
+
+    func putInt(key: String, value: Int): JSONObject {
+        return this.put(key, Integer.valueOf(value));
+    }
+
+    func putLong(key: String, value: Long): JSONObject {
+        return this.put(key, Long.valueOf(value));
+    }
+
+    func putDouble(key: String, value: Double): JSONObject {
+        return this.put(key, Double.valueOf(value));
+    }
+
+    func putBool(key: String, value: Bool): JSONObject {
+        return this.put(key, Boolean.valueOf(value));
+    }
+
+    func putNull(key: String): JSONObject {
+        return this.put(key, JSONNull.INSTANCE);
+    }
+
+    func get(key: String): Object? {
+        return this.map.get(key);
+    }
+
+    func remove(key: String): Bool {
+        if (!this.map.containsKey(key)) { return false; }
+        this.map.remove(key);
+        var nk: [String] = [];
+        var i = 0;
+        while (i < this.keys.length) {
+            if (this.keys[i] != key) { nk += this.keys[i]; }
+            i += 1;
+        }
+        this.keys = nk;
+        return true;
+    }
+
+    func keySet(): [String] {
+        return this.keys;
+    }
+
+    func getString(key: String): String {
+        val v = this.map.get(key);
+        if (v == null) { return ""; }
+        return JSON.valueToString(v!!);
+    }
+
+    func getStringOr(key: String, def: String): String {
+        if (!this.map.containsKey(key)) { return def; }
+        return this.getString(key);
+    }
+
+    func getInt(key: String): Int {
+        return JSON.valueToInt(this.map.get(key));
+    }
+
+    func getIntOr(key: String, def: Int): Int {
+        if (!this.map.containsKey(key)) { return def; }
+        return this.getInt(key);
+    }
+
+    func getLong(key: String): Long {
+        return JSON.valueToLong(this.map.get(key));
+    }
+
+    func getDouble(key: String): Double {
+        return JSON.valueToDouble(this.map.get(key));
+    }
+
+    func getBool(key: String): Bool {
+        return JSON.valueToBool(this.map.get(key));
+    }
+
+    func getJSONObject(key: String): JSONObject? {
+        val v = this.map.get(key);
+        if (v == null) { return null; }
+        if (v!! is JSONObject) { return v!! as JSONObject; }
+        return null;
+    }
+
+    func getJSONArray(key: String): JSONArray? {
+        val v = this.map.get(key);
+        if (v == null) { return null; }
+        if (v!! is JSONArray) { return v!! as JSONArray; }
+        return null;
+    }
+
+    func toJSONString(): String {
+        return JSON.toJSONString(this);
+    }
+
+    override func toString(): String {
+        return this.toJSONString();
+    }
+}
+
+class JSONArray {
+    var items: List<Object>;
+
+    constructor() {
+        this.items = new List<Object>();
+    }
+
+    func size(): Int { return this.items.size(); }
+    func isEmpty(): Bool { return this.items.isEmpty(); }
+
+    func add(value: Object): JSONArray {
+        this.items.add(value);
+        return this;
+    }
+
+    func addStr(value: String): JSONArray {
+        return this.add(String.valueOf(value));
+    }
+
+    func addInt(value: Int): JSONArray {
+        return this.add(Integer.valueOf(value));
+    }
+
+    func addNull(): JSONArray {
+        return this.add(JSONNull.INSTANCE);
+    }
+
+    func get(index: Int): Object {
+        return this.items.get(index);
+    }
+
+    func set(index: Int, value: Object): JSONArray {
+        this.items.set(index, value);
+        return this;
+    }
+
+    func getString(index: Int): String {
+        return JSON.valueToString(this.items.get(index));
+    }
+
+    func getInt(index: Int): Int {
+        return JSON.valueToInt(this.items.get(index));
+    }
+
+    func getLong(index: Int): Long {
+        return JSON.valueToLong(this.items.get(index));
+    }
+
+    func getDouble(index: Int): Double {
+        return JSON.valueToDouble(this.items.get(index));
+    }
+
+    func getBool(index: Int): Bool {
+        return JSON.valueToBool(this.items.get(index));
+    }
+
+    func getJSONObject(index: Int): JSONObject? {
+        val v = this.items.get(index);
+        if (v is JSONObject) { return v as JSONObject; }
+        return null;
+    }
+
+    func getJSONArray(index: Int): JSONArray? {
+        val v = this.items.get(index);
+        if (v is JSONArray) { return v as JSONArray; }
+        return null;
+    }
+
+    func toJSONString(): String {
+        return JSON.toJSONString(this);
+    }
+
+    override func toString(): String {
+        return this.toJSONString();
+    }
+
+    func toArray(): [Object] {
+        return this.items.toArray();
+    }
+}

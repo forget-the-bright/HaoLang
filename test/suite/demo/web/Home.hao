@@ -1,0 +1,15 @@
+// ============================================================
+//  嵌套包 Web demo：demo.web（表层控制器）
+// ============================================================
+package demo.web;
+
+import net.*;
+
+@Controller
+@RequestMapping(path = "/web")
+class HomeController {
+    @GetMapping(path = "/home")
+    func home(req: HttpRequest): HttpResponse {
+        return HttpResponse.of(200, "web-home");
+    }
+}

@@ -1,0 +1,146 @@
+// ============================================================
+//  v0.20.0 特性测试：Action/Func 委托别名 / @interface /
+//                反射 invoke / GC v2+v3（线程并发分配）
+// ------------------------------------------------------------
+//  本模块函数以 v20 前缀命名，类/别名加 V20 前缀避免与套件
+//  其它模块（package main 同包）命名冲突。
+// ============================================================
+package main;
+
+import reflect;
+import thread;
+import sync;
+import collections;
+import gc;
+import exception;
+
+// ---- 预置 Action/Func 泛型函数类型别名（v0.20.0，C# 风格）----
+func v20Dbl(x: Int): Int { return x * 2; }
+func v20Apply<T, R>(f: Func<T, R>, v: T): R { return f(v); }
+
+func v20ActionFuncTest() {
+    // Action<T...> = (T...)->Unit
+    val a0: Action = { fmt.println("v20 action0"); };
+    a0();
+    val a1: Action<Int> = { x -> fmt.println("v20 action1 " + x); };
+    a1(10);
+    val a2: Action<Int, Int> = { x, y -> fmt.println("v20 action2 " + (x + y)); };
+    a2(1, 2);
+
+    // Func<...T, R> = (...T)->R（最后一个类型实参是返回类型）
+    val f1: Func<Int, Int> = { x -> x * 3 };
+    fmt.println("v20 f1 " + f1(5));          // v20 f1 15
+    val f2: Func<Int, Int, Int> = { x, y -> x + y };
+    fmt.println("v20 f2 " + f2(3, 4));       // v20 f2 7
+    val f0: Func<String> = { "hello" };
+    fmt.println("v20 f0 " + f0());           // v20 f0 hello
+
+    // 泛型高阶函数里用 Func<T,R>（类型推断）
+    fmt.println("v20 apply " + v20Apply(v20Dbl, 21));  // v20 apply 42
+
+    // 顶层函数充当 Func 值
+    val g: Func<Int, Int> = v20Dbl;
+    fmt.println("v20 g " + g(7));            // v20 g 14
+
+    // Func 字段：默认值可直接写 lambda；obj.fn(args) 可直接调用
+    val holder = new V20FnHold();
+    fmt.println("v20 field " + holder.fn(9)); // v20 field 10
+    val holder2 = new V20FnHold();            // 多次 new 复用同一默认 lambda AST
+    fmt.println("v20 field2 " + holder2.fn(3)); // v20 field2 4
+    // 静态 Func 字段默认 lambda + 类名调用
+    fmt.println("v20 sfield " + V20FnHold.sfn(5)); // v20 sfield 15
+}
+
+class V20FnHold {
+    var fn: Func<Int, Int> = { x -> x + 1 };
+    static var sfn: Func<Int, Int> = { x -> x * 3 };
+}
+
+// ---- 反射通用 invoke（v0.20.0）：运行时间接调用方法 ----
+class V20Calc {
+    var base: Int = 10;
+    func add(a: Int, b: Int): Int { return a + b; }
+    func greet(prefix: String): String { return prefix + "," + this.base; }
+    func inc(): Int { this.base = this.base + 1; return this.base; }
+    func noRet() { fmt.println("v20 noRet"); }
+    func describe(): String { return "<base=" + this.base + ">"; }
+    static func twice(x: Int): Int { return x * 2; }
+}
+class V20Derived extends V20Calc {
+    var extra: Int = 7;
+    override func describe(): String { return "derived:" + this.extra; }
+}
+
+func v20InvokeTest() {
+    val c = new V20Calc();
+    val t = reflect.typeOf(c);
+    fmt.println("v20 inv add=" + t.invoke(c, "add", [3, 4]));       // v20 inv add=7
+    fmt.println("v20 inv greet=" + (t.invokeStr(c, "greet", [reflect.ptrOfStr("hi")]) ?? "null")); // v20 inv greet=hi,10
+    fmt.println("v20 inv inc=" + t.invoke(c, "inc", []));           // v20 inv inc=11
+    t.invokeUnit(c, "noRet", []);                                   // v20 noRet
+    fmt.println("v20 inv static=" + t.invoke(c, "twice", [21]));    // v20 inv static=42
+
+    // 多态：虚方法经虚表分派；继承方法走父类链
+    val d = new V20Derived();
+    val td = reflect.typeOf(d);
+    fmt.println("v20 inv poly=" + (td.invokeStr(d, "describe", []) ?? "null")); // v20 inv poly=derived:7
+    fmt.println("v20 inv inherit=" + (td.invokeStr(d, "greet", [reflect.ptrOfStr("yo")]) ?? "null")); // v20 inv inherit=yo,10
+    // 错 arity / 方法不存在 → throw（与合法返回 0 可区分）
+    try {
+        t.invoke(c, "add", [3]);
+        fmt.println("v20 inv bad=no");
+    } catch (e: exception.Exception) {
+        fmt.println("v20 inv bad=arity");                       // v20 inv bad=arity
+    }
+    try {
+        t.invoke(c, "noSuchMethod", []);
+        fmt.println("v20 inv miss=no");
+    } catch (e: exception.Exception) {
+        fmt.println("v20 inv miss=ok");                         // v20 inv miss=ok
+    }
+    // 0 参方法传多余槽亦拒绝
+    try {
+        t.invoke(c, "inc", [1]);
+        fmt.println("v20 inv zero=no");
+    } catch (e: exception.Exception) {
+        fmt.println("v20 inv zero=ok");                         // v20 inv zero=ok
+    }
+}
+
+// ---- GC v2：worker 并发分配（v0.20.0）----
+//  GC v1 保守扫描只扫当前线程栈，worker 内分配会被其他线程 GC 误回收。
+//  GC v2（stop-the-world + 线程注册表 + 扫所有线程栈）后，worker 可自由
+//  分配对象。每个线程各建一个大 List 并求和，结果写不同下标，验证无误回收。
+func v20Build(n: Int): Int {
+    val list = new collections.List<Int>();
+    var i = 0;
+    while (i < n) { list.add(i); i = i + 1; }
+    var sum = 0;
+    var k = 0;
+    while (k < list.size()) { sum = sum + list.get(k); k = k + 1; }
+    return sum;   // 0..n-1 求和 = n*(n-1)/2
+}
+
+func v20GCTest() {
+    // v0.37：worker 存活期间须能触发阈值自动 STW（非仅显式 collect）
+    val c0 = gc.GC.collectCount();
+    var results: [Int] = [0, 0, 0, 0];
+    val a = new thread.Thread(); a.start({ results[0] = v20Build(2000); });
+    val b = new thread.Thread(); b.start({ results[1] = v20Build(4000); });
+    val c = new thread.Thread(); c.start({ results[2] = v20Build(6000); });
+    val d = new thread.Thread(); d.start({ results[3] = v20Build(8000); });
+    // 主线程同步烧 nursery，与 worker 交错触发多线程自动 GC
+    var burn = 0;
+    while (burn < 6) {
+        val _ign = v20Build(2500);
+        if (_ign < 0) { burn = burn; }
+        burn = burn + 1;
+    }
+    a.join(); b.join(); c.join(); d.join();
+    val ok = results[0] == 2000 * 1999 / 2 &&
+             results[1] == 4000 * 3999 / 2 &&
+             results[2] == 6000 * 5999 / 2 &&
+             results[3] == 8000 * 7999 / 2;
+    fmt.println("v20 gc=" + ok);   // v20 gc=true
+    fmt.println("v20 autoGc=" + (gc.GC.collectCount() > c0)); // v20 autoGc=true
+}

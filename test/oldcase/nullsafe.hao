@@ -1,0 +1,71 @@
+package main;
+
+class Dog {
+    var name: String = "";
+    var best: Dog? = null;       // 可空字段
+    constructor(name: String) { this.name = name; }
+    func bark(): String { return this.name + ": 汪"; }
+    func friend(): Dog? { return this.best; }
+}
+
+func greet(name: String?): String {
+    // ?. 安全调用 + ?? 空合并
+    val shout = name?.length ?? 0;
+    return $"len={shout}";
+}
+
+func main() {
+    // 1. 可空变量赋 null
+    var s: String? = null;
+    fmt.println(s == null);      // true
+
+    s = "hello";
+    fmt.println(s == null);      // false
+    fmt.println(s?.length ?? -1);  // 5
+
+    s = null;
+    fmt.println(s?.length ?? -1);  // -1（不调用，直接默认）
+
+    // 2. !! 非空断言
+    s = "world";
+    val forced = s!!;
+    fmt.println(forced.length);  // 5
+
+    // 3. 空合并默认值
+    var n: String? = null;
+    val resolved = n ?? "默认";
+    fmt.println(resolved);       // 默认
+
+    // 4. 可空对象 + 安全方法链
+    val a = new Dog("阿黄");
+    val b = new Dog("小黑");
+    a.best = b;
+
+    var d: Dog? = a;
+    fmt.println(d?.bark() ?? "null");     // 阿黄: 汪
+    fmt.println(d?.best?.name ?? "null"); // 小黑
+    fmt.println(d?.friend()?.name ?? "无"); // 小黑
+
+    d = null;
+    fmt.println(d?.bark() ?? "空狗");      // 空狗
+    fmt.println(d?.best?.name ?? "空狗");  // 空狗
+
+    // 5. 直接访问可空接收者应报错（用注释保留语义，不执行）：
+    //    d.name 会编译错误，必须 d!!.name 或 d?.name
+    val a2 = new Dog("旺财");
+    var maybe: Dog? = a2;
+    fmt.println(maybe!!.name);   // 旺财
+
+    // 6. 函数参数可空
+    fmt.println(greet("你好"));  // len=2
+    fmt.println(greet(null));    // len=0
+
+    // 7. 可空值类型装箱（Int?）
+    var x: Int? = null;
+    fmt.println(x == null);      // true
+    x = 42;
+    fmt.println(x!!);            // 42
+    fmt.println(x ?? 0);         // 42
+    var y: Int? = null;
+    fmt.println(y ?? 99);        // 99
+}

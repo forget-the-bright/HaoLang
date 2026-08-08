@@ -1,0 +1,14 @@
+{
+  "project": {
+    "name": "depsemver",
+    "module": "example/depsemver",
+    "version": "0.1.0",
+    "main": "main.hao"
+  },
+  "dependencies": {
+    "example.com/demo/utilpkg": "^1.0.0"
+  },
+  "registry": {
+    "includeDefault": false
+  }
+}

@@ -1,0 +1,92 @@
+// ============================================================
+//  lang.Boolean —— 基础类型 Bool 的包装类（对标 Java java.lang.Boolean）
+// ------------------------------------------------------------
+//  文件名 Bool.hao：描述「基础类型 Bool」的装箱/拆箱与 API；
+//  类名用 Boolean，避免与内建类型名 Bool 冲突。
+//
+//  ═══════════════════════════════════════════════════════════
+//  【三种形态对照】
+//  ═══════════════════════════════════════════════════════════
+//
+//  1) 基础类型 Bool（内建，i8 的 0/1；对齐 Go/C#/Rust/Java boolean）
+//     - 值类型，不可为 null；字面量 true / false
+//     - 逻辑运算 && || ! ；作 Map·Set key 走 hash.hashOf(Bool)
+//     - [Bool] 数组 esz=1（紧凑 1 字节/元素）
+//
+//  2) 可空装箱 Bool?（编译器自动，zext→hao_box_i32 / unbox→trunc）
+//     - 条件：Bool 赋给 Bool?、或 !! / ?? 拆可空值类型
+//     - null → 指针 0；非空 → 堆上单元存 0/1
+//
+//  3) 对象包装 Boolean（本类，显式）
+//     - 装箱：Boolean.valueOf(b) / new Boolean(b)
+//     - 拆箱：box.booleanValue() / box.value
+//     - 当前无 Bool ↔ Boolean 隐式自动装箱拆箱
+//     - 无 SIZE/BYTES（对齐 Java；数值包装才有）
+//
+//  ⚠ 与 lang.Bit 无关：Bit 是整数位模式工具，Boolean 是逻辑值包装。
+//
+//  ═══════════════════════════════════════════════════════════
+//  【API 一览】
+//  ═══════════════════════════════════════════════════════════
+//    装箱      Boolean.valueOf(b) | new Boolean(b)
+//    拆箱      booleanValue() | .value
+//    解析      Boolean.parse(s): Bool?   （"true"/"false"，大小写不敏感）
+//    比较      Boolean.compare(a,b) | box.compareTo(other)
+//    转换      Boolean.toStr(b) | box.toString()
+//    Object    hashCode / equals / toString（按逻辑值）
+//    常量      Boolean.TRUE / Boolean.FALSE（包装实例）
+// ============================================================
+package lang;
+
+class Boolean {
+    var value: Bool;
+
+    static val TRUE: Boolean = Boolean.valueOf(true);
+    static val FALSE: Boolean = Boolean.valueOf(false);
+
+    constructor(v: Bool) {
+        this.value = v;
+    }
+
+    static func valueOf(v: Bool): Boolean {
+        return new Boolean(v);
+    }
+
+    func booleanValue(): Bool {
+        return this.value;
+    }
+
+    static func parse(s: String): Bool? {
+        return hao_parse_bool(s);
+    }
+
+    static func toStr(v: Bool): String {
+        return hao_bool_to_str(v);
+    }
+
+    // false < true（对齐 Java Boolean.compare）
+    static func compare(a: Bool, b: Bool): Int {
+        if (a == b) { return 0; }
+        if (!a) { return -1; }
+        return 1;
+    }
+
+    func compareTo(other: Boolean): Int {
+        return Boolean.compare(this.value, other.value);
+    }
+
+    override func hashCode(): Int {
+        if (this.value) { return 1231; }
+        return 1237;
+    }
+
+    override func equals(o: Object): Bool {
+        if (!(o is Boolean)) { return false; }
+        val other = o as Boolean;
+        return this.value == other.value;
+    }
+
+    override func toString(): String {
+        return hao_bool_to_str(this.value);
+    }
+}

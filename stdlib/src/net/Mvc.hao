@@ -1,0 +1,429 @@
+// ============================================================
+//  net.Mvc —— Spring Boot MVC 风格 HTTP 应用（v0.29）
+// ------------------------------------------------------------
+//  - 注解：@Controller / @RequestMapping / @GetMapping / @PostMapping …
+//  - register(controller) 或 scan(packagePath) 绑路由（v0.30 支持嵌套包）
+//  - 自定义 get/post/route 注册；过滤器链 + 拦截器
+//  - HttpApp.serve / serveOnce 分派
+// ============================================================
+package net;
+
+import collections;
+import reflect;
+import text;
+
+// ---- 路由注解（对标 Spring MVC；参数运行时可读）----
+@interface Controller {
+    val value: String = "";
+}
+
+@interface RequestMapping {
+    val path: String = "";
+    val method: String = "";
+}
+
+@interface GetMapping {
+    val path: String = "";
+}
+
+@interface PostMapping {
+    val path: String = "";
+}
+
+@interface PutMapping {
+    val path: String = "";
+}
+
+@interface DeleteMapping {
+    val path: String = "";
+}
+
+func mvcNoFn(req: HttpRequest): HttpResponse {
+    return HttpResponse.of(500, "no fn");
+}
+
+// 过滤器链末端：调用 HttpApp 路由分派（避免 Func 字段/lambda 推断坑）
+public class RouteTerminal {
+    var app: HttpApp?;
+    constructor() { this.app = null; }
+    func handle(req: HttpRequest): HttpResponse {
+        if (this.app == null) { return HttpResponse.of(404, "no handler"); }
+        return this.app!!.invokeRoute(req);
+    }
+}
+
+// ---- 过滤器 / 拦截器 ----
+public class FilterChain {
+    var filters: [HttpFilter];
+    var index: Int;
+    var terminal: RouteTerminal;
+
+    constructor() {
+        this.filters = [];
+        this.index = 0;
+        this.terminal = new RouteTerminal();
+    }
+
+    func proceed(req: HttpRequest): HttpResponse {
+        if (this.index >= this.filters.length) {
+            return this.terminal.handle(req);
+        }
+        val f = this.filters[this.index];
+        this.index = this.index + 1;
+        return f.doFilter(req, this);
+    }
+}
+
+public class HttpFilter {
+    func doFilter(req: HttpRequest, chain: FilterChain): HttpResponse {
+        return chain.proceed(req);
+    }
+}
+
+public class HandlerInterceptor {
+    // 返回 false 则中止（应已写好 response 语义由调用方处理：返回 403）
+    func preHandle(req: HttpRequest): Bool {
+        return true;
+    }
+    func postHandle(req: HttpRequest, resp: HttpResponse) {}
+}
+
+class RouteBinding {
+    var ctrl: Object?;
+    var methodName: String;
+    var hasFn: Bool;
+    var fn: (HttpRequest) -> HttpResponse;
+
+    constructor() {
+        this.ctrl = null;
+        this.methodName = "";
+        this.hasFn = false;
+        this.fn = mvcNoFn;
+    }
+}
+
+public class HttpApp {
+    var server: ServerSocket;
+    var port: Int;
+    var routes: collections.Map<String, RouteBinding>;
+    var filters: [HttpFilter];
+    var interceptors: [HandlerInterceptor];
+    var running: Bool;
+
+    constructor() {
+        this.server = new ServerSocket();
+        this.port = 0;
+        this.routes = new collections.Map<String, RouteBinding>();
+        this.filters = [];
+        this.interceptors = [];
+        this.running = false;
+    }
+
+    func listen(port: Int): Bool {
+        this.port = port;
+        return this.server.listen(port);
+    }
+
+    func close() {
+        this.running = false;
+        this.server.close();
+    }
+
+    func addFilter(f: HttpFilter) {
+        this.filters += f;
+    }
+
+    func addInterceptor(i: HandlerInterceptor) {
+        this.interceptors += i;
+    }
+
+    // ---- 显式路径注册 ----
+    func get(path: String, handler: (HttpRequest) -> HttpResponse) {
+        this.route("GET", path, handler);
+    }
+
+    func post(path: String, handler: (HttpRequest) -> HttpResponse) {
+        this.route("POST", path, handler);
+    }
+
+    func put(path: String, handler: (HttpRequest) -> HttpResponse) {
+        this.route("PUT", path, handler);
+    }
+
+    func delete(path: String, handler: (HttpRequest) -> HttpResponse) {
+        this.route("DELETE", path, handler);
+    }
+
+    func route(method: String, path: String, handler: (HttpRequest) -> HttpResponse) {
+        val b = new RouteBinding();
+        b.hasFn = true;
+        b.fn = handler;
+        this.routes.put(HttpApp.routeKey(method, path), b);
+    }
+
+    // ---- 注解控制层：扫描实例方法上的映射注解 ----
+    func register(ctrl: Object) {
+        val t = reflect.typeOf(ctrl);
+        var base = "";
+        var ai = 0;
+        while (ai < t.getAnnotationCount()) {
+            val an = t.getAnnotationName(ai);
+            val av = t.getAnnotationValue(ai);
+            if (HttpApp.annoEnds(an, "RequestMapping") || HttpApp.annoEnds(an, "Controller")) {
+                val p = HttpApp.annoPath(av);
+                if (p.length > 0) { base = p; }
+            }
+            ai += 1;
+        }
+        var mi = 0;
+        while (mi < t.getMethodCount()) {
+            val mname = t.getMethodName(mi);
+            var httpMethod = "";
+            var path = "";
+            var aj = 0;
+            val ac = t.getMethodAnnotationCount(mi);
+            while (aj < ac) {
+                val an = t.getMethodAnnotationName(mi, aj);
+                val av = t.getMethodAnnotationValue(mi, aj);
+                if (HttpApp.annoEnds(an, "GetMapping")) {
+                    httpMethod = "GET";
+                    path = HttpApp.annoPath(av);
+                } else if (HttpApp.annoEnds(an, "PostMapping")) {
+                    httpMethod = "POST";
+                    path = HttpApp.annoPath(av);
+                } else if (HttpApp.annoEnds(an, "PutMapping")) {
+                    httpMethod = "PUT";
+                    path = HttpApp.annoPath(av);
+                } else if (HttpApp.annoEnds(an, "DeleteMapping")) {
+                    httpMethod = "DELETE";
+                    path = HttpApp.annoPath(av);
+                } else if (HttpApp.annoEnds(an, "RequestMapping")) {
+                    httpMethod = HttpApp.annoMethod(av);
+                    if (httpMethod.length == 0) { httpMethod = "GET"; }
+                    path = HttpApp.annoPath(av);
+                }
+                aj += 1;
+            }
+            if (httpMethod.length > 0) {
+                val full = HttpApp.joinPath(base, path);
+                val b = new RouteBinding();
+                b.ctrl = ctrl;
+                b.methodName = mname;
+                this.routes.put(HttpApp.routeKey(httpMethod, full), b);
+            }
+            mi += 1;
+        }
+    }
+
+    // ---- 包扫描（v0.30～0.32）：扫描已链接进进程的类元数据 ----
+    // path：demo/web、demo.web 均可；默认含嵌套子包（demo/web/api）
+    // 注意：
+    //   1) 控制器所在包必须被 import，否则不会进二进制、扫不到。
+    //   2) 仅自动 new 无参构造（canNewInstance）；多参请 registerNewArgs / register。
+    //   3) 可扩展条件用 scanWhere / reflect.findTypes（谓词自定）。
+    func scan(packagePath: String): Int {
+        return this.scanWhere(packagePath, { t ->
+            t.hasAnnotationEnding("Controller")
+        });
+    }
+
+    // v0.32：自定义谓词包扫描（嵌套子包）。谓词为 true 且 canNewInstance 才 register。
+    // 例：scanWhere("corp/web", { t -> t.hasAnnotationEnding("Controller") })
+    //     scanWhere("corp/service", { t -> t.implementsEnding("Plugin") })
+    func scanWhere(packagePath: String, pred: Func<reflect.Type, Bool>): Int {
+        var n = 0;
+        val types = reflect.findTypesNested(packagePath, pred);
+        var i = 0;
+        while (i < types.length) {
+            val t = types[i];
+            if (t.canNewInstance()) {
+                val o = t.newInstance();
+                if (o != null) {
+                    this.register(o!!);
+                    n += 1;
+                }
+            }
+            i += 1;
+        }
+        return n;
+    }
+
+    // 精确包（不含嵌套子包）+ 谓词
+    func scanWhereExact(packagePath: String, pred: Func<reflect.Type, Bool>): Int {
+        var n = 0;
+        val types = reflect.findTypesExact(packagePath, pred);
+        var i = 0;
+        while (i < types.length) {
+            val t = types[i];
+            if (t.canNewInstance()) {
+                val o = t.newInstance();
+                if (o != null) {
+                    this.register(o!!);
+                    n += 1;
+                }
+            }
+            i += 1;
+        }
+        return n;
+    }
+
+    // 多路径扫描（可重叠；同一控制器可能被重复 register）
+    func scanPackages(paths: [String]): Int {
+        var n = 0;
+        var i = 0;
+        while (i < paths.length) {
+            n += this.scan(paths[i]);
+            i += 1;
+        }
+        return n;
+    }
+
+    // v0.31：按类型表无参实例化并 register（失败返回 false）
+    func registerNew(t: reflect.Type): Bool {
+        if (!t.canNewInstance()) { return false; }
+        val o = t.newInstance();
+        if (o == null) { return false; }
+        this.register(o!!);
+        return true;
+    }
+
+    // v0.31：多参构造槽 + register（依赖注入：调用方准备 [Long] 槽）
+    func registerNewArgs(t: reflect.Type, args: [Long]): Bool {
+        if (!t.hasFactory()) { return false; }
+        if (t.ctorParamCount() != args.length) { return false; }
+        val o = t.newInstanceArgs(args);
+        if (o == null) { return false; }
+        this.register(o!!);
+        return true;
+    }
+
+    func dispatch(req: HttpRequest): HttpResponse {
+        // 拦截器 pre
+        var ii = 0;
+        while (ii < this.interceptors.length) {
+            if (!this.interceptors[ii].preHandle(req)) {
+                return HttpResponse.of(403, "forbidden");
+            }
+            ii += 1;
+        }
+        val chain = new FilterChain();
+        chain.filters = this.filters;
+        chain.index = 0;
+        val term = chain.terminal;
+        term.app = this;
+        val resp = chain.proceed(req);
+        // 拦截器 post
+        var ji = 0;
+        while (ji < this.interceptors.length) {
+            this.interceptors[ji].postHandle(req, resp);
+            ji += 1;
+        }
+        return resp;
+    }
+
+    func invokeRoute(req: HttpRequest): HttpResponse {
+        val key = HttpApp.routeKey(req.method, req.path);
+        val b = this.routes.get(key);
+        if (b == null) {
+            return HttpResponse.of(404, "not found: " + key);
+        }
+        val bind = b!!;
+        if (bind.hasFn) {
+            val fn = bind.fn;
+            return fn(req);
+        }
+        if (bind.ctrl == null) {
+            return HttpResponse.of(500, "empty route");
+        }
+        val ctrl = bind.ctrl!!;
+        val t = reflect.typeOf(ctrl);
+        var args: [Long] = [];
+        args += reflect.ptrOf(req);
+        val raw = t.invoke(ctrl, bind.methodName, args);
+        val obj = reflect.objOf(raw);
+        return obj as HttpResponse;
+    }
+
+    func serveOnce(): Bool {
+        val client = new Socket();
+        if (!this.server.accept(client)) { return false; }
+        client.setTimeout(5000);
+        val raw = Http.readMessage(client, false);
+        val req = HttpServer.parseRequest(raw);
+        val resp = this.dispatch(req);
+        HttpServer.writeResponse(client, resp);
+        client.close();
+        return true;
+    }
+
+    // 循环 accept；调用 close() 或外部停机后结束
+    func serve() {
+        this.running = true;
+        while (this.running) {
+            if (!this.serveOnce()) {
+                // accept 失败：短暂继续（对端关闭 listen 时跳出）
+                if (!this.running) { break; }
+            }
+        }
+    }
+
+    static func routeKey(method: String, path: String): String {
+        return method + " " + path;
+    }
+
+    static func joinPath(base: String, path: String): String {
+        if (base.length == 0) {
+            if (path.length == 0) { return "/"; }
+            if (String.valueOf(path).startsWith("/")) { return path; }
+            return "/" + path;
+        }
+        var b = base;
+        if (!String.valueOf(b).startsWith("/")) { b = "/" + b; }
+        if (String.valueOf(b).endsWith("/")) {
+            b = String.valueOf(b).substring(0, b.length - 1);
+        }
+        if (path.length == 0) { return b; }
+        if (String.valueOf(path).startsWith("/")) { return b + path; }
+        return b + "/" + path;
+    }
+
+    static func annoEnds(name: String, shortName: String): Bool {
+        if (name == shortName) { return true; }
+        // 限定名可能是 net.GetMapping（点）或 demo$web$GetMapping（包前缀 $）
+        if (String.valueOf(name).endsWith("." + shortName)) { return true; }
+        return String.valueOf(name).endsWith("$" + shortName);
+    }
+
+    static func annoPath(v: String): String {
+        if (v.length == 0) { return ""; }
+        val pfx = "path=";
+        val i = String.valueOf(v).indexOf(pfx);
+        if (i >= 0) {
+            var s = i + pfx.length;
+            var e = s;
+            while (e < v.length && String.valueOf(v).charAt(e) != 59) { e += 1; }
+            return String.valueOf(v).substring(s, e);
+        }
+        val vpfx = "value=";
+        val vi = String.valueOf(v).indexOf(vpfx);
+        if (vi >= 0) {
+            var s2 = vi + vpfx.length;
+            var e2 = s2;
+            while (e2 < v.length && String.valueOf(v).charAt(e2) != 59) { e2 += 1; }
+            return String.valueOf(v).substring(s2, e2);
+        }
+        val sc = String.valueOf(v).indexOf(";");
+        if (sc >= 0) { return String.valueOf(v).substring(0, sc); }
+        return v;
+    }
+
+    static func annoMethod(v: String): String {
+        val pfx = "method=";
+        val i = String.valueOf(v).indexOf(pfx);
+        if (i < 0) { return ""; }
+        var s = i + pfx.length;
+        var e = s;
+        while (e < v.length && String.valueOf(v).charAt(e) != 59) { e += 1; }
+        return String.valueOf(v).substring(s, e);
+    }
+}

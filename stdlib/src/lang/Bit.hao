@@ -1,0 +1,275 @@
+// ============================================================
+//  lang.Bit —— 整数位模式工具（≠ Boolean / ≠ 「1 比特类型」）
+// ------------------------------------------------------------
+//  职责：对 Int(32)/Long(64) 做位检测、置位、旋转、统计等。
+//  不是逻辑布尔包装（那是 lang.Boolean）；实例包装 Long 位模式。
+//  SIZE=64 / INT_SIZE=32 / BYTES=8；getBit 返回 Bool（对齐 BitSet.get）。
+// ============================================================
+package lang;
+
+import hash;
+
+class Bit {
+    static val SIZE: Int = 64;
+    static val INT_SIZE: Int = 32;
+    static val BYTES: Int = 8;
+
+    var value: Long;
+
+    constructor(v: Long) {
+        this.value = v;
+    }
+
+    static func valueOf(v: Long): Bit {
+        return new Bit(v);
+    }
+
+    func longValue(): Long {
+        return this.value;
+    }
+
+    // ---- Int（32 位）----
+    static func getBit(x: Int, i: Int): Bool {
+        if (i < 0 || i > 31) { return false; }
+        return ((x >> i) & 1) != 0;
+    }
+
+    static func setBit(x: Int, i: Int): Int {
+        if (i < 0 || i > 31) { return x; }
+        return x | (1 << i);
+    }
+
+    static func clearBit(x: Int, i: Int): Int {
+        if (i < 0 || i > 31) { return x; }
+        return x & ~(1 << i);
+    }
+
+    static func toggleBit(x: Int, i: Int): Int {
+        if (i < 0 || i > 31) { return x; }
+        return x ^ (1 << i);
+    }
+
+    static func bitCount(x: Int): Int {
+        var v = x;
+        var c: Int = 0;
+        var i = 0;
+        while (i < 32) {
+            if ((v & 1) != 0) { c += 1; }
+            v = v >> 1;
+            i += 1;
+        }
+        return c;
+    }
+
+    static func trailingZeros(x: Int): Int {
+        if (x == 0) { return 32; }
+        var v = x;
+        var c: Int = 0;
+        while ((v & 1) == 0) {
+            v = v >> 1;
+            c += 1;
+        }
+        return c;
+    }
+
+    static func leadingZeros(x: Int): Int {
+        if (x == 0) { return 32; }
+        var c: Int = 0;
+        var i = 31;
+        while (i >= 0) {
+            if (((x >> i) & 1) != 0) { return c; }
+            c += 1;
+            i -= 1;
+        }
+        return c;
+    }
+
+    static func rotateLeft(x: Int, n: Int): Int {
+        var k = n % 32;
+        if (k < 0) { k = k + 32; }
+        if (k == 0) { return x; }
+        val m = (1 << k) - 1;
+        return (x << k) | ((x >> (32 - k)) & m);
+    }
+
+    static func rotateRight(x: Int, n: Int): Int {
+        var k = n % 32;
+        if (k < 0) { k = k + 32; }
+        if (k == 0) { return x; }
+        val m = (1 << (32 - k)) - 1;
+        return ((x >> k) & m) | (x << (32 - k));
+    }
+
+    static func not(x: Int): Int {
+        return ~x;
+    }
+
+    static func highestOneBit(x: Int): Int {
+        if (x == 0) { return 0; }
+        var i = 31;
+        while (i >= 0) {
+            if (((x >> i) & 1) != 0) { return 1 << i; }
+            i -= 1;
+        }
+        return 0;
+    }
+
+    static func lowestOneBit(x: Int): Int {
+        return x & (0 - x);
+    }
+
+    static func reverse(x: Int): Int {
+        var v = x;
+        var r: Int = 0;
+        var i = 0;
+        while (i < 32) {
+            r = (r << 1) | (v & 1);
+            v = v >> 1;
+            i += 1;
+        }
+        return r;
+    }
+
+    // ---- Long（64 位）----
+    static func getBit(x: Long, i: Int): Bool {
+        if (i < 0 || i > 63) { return false; }
+        val one: Long = 1;
+        return ((x >> i) & one) != 0;
+    }
+
+    static func setBit(x: Long, i: Int): Long {
+        if (i < 0 || i > 63) { return x; }
+        val one: Long = 1;
+        return x | (one << i);
+    }
+
+    static func clearBit(x: Long, i: Int): Long {
+        if (i < 0 || i > 63) { return x; }
+        val one: Long = 1;
+        val all: Long = 0 - 1;
+        return x & (all ^ (one << i));
+    }
+
+    static func toggleBit(x: Long, i: Int): Long {
+        if (i < 0 || i > 63) { return x; }
+        val one: Long = 1;
+        return x ^ (one << i);
+    }
+
+    // mask 仅 Long：宽度参数同为 Int，无法与 Int 返回重载并存
+    static func mask(n: Int): Long {
+        if (n <= 0) { return 0; }
+        if (n >= 64) {
+            val all: Long = 0 - 1;
+            return all;
+        }
+        val one: Long = 1;
+        return (one << n) - 1;
+    }
+
+    static func bitCount(x: Long): Int {
+        var v = x;
+        var c: Int = 0;
+        var i = 0;
+        while (i < 64) {
+            if ((v & 1) != 0) { c += 1; }
+            v = v >> 1;
+            i += 1;
+        }
+        return c;
+    }
+
+    static func trailingZeros(x: Long): Int {
+        if (x == 0) { return 64; }
+        var v = x;
+        var c: Int = 0;
+        while ((v & 1) == 0) {
+            v = v >> 1;
+            c += 1;
+        }
+        return c;
+    }
+
+    static func leadingZeros(x: Long): Int {
+        if (x == 0) { return 64; }
+        var c: Int = 0;
+        var i = 63;
+        while (i >= 0) {
+            if (((x >> i) & 1) != 0) { return c; }
+            c += 1;
+            i -= 1;
+        }
+        return c;
+    }
+
+    static func rotateLeft(x: Long, n: Int): Long {
+        var k = n % 64;
+        if (k < 0) { k = k + 64; }
+        if (k == 0) { return x; }
+        val one: Long = 1;
+        val m = (one << k) - 1;
+        return (x << k) | ((x >> (64 - k)) & m);
+    }
+
+    static func rotateRight(x: Long, n: Int): Long {
+        var k = n % 64;
+        if (k < 0) { k = k + 64; }
+        if (k == 0) { return x; }
+        val one: Long = 1;
+        val m = (one << (64 - k)) - 1;
+        return ((x >> k) & m) | (x << (64 - k));
+    }
+
+    static func not(x: Long): Long {
+        return ~x;
+    }
+
+    static func highestOneBit(x: Long): Long {
+        if (x == 0) { return 0; }
+        var i = 63;
+        val one: Long = 1;
+        while (i >= 0) {
+            if (((x >> i) & one) != 0) { return one << i; }
+            i -= 1;
+        }
+        return 0;
+    }
+
+    static func lowestOneBit(x: Long): Long {
+        return x & (0 - x);
+    }
+
+    static func reverse(x: Long): Long {
+        var v = x;
+        var r: Long = 0;
+        var i = 0;
+        while (i < 64) {
+            r = (r << 1) | (v & 1);
+            v = v >> 1;
+            i += 1;
+        }
+        return r;
+    }
+
+    func get(i: Int): Bool {
+        return Bit.getBit(this.value, i);
+    }
+
+    func count(): Int {
+        return Bit.bitCount(this.value);
+    }
+
+    override func hashCode(): Int {
+        return hash.hashOf(this.value);
+    }
+
+    override func equals(o: Object): Bool {
+        if (!(o is Bit)) { return false; }
+        val other = o as Bit;
+        return this.value == other.value;
+    }
+
+    override func toString(): String {
+        return hao_long_to_str(this.value);
+    }
+}

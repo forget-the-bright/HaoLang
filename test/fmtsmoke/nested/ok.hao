@@ -1,0 +1,4 @@
+package main;
+func nestedOk() {
+    fmt.println(1);
+}

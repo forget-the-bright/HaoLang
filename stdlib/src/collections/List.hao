@@ -1,0 +1,125 @@
+// HaoLang 标准库 —— collections 包
+// ----------------------------------------------
+//  List<T>：基于动态数组的泛型列表（对标 Java ArrayList 语义）。
+//  底层复用语言内建 [T]（自动 2 倍扩容、GC 回收）。
+//  线程安全：否。随机访问 O(1)，中部删除 O(n)。
+//  不是：LinkedList（链表）；也不是不可变列表。
+package collections;
+
+class List<T> : Iterable<T> {
+    var items: [T];
+
+    // 构造空列表。
+    // 复杂度：O(1)
+    constructor() {
+        this.items = [];
+    }
+
+    // Iterable：返回迭代器（toArray 不拷贝，O(1)）。
+    // @return ArrayIterator，与内部数组共享存储——迭代时勿结构性修改
+    // 复杂度：O(1)
+    func iterator(): Iterator<T> {
+        return new ArrayIterator<T>(this.toArray());
+    }
+
+    // @return 元素个数
+    // 复杂度：O(1)
+    func size(): Int {
+        return this.items.length;
+    }
+
+    // 尾部追加。
+    // @param item 元素
+    // 复杂度：摊销 O(1)
+    func add(item: T) {
+        this.items += item;
+    }
+
+    // 按下标取值。
+    // @param index 0-based
+    // @return 元素
+    // 异常：越界由运行时数组下标检查触发
+    // 复杂度：O(1)
+    func get(index: Int): T {
+        return this.items[index];
+    }
+
+    // 按下标改值。
+    // @param index 0-based
+    // @param item  新值
+    // 复杂度：O(1)
+    func set(index: Int, item: T) {
+        this.items[index] = item;
+    }
+
+    // 删除指定位置元素，后续元素前移。
+    // @param index 0-based
+    // @return 被删除的元素
+    // 复杂度：O(n)
+    func removeAt(index: Int): T {
+        val removed = this.items[index];
+        var i = index;
+        while (i < this.items.length - 1) {
+            this.items[i] = this.items[i + 1];
+            i += 1;
+        }
+        this.items.pop();
+        return removed;
+    }
+
+    // @return 是否为空
+    // 复杂度：O(1)
+    func isEmpty(): Bool {
+        return this.items.length == 0;
+    }
+
+    // 返回底层数组引用（不拷贝）。
+    // @return 内部 [T]；修改会影响 List
+    // 复杂度：O(1)
+    func toArray(): [T] {
+        return this.items;
+    }
+
+    // ---------- 函数式 API（v0.9.0 起为泛型方法）----------
+
+    // 把每个元素经 f 转换，返回新 List<R>。
+    // @param f 映射函数；R 由 lambda 返回类型推断
+    // @return 新列表，不修改 this
+    // 复杂度：O(n)
+    func map<R>(f: (T) -> R): List<R> {
+        val result = new List<R>();
+        var i = 0;
+        while (i < this.items.length) {
+            result.add(f(this.items[i]));
+            i += 1;
+        }
+        return result;
+    }
+
+    // 保留谓词为 true 的元素。
+    // @param f 谓词
+    // @return 新列表
+    // 复杂度：O(n)
+    func filter(f: (T) -> Bool): List<T> {
+        val result = new List<T>();
+        var i = 0;
+        while (i < this.items.length) {
+            if (f(this.items[i])) {
+                result.add(this.items[i]);
+            }
+            i += 1;
+        }
+        return result;
+    }
+
+    // 对每个元素执行副作用。
+    // @param f 回调
+    // 复杂度：O(n)
+    func forEach(f: (T) -> Unit) {
+        var i = 0;
+        while (i < this.items.length) {
+            f(this.items[i]);
+            i += 1;
+        }
+    }
+}

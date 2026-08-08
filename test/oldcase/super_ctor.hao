@@ -1,0 +1,52 @@
+package main;
+
+// super 构造链：子类构造器显式 super(实参) 调父类构造（v0.17.0）
+// new 时先应用整条继承链的字段默认值，再执行构造器；super(...) 把父类
+// 字段按实参初始化（覆盖默认值）。
+
+class Animal {
+    var name: String = "(未命名)";
+    var age: Int = 0;
+    constructor(name: String, age: Int) {
+        this.name = name;
+        this.age = age;
+    }
+    func describe(): String {
+        return $"{(this.name)}({this.age}岁)";
+    }
+}
+
+class Dog extends Animal {
+    var breed: String = "土狗";
+    // 显式 super 构造链
+    constructor(name: String, age: Int) {
+        super(name, age);
+    }
+}
+
+// 多级继承：Puppy -> Dog -> Animal
+class Puppy extends Dog {
+    constructor(name: String) {
+        super(name, 0);
+    }
+}
+
+func main() {
+    // 单级 super
+    val d = new Dog("旺财", 3);
+    fmt.println(d.name);         // 旺财
+    fmt.println(d.age);          // 3
+    fmt.println(d.breed);        // 土狗
+    fmt.println(d.describe());   // 旺财(3岁)
+    // 多级 super：Puppy -> Dog -> Animal
+    val p = new Puppy("豆豆");
+    fmt.println(p.name);         // 豆豆
+    fmt.println(p.age);          // 0
+    fmt.println(p.breed);        // 土狗
+    fmt.println(p.describe());   // 豆豆(0岁)
+
+    // super 实参来自构造器参数
+    val q = new Puppy("铁蛋");
+    fmt.println(q.name);         // 铁蛋
+    fmt.println(q.age);          // 0
+}

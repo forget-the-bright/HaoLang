@@ -1,0 +1,60 @@
+// ============================================================
+//  lang.Character —— 基础类型 Char（Unicode 码点，i32）的包装类
+// ------------------------------------------------------------
+//  类名 Character，避免与内建 Char 冲突（对齐 Boolean/Integer）。
+//  三种形态：内建 Char / Char?（hao_box_i32）/ 对象 Character
+// ============================================================
+package lang;
+
+class Character {
+    var value: Char;
+
+    static val SIZE: Int = 32;
+    static val BYTES: Int = 4;
+    static val MIN_VALUE: Char = 0;
+    static val MAX_VALUE: Char = 0x10FFFF;
+
+    constructor(v: Char) {
+        this.value = v;
+    }
+
+    static func valueOf(v: Char): Character {
+        return new Character(v);
+    }
+
+    func charValue(): Char {
+        return this.value;
+    }
+
+    func intValue(): Int {
+        return this.value;
+    }
+
+    static func toStr(v: Char): String {
+        return hao_char_to_str(v);
+    }
+
+    static func compare(a: Char, b: Char): Int {
+        if (a < b) { return -1; }
+        if (a > b) { return 1; }
+        return 0;
+    }
+
+    func compareTo(other: Character): Int {
+        return Character.compare(this.value, other.value);
+    }
+
+    override func hashCode(): Int {
+        return this.value;
+    }
+
+    override func equals(o: Object): Bool {
+        if (!(o is Character)) { return false; }
+        val other = o as Character;
+        return this.value == other.value;
+    }
+
+    override func toString(): String {
+        return hao_char_to_str(this.value);
+    }
+}

@@ -1,0 +1,66 @@
+// ============================================================
+//  多文件测试套件 · webdemo：嵌套包扫描 + HttpApp.scan（v0.30）
+// ============================================================
+package main;
+
+import demo.web;
+import demo.web.api;
+import net;
+import reflect;
+import thread;
+
+func webDemoTest() {
+    // 嵌套包类已进类型表，且 inPackage 覆盖子包
+    var foundWeb = false;
+    var foundApi = false;
+    var i = 0;
+    while (i < reflect.typeCount()) {
+        val t = reflect.typeAt(i);
+        if (t.hasAnnotationEnding("Controller") && t.inPackage("demo/web")) {
+            if (t.packagePath() == "demo/web") { foundWeb = true; }
+            if (t.packagePath() == "demo/web/api") { foundApi = true; }
+        }
+        i += 1;
+    }
+    fmt.println(foundWeb);                               // true
+    fmt.println(foundApi);                               // true
+    fmt.println(reflect.normalizePackagePrefix("demo.web") == "demo$web$"); // true
+
+    val app = new net.HttpApp();
+    if (!app.listen(7903)) {
+        fmt.println("webdemo-listen-fail");
+        return;
+    }
+    // 扫 demo/web：须包含嵌套 demo/web/api
+    val n = app.scan("demo/web");
+    fmt.println(n >= 2);                                 // true
+
+    // 仅扫子包：至少 ApiController
+    val app2 = new net.HttpApp();
+    val nApi = app2.scan("demo/web/api");
+    fmt.println(nApi >= 1);                              // true
+
+    val th = new thread.Thread();
+    th.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r1 = net.Http.get("http://127.0.0.1:7903/web/home");
+    fmt.println(r1.status);                              // 200
+    fmt.println(r1.body);                                // web-home
+    th.join();
+
+    val th2 = new thread.Thread();
+    th2.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r2 = net.Http.get("http://127.0.0.1:7903/web/api/v1");
+    fmt.println(r2.body);                                // api-v1
+    th2.join();
+
+    val th3 = new thread.Thread();
+    th3.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r3 = net.Http.post("http://127.0.0.1:7903/web/api/echo", "zz");
+    fmt.println(r3.body);                                // api:zz
+    th3.join();
+
+    app.close();
+}

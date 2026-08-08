@@ -1,0 +1,17 @@
+package main;
+
+// Go 式 init()：包级 func init()，在 main 之前自动执行（v0.17.0）
+
+class T {
+    static var n: Int = 0;
+    static func next(): Int { T.n += 1; return T.n; }
+}
+
+func init() {
+    fmt.println($"init1:{T.next()}");
+}
+
+func main() {
+    // init 已在 main 之前自动执行
+    fmt.println($"main:{T.next()}");
+}

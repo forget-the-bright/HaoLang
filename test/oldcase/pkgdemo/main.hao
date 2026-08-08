@@ -1,0 +1,11 @@
+package main;
+
+import calc;
+import calc.*;
+
+func main() {
+    // 限定名调用
+    fmt.println(calc.add(2, 3));       // 5
+    // 通配导入：短名直接用
+    fmt.println(mul(4, 5));           // 20
+}

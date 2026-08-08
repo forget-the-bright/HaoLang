@@ -1,0 +1,37 @@
+package main;
+
+// 函数重载验证（v0.9.0）：同名函数按参数个数 / 类型区分，
+// 调用点按实参选最佳匹配（精确类型优先，其次 Int->Double 提升）。
+
+// 按参数个数重载
+func area(width: Int): Int {
+    return width * width;
+}
+func area(width: Int, height: Int): Int {
+    return width * height;
+}
+
+// 按参数类型重载
+func describe(x: Int): String {
+    return "Int " + x;
+}
+func describe(x: String): String {
+    return "String " + x;
+}
+
+// 按参数类型重载（含 Int -> Double 提升：5 精确匹配 Int 版）
+func report(x: Int): String {
+    return "i=" + x;
+}
+func report(x: Double): String {
+    return "d=" + x;
+}
+
+func main() {
+    fmt.println(area(3));          // 9
+    fmt.println(area(3, 4));       // 12
+    fmt.println(describe(7));      // Int 7
+    fmt.println(describe("hi"));   // String hi
+    fmt.println(report(5));        // i=5（精确匹配 Int 版）
+    fmt.println(report(2.5));      // d=2.5（匹配 Double 版）
+}

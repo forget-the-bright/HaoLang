@@ -1,0 +1,122 @@
+// ============================================================
+//  text —— 文本工具（v0.22.0 补充，纯 .hao）
+// ------------------------------------------------------------
+//  基于内建 String + lang.String 方法；索引为字节下标。
+//
+//  用法：
+//      import text;
+//      fmt.println(text.repeat("ab", 3));
+//      fmt.println(text.isBlank("  \t"));
+//      val parts = text.split("a,b,c", ",");
+// ============================================================
+package text;
+
+func isBlank(s: String): Bool {
+    var i = 0;
+    while (i < s.length) {
+        val c = String.valueOf(s).charAt(i);
+        if (c != 32 && c != 9 && c != 10 && c != 13) { return false; }
+        i += 1;
+    }
+    return true;
+}
+
+func isEmpty(s: String): Bool {
+    return s.length == 0;
+}
+
+func repeat(s: String, n: Int): String {
+    if (n <= 0) { return ""; }
+    var r = "";
+    var i = 0;
+    while (i < n) {
+        r = r + s;
+        i += 1;
+    }
+    return r;
+}
+
+func padStart(s: String, width: Int, pad: String): String {
+    if (s.length >= width) { return s; }
+    if (pad.length == 0) { return s; }
+    var r = s;
+    while (r.length < width) {
+        r = pad + r;
+        if (r.length > width) {
+            val extra = r.length - width;
+            r = String.valueOf(r).substring(extra, r.length);
+        }
+    }
+    return r;
+}
+
+func padEnd(s: String, width: Int, pad: String): String {
+    if (s.length >= width) { return s; }
+    if (pad.length == 0) { return s; }
+    var r = s;
+    while (r.length < width) {
+        r = r + pad;
+        if (r.length > width) {
+            r = String.valueOf(r).substring(0, width);
+        }
+    }
+    return r;
+}
+
+// 按分隔符切分（保留空段）；sep 为空则返回 [s]
+func split(s: String, sep: String): [String] {
+    var out: [String] = [];
+    if (sep.length == 0) {
+        out += s;
+        return out;
+    }
+    var start = 0;
+    var from = 0;
+    while (from <= s.length - sep.length) {
+        var match = true;
+        var k = 0;
+        while (k < sep.length) {
+            if (String.valueOf(s).charAt(from + k) != String.valueOf(sep).charAt(k)) {
+                match = false;
+                break;
+            }
+            k += 1;
+        }
+        if (match) {
+            out += String.valueOf(s).substring(start, from);
+            from = from + sep.length;
+            start = from;
+        } else {
+            from += 1;
+        }
+    }
+    out += String.valueOf(s).substring(start, s.length);
+    return out;
+}
+
+func join(parts: [String], sep: String): String {
+    if (parts.length == 0) { return ""; }
+    var r = parts[0];
+    var i = 1;
+    while (i < parts.length) {
+        r = r + sep + parts[i];
+        i += 1;
+    }
+    return r;
+}
+
+func startsWith(s: String, prefix: String): Bool {
+    return String.valueOf(s).startsWith(prefix);
+}
+
+func endsWith(s: String, suffix: String): Bool {
+    return String.valueOf(s).endsWith(suffix);
+}
+
+func contains(s: String, sub: String): Bool {
+    return String.valueOf(s).contains(sub);
+}
+
+func trim(s: String): String {
+    return String.valueOf(s).trim();
+}

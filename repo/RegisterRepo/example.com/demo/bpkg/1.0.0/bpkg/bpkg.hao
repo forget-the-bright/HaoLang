@@ -1,0 +1,2 @@
+package bpkg;
+public func mark(): String { return "b"; }

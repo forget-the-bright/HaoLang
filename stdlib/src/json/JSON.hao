@@ -1,0 +1,472 @@
+// ============================================================
+//  json.JSON —— 静态入口（对标 Fastjson2 JSON）
+// ============================================================
+package json;
+
+import collections.*;
+import lang;
+import os;
+import reflect;
+
+class JSON {
+    // Feature 位标志（toJSONString 可选）
+    static val PrettyFormat: Int = 1;
+    static val WriteMapNullValue: Int = 2;
+
+    static func parse(text: String): Object {
+        val p = new JsonParser(text);
+        val v = p.parseValue();
+        p.skipWs();
+        if (p.i < p.s.length) {
+            throw new JSONException("trailing data at " + Integer.toStr(p.i));
+        }
+        return v;
+    }
+
+    static func parseObject(text: String): JSONObject {
+        val v = JSON.parse(text);
+        if (v is JSONObject) { return v as JSONObject; }
+        throw new JSONException("not a JSON object");
+    }
+
+    static func parseArray(text: String): JSONArray {
+        val v = JSON.parse(text);
+        if (v is JSONArray) { return v as JSONArray; }
+        throw new JSONException("not a JSON array");
+    }
+
+    static func isValid(text: String): Bool {
+        try {
+            JSON.parse(text);
+            return true;
+        } catch (e: JSONException) {
+            return false;
+        }
+    }
+
+    static func toJSONString(value: Object): String {
+        return JSON.stringify(value, 0, 0);
+    }
+
+    static func toJSONStringFeat(value: Object, features: Int): String {
+        return JSON.stringify(value, features, 0);
+    }
+
+    static func parseObjectFromFile(path: String): JSONObject {
+        val t = os.readFile(path);
+        if (t == null) {
+            throw new JSONException("cannot read file: " + path);
+        }
+        return JSON.parseObject(t!!);
+    }
+
+    static func writeJSONString(path: String, value: Object): Bool {
+        return os.writeFile(path, JSON.toJSONString(value));
+    }
+
+    // 有限 Bean：按反射字段名写入（字段值均以字符串形式 setField）
+    static func parseInto(text: String, bean: Object): Object {
+        val obj = JSON.parseObject(text);
+        val t = reflect.typeOf(bean);
+        var i = 0;
+        while (i < t.getFieldCount()) {
+            val name = t.getFieldName(i);
+            if (obj.containsKey(name)) {
+                t.setField(bean, name, obj.getString(name));
+            }
+            i += 1;
+        }
+        return bean;
+    }
+
+    static func valueToString(v: Object): String {
+        if (v is JSONNull) { return "null"; }
+        if (v is lang.String) { return (v as lang.String).toString(); }
+        if (v is Integer) { return (v as Integer).toString(); }
+        if (v is lang.Long) { return (v as lang.Long).toString(); }
+        if (v is lang.Double) { return (v as lang.Double).toString(); }
+        if (v is Boolean) { return (v as Boolean).toString(); }
+        if (v is JSONObject) { return (v as JSONObject).toJSONString(); }
+        if (v is JSONArray) { return (v as JSONArray).toJSONString(); }
+        return v.toString();
+    }
+
+    static func valueToInt(v: Object?): Int {
+        if (v == null) { return 0; }
+        val x = v!!;
+        if (x is Integer) { return (x as Integer).intValue(); }
+        if (x is lang.Long) {
+            val p = Integer.parse(Long.toStr((x as lang.Long).longValue()));
+            if (p == null) { return 0; }
+            return p!!;
+        }
+        if (x is lang.Double) {
+            val p = Integer.parse(Double.toStr((x as lang.Double).doubleValue()));
+            if (p == null) { return 0; }
+            return p!!;
+        }
+        if (x is lang.String) {
+            val p = Integer.parse((x as lang.String).toString());
+            if (p == null) { return 0; }
+            return p!!;
+        }
+        return 0;
+    }
+
+    static func valueToLong(v: Object?): Long {
+        if (v == null) { return 0; }
+        val x = v!!;
+        if (x is lang.Long) { return (x as lang.Long).longValue(); }
+        if (x is Integer) {
+            val p = Long.parse(Integer.toStr((x as Integer).intValue()));
+            if (p == null) { return 0; }
+            return p!!;
+        }
+        if (x is lang.Double) {
+            val p = Long.parse(Double.toStr((x as lang.Double).doubleValue()));
+            if (p == null) { return 0; }
+            return p!!;
+        }
+        if (x is lang.String) {
+            val p = Long.parse((x as lang.String).toString());
+            if (p == null) { return 0; }
+            return p!!;
+        }
+        return 0;
+    }
+
+    static func valueToDouble(v: Object?): Double {
+        if (v == null) { return 0.0; }
+        val x = v!!;
+        if (x is lang.Double) { return (x as lang.Double).doubleValue(); }
+        if (x is Integer) {
+            val p = Double.parse(Integer.toStr((x as Integer).intValue()));
+            if (p == null) { return 0.0; }
+            return p!!;
+        }
+        if (x is lang.Long) {
+            val p = Double.parse(Long.toStr((x as lang.Long).longValue()));
+            if (p == null) { return 0.0; }
+            return p!!;
+        }
+        if (x is lang.String) {
+            val p = Double.parse((x as lang.String).toString());
+            if (p == null) { return 0.0; }
+            return p!!;
+        }
+        return 0.0;
+    }
+
+    static func valueToBool(v: Object?): Bool {
+        if (v == null) { return false; }
+        val x = v!!;
+        if (x is Boolean) { return (x as Boolean).booleanValue(); }
+        if (x is lang.String) {
+            val p = Boolean.parse((x as lang.String).toString());
+            if (p == null) { return false; }
+            return p!!;
+        }
+        return false;
+    }
+
+    static func stringify(value: Object, features: Int, indent: Int): String {
+        if (value is JSONNull) { return "null"; }
+        if (value is Boolean) {
+            if ((value as Boolean).booleanValue()) { return "true"; }
+            return "false";
+        }
+        if (value is Integer) { return Integer.toStr((value as Integer).intValue()); }
+        if (value is lang.Long) { return Long.toStr((value as lang.Long).longValue()); }
+        if (value is lang.Double) { return Double.toStr((value as lang.Double).doubleValue()); }
+        if (value is lang.String) {
+            return JSON.quote((value as lang.String).toString());
+        }
+        if (value is JSONObject) {
+            return JSON.stringifyObj(value as JSONObject, features, indent);
+        }
+        if (value is JSONArray) {
+            return JSON.stringifyArr(value as JSONArray, features, indent);
+        }
+        return JSON.quote(value.toString());
+    }
+
+    static func stringifyObj(obj: JSONObject, features: Int, indent: Int): String {
+        val pretty = (features & JSON.PrettyFormat) != 0;
+        val writeNull = (features & JSON.WriteMapNullValue) != 0;
+        var r = "{";
+        var first = true;
+        var i = 0;
+        while (i < obj.keys.length) {
+            val k = obj.keys[i];
+            val v = obj.map.get(k);
+            i += 1;
+            if (v == null) { continue; }
+            if ((!writeNull) && (v!! is JSONNull)) { continue; }
+            if (!first) { r = r + ","; }
+            first = false;
+            if (pretty) {
+                r = r + "\n" + JSON.pad(indent + 1);
+            }
+            r = r + JSON.quote(k) + ":";
+            if (pretty) { r = r + " "; }
+            r = r + JSON.stringify(v!!, features, indent + 1);
+        }
+        if (pretty && !first) {
+            r = r + "\n" + JSON.pad(indent);
+        }
+        return r + "}";
+    }
+
+    static func stringifyArr(arr: JSONArray, features: Int, indent: Int): String {
+        val pretty = (features & JSON.PrettyFormat) != 0;
+        var r = "[";
+        var i = 0;
+        while (i < arr.size()) {
+            if (i > 0) { r = r + ","; }
+            if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
+            r = r + JSON.stringify(arr.get(i), features, indent + 1);
+            i += 1;
+        }
+        if (pretty && arr.size() > 0) {
+            r = r + "\n" + JSON.pad(indent);
+        }
+        return r + "]";
+    }
+
+    static func pad(n: Int): String {
+        var r = "";
+        var i = 0;
+        while (i < n) {
+            r = r + "  ";
+            i += 1;
+        }
+        return r;
+    }
+
+    static func quote(s: String): String {
+        var r = "\"";
+        var i = 0;
+        while (i < s.length) {
+            val c = s[i];
+            if (c == 34) { r = r + "\\\""; }
+            else if (c == 92) { r = r + "\\\\"; }
+            else if (c == 10) { r = r + "\\n"; }
+            else if (c == 13) { r = r + "\\r"; }
+            else if (c == 9) { r = r + "\\t"; }
+            else { r = r + c; }
+            i += 1;
+        }
+        return r + "\"";
+    }
+}
+
+class JsonParser {
+    var s: String;
+    var i: Int;
+
+    constructor(text: String) {
+        this.s = text;
+        this.i = 0;
+    }
+
+    func skipWs() {
+        while (this.i < this.s.length) {
+            val c = this.s[this.i];
+            if (c == 32 || c == 9 || c == 10 || c == 13) {
+                this.i += 1;
+            } else {
+                return;
+            }
+        }
+    }
+
+    func peek(): Char {
+        if (this.i >= this.s.length) { return 0; }
+        return this.s[this.i];
+    }
+
+    func bump(): Char {
+        val c = this.peek();
+        this.i += 1;
+        return c;
+    }
+
+    func expect(ch: Char) {
+        this.skipWs();
+        if (this.peek() != ch) {
+            throw new JSONException("expected '" + ch + "' at " + Integer.toStr(this.i));
+        }
+        this.i += 1;
+    }
+
+    func parseValue(): Object {
+        this.skipWs();
+        val c = this.peek();
+        if (c == 123) { return this.parseObject(); }
+        if (c == 91) { return this.parseArray(); }
+        if (c == 34) { return String.valueOf(this.parseString()); }
+        if (c == 116) { return this.parseLiteral("true", Boolean.valueOf(true)); }
+        if (c == 102) { return this.parseLiteral("false", Boolean.valueOf(false)); }
+        if (c == 110) { return this.parseLiteral("null", JSONNull.INSTANCE); }
+        if (c == 45 || (c >= 48 && c <= 57)) { return this.parseNumber(); }
+        throw new JSONException("unexpected char at " + Integer.toStr(this.i));
+    }
+
+    func parseLiteral(lit: String, value: Object): Object {
+        var k = 0;
+        while (k < lit.length) {
+            if (this.i >= this.s.length || this.s[this.i] != lit[k]) {
+                throw new JSONException("invalid literal at " + Integer.toStr(this.i));
+            }
+            this.i += 1;
+            k += 1;
+        }
+        return value;
+    }
+
+    func parseObject(): JSONObject {
+        this.expect(123);
+        val obj = new JSONObject();
+        this.skipWs();
+        if (this.peek() == 125) {
+            this.i += 1;
+            return obj;
+        }
+        while (true) {
+            this.skipWs();
+            if (this.peek() != 34) {
+                throw new JSONException("expected string key at " + Integer.toStr(this.i));
+            }
+            val key = this.parseString();
+            this.expect(58);
+            val value = this.parseValue();
+            obj.put(key, value);
+            this.skipWs();
+            val sep = this.peek();
+            if (sep == 125) {
+                this.i += 1;
+                return obj;
+            }
+            if (sep != 44) {
+                throw new JSONException("expected ',' or '}' at " + Integer.toStr(this.i));
+            }
+            this.i += 1;
+        }
+        return obj;
+    }
+
+    func parseArray(): JSONArray {
+        this.expect(91);
+        val arr = new JSONArray();
+        this.skipWs();
+        if (this.peek() == 93) {
+            this.i += 1;
+            return arr;
+        }
+        while (true) {
+            arr.add(this.parseValue());
+            this.skipWs();
+            val sep = this.peek();
+            if (sep == 93) {
+                this.i += 1;
+                return arr;
+            }
+            if (sep != 44) {
+                throw new JSONException("expected ',' or ']' at " + Integer.toStr(this.i));
+            }
+            this.i += 1;
+        }
+        return arr;
+    }
+
+    func parseString(): String {
+        if (this.bump() != 34) {
+            throw new JSONException("expected string at " + Integer.toStr(this.i));
+        }
+        var r = "";
+        while (this.i < this.s.length) {
+            val c = this.bump();
+            if (c == 34) { return r; }
+            if (c == 92) {
+                val e = this.bump();
+                if (e == 34) { r = r + "\""; }
+                else if (e == 92) { r = r + "\\"; }
+                else if (e == 47) { r = r + "/"; }
+                else if (e == 98) { val bs: Char = 8; r = r + bs; }
+                else if (e == 102) { val ff: Char = 12; r = r + ff; }
+                else if (e == 110) { r = r + "\n"; }
+                else if (e == 114) { r = r + "\r"; }
+                else if (e == 116) { r = r + "\t"; }
+                else if (e == 117) {
+                    // \uXXXX → 码点 Char 拼接（禁止 String+Int 十进制）
+                    var code = 0;
+                    var n = 0;
+                    while (n < 4) {
+                        val h = this.bump();
+                        var d = 0;
+                        if (h >= 48 && h <= 57) { d = h - 48; }
+                        else if (h >= 65 && h <= 70) { d = h - 55; }
+                        else if (h >= 97 && h <= 102) { d = h - 87; }
+                        else { throw new JSONException("bad unicode escape"); }
+                        code = code * 16 + d;
+                        n += 1;
+                    }
+                    val uch: Char = code;
+                    r = r + uch;
+                } else {
+                    throw new JSONException("bad escape");
+                }
+            } else {
+                r = r + c;
+            }
+        }
+        throw new JSONException("unterminated string");
+    }
+
+    func parseNumber(): Object {
+        val start = this.i;
+        if (this.peek() == 45) { this.i += 1; }
+        if (this.peek() == 48) {
+            this.i += 1;
+        } else {
+            if (this.peek() < 48 || this.peek() > 57) {
+                throw new JSONException("invalid number");
+            }
+            while (this.peek() >= 48 && this.peek() <= 57) { this.i += 1; }
+        }
+        var isFloat = false;
+        if (this.peek() == 46) {
+            isFloat = true;
+            this.i += 1;
+            if (this.peek() < 48 || this.peek() > 57) {
+                throw new JSONException("invalid number");
+            }
+            while (this.peek() >= 48 && this.peek() <= 57) { this.i += 1; }
+        }
+        val c = this.peek();
+        if (c == 101 || c == 69) {
+            isFloat = true;
+            this.i += 1;
+            val s = this.peek();
+            if (s == 43 || s == 45) { this.i += 1; }
+            if (this.peek() < 48 || this.peek() > 57) {
+                throw new JSONException("invalid number");
+            }
+            while (this.peek() >= 48 && this.peek() <= 57) { this.i += 1; }
+        }
+        val raw = String.valueOf(this.s).substring(start, this.i);
+        if (isFloat) {
+            val d = Double.parse(raw);
+            if (d == null) { throw new JSONException("bad double: " + raw); }
+            return Double.valueOf(d!!);
+        }
+        val lv = Long.parse(raw);
+        if (lv == null) { throw new JSONException("bad long: " + raw); }
+        val n = lv!!;
+        if (n >= 0 - 2147483647 - 1 && n <= 2147483647) {
+            val ni: Int = n;
+            return Integer.valueOf(ni);
+        }
+        return Long.valueOf(n);
+    }
+}

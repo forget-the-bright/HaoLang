@@ -1,0 +1,6 @@
+package hi;
+
+// 供 modsmoke app 经 localReferences 引用
+public func greet(): String {
+    return "modsmoke-ok";
+}

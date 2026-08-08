@@ -1,0 +1,23 @@
+package main;
+
+import os;
+
+// os 系统库（v0.12.0）：文件读写 / 环境变量 / 进程命令
+func main() {
+    // 写 + 读文件
+    os.writeFile("test/os_tmp.txt", "你好 Hao!\n第二行\n");
+    val content = os.readFile("test/os_tmp.txt") ?? "(读取失败)";
+    fmt.println(content);
+
+    // 存在性
+    fmt.println(os.exists("test/os_tmp.txt"));      // true
+    fmt.println(os.exists("不存在_xyz.txt"));        // false
+
+    // 环境变量（Windows 必有 PATH）
+    fmt.println(os.getenv("PATH") != null);         // true
+    fmt.println(os.getenv("不存在的环境变量_XYZ") == null);   // true
+
+    // 删除
+    fmt.println(os.remove("test/os_tmp.txt"));      // true
+    fmt.println(os.exists("test/os_tmp.txt"));      // false（已删除）
+}

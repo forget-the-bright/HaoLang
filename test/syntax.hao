@@ -1,0 +1,71 @@
+package main;
+
+import fmt;
+import collections.*;
+
+func main() {
+    val name = "HaoLang";
+    var count: Int = 3;
+    val pi = 3.14;
+    val flag = true;
+    val nothing: String? = null;
+
+    // 模板字符串 + 插值表达式
+    fmt.println($"Hello {name}!");
+    fmt.println($"count={count}, double={count * 2}");
+
+    // 空安全
+    val len = nothing?.length ?? 0;
+
+    // 控制流
+    if (count > 2) {
+        fmt.println("big");
+    } else {
+        fmt.println("small");
+    }
+
+    while (count > 0) {
+        count -= 1;
+    }
+
+    for (i in [1, 2, 3]) {
+        fmt.println($"i={i}");
+    }
+
+    // when 表达式
+    val kind = when (count) {
+        0 -> "zero"
+        1, 2 -> "few"
+        else -> "many"
+    };
+
+    val p = new Point(1, 2);
+    fmt.println(p.describe());
+}
+
+interface Shape {
+    func area(): Double;
+}
+
+public class Point : Shape {
+    private var x: Int = 0;
+    private var y: Int = 0;
+
+    public var label: String {
+        get;
+        set;
+    }
+
+    constructor(x: Int, y: Int) {
+        this.x = x;
+        this.y = y;
+    }
+
+    public override func area(): Double {
+        return 0.0;
+    }
+
+    public func describe(): String {
+        return $"Point({this.x}, {this.y})";
+    }
+}

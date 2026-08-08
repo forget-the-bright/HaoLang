@@ -1,0 +1,3 @@
+package main;
+import midpkg;
+func main() { fmt.println(midpkg.mark()); }

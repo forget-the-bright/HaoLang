@@ -1,0 +1,61 @@
+// ============================================================
+//  lang.Float —— 基础类型 Float（f32）的包装类
+//  标注包装写 lang.Float；裸名 Float = 内建
+// ============================================================
+package lang;
+
+import hash;
+
+class Float {
+    var value: Float;
+
+    static val SIZE: Int = 32;
+    static val BYTES: Int = 4;
+    static val MAX_VALUE: Float = 3.4028235e38;
+    // 对齐 Java：最小正非零值（非最负）；最负用 -MAX_VALUE
+    static val MIN_VALUE: Float = 1.4e-45;
+
+    constructor(v: Float) {
+        this.value = v;
+    }
+
+    static func valueOf(v: Float): lang.Float {
+        return new lang.Float(v);
+    }
+
+    func floatValue(): Float {
+        return this.value;
+    }
+
+    static func parse(s: String): Float? {
+        return hao_parse_float(s);
+    }
+
+    static func toStr(v: Float): String {
+        return hao_float_to_str(v);
+    }
+
+    static func compare(a: Float, b: Float): Int {
+        if (a < b) { return -1; }
+        if (a > b) { return 1; }
+        return 0;
+    }
+
+    func compareTo(other: lang.Float): Int {
+        return Float.compare(this.value, other.value);
+    }
+
+    override func hashCode(): Int {
+        return hash.hashOf(this.value);
+    }
+
+    override func equals(o: Object): Bool {
+        if (!(o is lang.Float)) { return false; }
+        val other = o as lang.Float;
+        return this.value == other.value;
+    }
+
+    override func toString(): String {
+        return hao_float_to_str(this.value);
+    }
+}

@@ -1,0 +1,167 @@
+// ============================================================
+//  os.Path —— 路径字符串工具（并入 os，废除独立 path 包）
+// ------------------------------------------------------------
+//  同时识别 '/' 与 '\'；不做真实文件系统访问。
+//  用法：import os;  os.Path.join("a", "b") / os.Path.basename(p)
+// ============================================================
+package os;
+
+class Path {
+    static func separator(): String {
+        return "/";
+    }
+
+    static func isAbsolute(p: String): Bool {
+        if (p.length == 0) { return false; }
+        val s = String.valueOf(p);
+        if (pathIsSep(s.charAt(0))) { return true; }
+        if (p.length >= 3) {
+            val c0 = s.charAt(0);
+            val c1 = s.charAt(1);
+            val c2 = s.charAt(2);
+            if (c1 == 58 && pathIsSep(c2)) {
+                if ((c0 >= 65 && c0 <= 90) || (c0 >= 97 && c0 <= 122)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    static func join(a: String, b: String): String {
+        if (a.length == 0) { return b; }
+        if (b.length == 0) { return a; }
+        if (Path.isAbsolute(b)) { return b; }
+        val sa = String.valueOf(a);
+        val last = sa.charAt(a.length - 1);
+        if (pathIsSep(last)) { return a + b; }
+        return a + "/" + b;
+    }
+
+    static func basename(p: String): String {
+        if (p.length == 0) { return ""; }
+        val s = String.valueOf(p);
+        var i = p.length - 1;
+        while (i >= 0 && pathIsSep(s.charAt(i))) { i -= 1; }
+        if (i < 0) { return ""; }
+        val end = i + 1;
+        while (i >= 0 && !pathIsSep(s.charAt(i))) { i -= 1; }
+        return s.substring(i + 1, end);
+    }
+
+    static func dirname(p: String): String {
+        if (p.length == 0) { return "."; }
+        val s = String.valueOf(p);
+        var i = p.length - 1;
+        while (i >= 0 && pathIsSep(s.charAt(i))) { i -= 1; }
+        if (i < 0) { return Path.separator(); }
+        while (i >= 0 && !pathIsSep(s.charAt(i))) { i -= 1; }
+        if (i < 0) { return "."; }
+        if (i == 0) { return Path.separator(); }
+        return s.substring(0, i);
+    }
+
+    static func ext(p: String): String {
+        val base = Path.basename(p);
+        if (base.length == 0) { return ""; }
+        val s = String.valueOf(base);
+        var i = base.length - 1;
+        while (i >= 0) {
+            if (s.charAt(i) == 46) {
+                if (i == 0) { return ""; }
+                return s.substring(i, base.length);
+            }
+            i -= 1;
+        }
+        return "";
+    }
+
+    static func normalize(p: String): String {
+        if (p.length == 0) { return "."; }
+        val abs = Path.isAbsolute(p);
+        var unified = "";
+        var i = 0;
+        val s = String.valueOf(p);
+        while (i < p.length) {
+            val c = s.charAt(i);
+            if (pathIsSep(c)) {
+                unified = unified + "/";
+            } else {
+                unified = unified + s.substring(i, i + 1);
+            }
+            i += 1;
+        }
+        val parts = pathSplitSlash(unified);
+        var stack: [String] = [];
+        var j = 0;
+        while (j < parts.length) {
+            val seg = parts[j];
+            if (seg == "" || seg == ".") {
+                // skip
+            } else if (seg == "..") {
+                if (stack.length > 0) {
+                    val top = stack[stack.length - 1];
+                    if (top != "..") {
+                        var ns: [String] = [];
+                        var k = 0;
+                        while (k < stack.length - 1) {
+                            ns += stack[k];
+                            k += 1;
+                        }
+                        stack = ns;
+                    } else {
+                        stack += "..";
+                    }
+                } else if (!abs) {
+                    stack += "..";
+                }
+            } else {
+                stack += seg;
+            }
+            j += 1;
+        }
+        var out = "";
+        var n = 0;
+        while (n < stack.length) {
+            if (n > 0) { out = out + "/"; }
+            out = out + stack[n];
+            n += 1;
+        }
+        if (abs) {
+            if (out.length == 0) { return "/"; }
+            if (p.length >= 2 && String.valueOf(p).charAt(1) == 58) {
+                return out;
+            }
+            return "/" + out;
+        }
+        if (out.length == 0) { return "."; }
+        return out;
+    }
+}
+
+private func pathIsSep(c: Int): Bool {
+    return c == 47 || c == 92;
+}
+
+private func pathSplitSlash(p: String): [String] {
+    var r: [String] = [];
+    if (p.length == 0) { return r; }
+    val s = String.valueOf(p);
+    var start = 0;
+    var i = 0;
+    while (i < p.length) {
+        if (s.charAt(i) == 47) {
+            if (i > start) {
+                r += s.substring(start, i);
+            } else {
+                r += "";
+            }
+            start = i + 1;
+        }
+        i += 1;
+    }
+    if (start <= p.length) {
+        r += s.substring(start, p.length);
+    }
+    return r;
+}

@@ -1,0 +1,93 @@
+// ============================================================
+//  多文件测试套件 · haoroutine + channel（v0.36；v0.37.1 recvStr?）
+// ============================================================
+package main;
+
+import channel;
+import thread;
+
+func haoroutineTest() {
+    // ---- 缓冲 channel：haoroutine 发送，主线程接收 ----
+    val ch = channel.make(4);
+    haoroutine {
+        ch.sendInt(11);
+        ch.sendInt(22);
+        ch.sendStr("hi-chan");
+    }
+    // 等子线程入队（短 sleep；无 join 句柄）
+    thread.sleep(200);
+    fmt.println(ch.recvInt());           // 11
+    fmt.println(ch.recvInt());           // 22
+    fmt.println(ch.recvStr()!!);         // hi-chan
+
+    // ---- 无缓冲会合 ----
+    val sync = channel.make(0);
+    haoroutine {
+        sync.sendInt(99);
+    }
+    fmt.println(sync.recvInt());         // 99
+
+    // ---- 关闭后 recv 得 0；缓冲仍可排空 ----
+    val done = channel.make(1);
+    done.sendInt(1);
+    done.close();
+    fmt.println(done.recvInt());         // 1
+    fmt.println(done.recvInt());         // 0
+
+    // ---- 关闭后 recvStr 为 null（非空断言前须判空）----
+    val ended = channel.make(1);
+    ended.close();
+    fmt.println(ended.recvStr() == null); // true
+
+    // ---- close 后仍可读出关闭前已入队的字符串 ----
+    val kept = channel.make(2);
+    kept.sendStr("keep");
+    kept.close();
+    fmt.println(kept.recvStr()!!);        // keep
+    fmt.println(kept.recvStr() == null);  // true
+
+    // ---- 捕获外层变量 ----
+    var box: Long = 0;
+    val flag = channel.make(1);
+    haoroutine {
+        box = 7;
+        flag.sendInt(1);
+    }
+    thread.sleep(200);
+    fmt.println(flag.recvInt());         // 1
+    fmt.println(box);                    // 7
+
+    // ---- select：default + try 语义 ----
+    val idle = channel.make(1);
+    var hitDef: Int = 0;
+    select {
+        case x = idle.recvInt():
+            hitDef = -1;
+        default:
+            hitDef = 1;
+    }
+    fmt.println(hitDef);                 // 1
+
+    // ---- select：就绪 recv ----
+    val ready = channel.make(2);
+    ready.sendInt(42);
+    select {
+        case v = ready.recvInt():
+            fmt.println(v);              // 42
+        default:
+            fmt.println(0);
+    }
+
+    // ---- select：多路选中 send ----
+    val a = channel.make(1);
+    val b = channel.make(1);
+    b.sendInt(1);                        // b 已满
+    select {
+        case a.sendInt(7):
+            fmt.println(a.recvInt());    // 7
+        case b.sendInt(8):
+            fmt.println(9);              // 不应走到
+        default:
+            fmt.println(0);
+    }
+}

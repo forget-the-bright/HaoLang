@@ -1,0 +1,143 @@
+// ============================================================
+//  多文件测试套件 · collections_extra（v0.34）
+//  LinkedList / LinkedHashMap / BST / RBTree / TreeMap / ConcurrentHashMap
+//  + Map.clear/putIfAbsent/getOrDefault
+// ============================================================
+package main;
+
+import collections;
+import thread;
+
+// 树比较器：lambda 内不能直接引用 Integer 静态方法，故用顶层函数
+func collExtraIntCmp(a: Int, b: Int): Int {
+    if (a < b) { return 0 - 1; }
+    if (a > b) { return 1; }
+    return 0;
+}
+
+func collectionsExtraTest() {
+    // ---------- Map 新 API ----------
+    val m = new collections.Map<Int, String>();
+    m.put(1, "a");
+    m.put(2, "b");
+    fmt.println(m.getOrDefault(2, "x"));       // b
+    fmt.println(m.getOrDefault(9, "def"));     // def
+    fmt.println(m.putIfAbsent(1, "zz") ?? "nil"); // a
+    fmt.println(m.get(1) ?? "nil");            // a
+    fmt.println(m.putIfAbsent(3, "c") ?? "nil"); // nil
+    fmt.println(m.get(3) ?? "nil");            // c
+    fmt.println(m.containsValue("b"));         // true
+    fmt.println(m.keys().length);              // 3
+    fmt.println(m.values().length);            // 3
+    m.clear();
+    fmt.println(m.size());                     // 0
+    fmt.println(m.isEmpty());                  // true
+
+    // ---------- LinkedList ----------
+    val ll = new collections.LinkedList<Int>();
+    ll.addLast(1);
+    ll.addLast(2);
+    ll.addFirst(0);
+    fmt.println(ll.size());                    // 3
+    fmt.println(ll.get(0));                    // 0
+    fmt.println(ll.get(2));                    // 2
+    fmt.println(ll.removeFirst() ?? -1);       // 0
+    fmt.println(ll.removeLast() ?? -1);        // 2
+    fmt.println(ll.removeAt(0));               // 1
+    fmt.println(ll.isEmpty());                 // true
+    ll.add(10); ll.add(20); ll.add(30);
+    var lsum = 0;
+    for (x in ll) { lsum += x; }
+    fmt.println(lsum);                         // 60
+
+    // ---------- LinkedHashMap 插入序 ----------
+    val lhm = new collections.LinkedHashMap<Int, String>();
+    lhm.put(3, "c");
+    lhm.put(1, "a");
+    lhm.put(2, "b");
+    lhm.put(1, "A"); // 更新不改序
+    val ks = lhm.keys();
+    fmt.println(ks.length);                    // 3
+    fmt.println(ks[0]);                        // 3
+    fmt.println(ks[1]);                        // 1
+    fmt.println(ks[2]);                        // 2
+    fmt.println(lhm.get(1) ?? "nil");          // A
+    fmt.println(lhm.remove(3));                // true
+    val ks2 = lhm.keys();
+    fmt.println(ks2[0]);                       // 1
+    fmt.println(ks2[1]);                       // 2
+
+    // ---------- BinarySearchTree ----------
+    val intCmp: Func<Int, Int, Int> = collExtraIntCmp;
+    val bst = new collections.BinarySearchTree<Int, String>(intCmp);
+    bst.put(5, "e");
+    bst.put(3, "c");
+    bst.put(7, "g");
+    bst.put(1, "a");
+    bst.put(4, "d");
+    val bkeys = bst.inorderKeys();
+    fmt.println(bkeys.length);                 // 5
+    fmt.println(bkeys[0]);                     // 1
+    fmt.println(bkeys[4]);                     // 7
+    fmt.println(bst.get(4) ?? "nil");          // d
+    fmt.println(bst.remove(3));                // true
+    fmt.println(bst.containsKey(3));           // false
+    fmt.println(bst.size());                   // 4
+
+    // ---------- RedBlackTree / TreeMap ----------
+    val tmCmp: Func<Int, Int, Int> = collExtraIntCmp;
+    val tm = new collections.TreeMap<Int, Int>(tmCmp);
+    var i = 0;
+    while (i < 20) {
+        tm.put((19 - i), (19 - i) * 10);
+        i += 1;
+    }
+    fmt.println(tm.size());                    // 20
+    val tkeys = tm.keys();
+    fmt.println(tkeys[0]);                     // 0
+    fmt.println(tkeys[19]);                    // 19
+    fmt.println(tm.get(10) ?? -1);             // 100
+    fmt.println(tm.remove(0));                 // true
+    fmt.println(tm.remove(19));                // true
+    fmt.println(tm.remove(10));                // true
+    val tkeys2 = tm.keys();
+    fmt.println(tkeys2[0]);                    // 1
+    fmt.println(tkeys2[tkeys2.length - 1]);    // 18
+    fmt.println(tm.size());                    // 17
+
+    // ---------- ConcurrentHashMap（单线程语义 + 双线程 put）----------
+    val chm = new collections.ConcurrentHashMap<Int, Int>();
+    chm.put(1, 10);
+    chm.put(2, 20);
+    fmt.println(chm.get(1) ?? -1);             // 10
+    fmt.println(chm.putIfAbsent(1, 99) ?? -1); // 10
+    fmt.println(chm.getOrDefault(3, 7));       // 7
+    fmt.println(chm.size());                   // 2
+
+    val chm2 = new collections.ConcurrentHashMap<Int, Int>();
+    val t1 = new thread.Thread();
+    val t2 = new thread.Thread();
+    t1.start({
+        var j = 0;
+        while (j < 50) {
+            chm2.put(j, j);
+            j += 1;
+        }
+    });
+    t2.start({
+        var j = 50;
+        while (j < 100) {
+            chm2.put(j, j);
+            j += 1;
+        }
+    });
+    t1.join();
+    t2.join();
+    fmt.println(chm2.size());                  // 100
+    fmt.println(chm2.get(0) ?? -1);            // 0
+    fmt.println(chm2.get(99) ?? -1);           // 99
+    // 跨段 keys 快照与 size 一致
+    fmt.println(chm2.keys().length);           // 100
+    chm2.clear();
+    fmt.println(chm2.isEmpty());               // true
+}

@@ -1,0 +1,86 @@
+// ============================================================
+//  多文件测试套件 · functions：函数 / 递归 / 重载 / 函数作值
+//  覆盖：features(functions 部分) + overload
+// ============================================================
+package main;
+
+// ---------- 普通函数与递归 ----------
+func fsAdd(a: Int, b: Int): Int {
+    return a + b;
+}
+
+func fsFib(n: Int): Int {
+    if (n < 2) {
+        return n;
+    }
+    return fsFib(n - 1) + fsFib(n - 2);
+}
+
+func fsFact(n: Int): Int {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * fsFact(n - 1);
+}
+
+func fsGreet(name: String): String {
+    return $"你好, {name}!";
+}
+
+func fsHalf(x: Int): Double {
+    return x / 2.0;
+}
+
+// ---------- 函数重载：按参数个数 ----------
+func fsArea(width: Int): Int {
+    return width * width;
+}
+func fsArea(width: Int, height: Int): Int {
+    return width * height;
+}
+
+// ---------- 函数重载：按参数类型 ----------
+func fsDescribe(x: Int): String {
+    return "Int " + x;
+}
+func fsDescribe(x: String): String {
+    return "String " + x;
+}
+
+// ---------- 函数重载：Int -> Double 提升（5 精确匹配 Int 版）----------
+func fsReport(x: Int): String {
+    return "i=" + x;
+}
+func fsReport(x: Double): String {
+    return "d=" + x;
+}
+
+// ---------- 函数作值传递 ----------
+func fsAddPair(a: Int, b: Int): Int {
+    return a + b;
+}
+
+func functionsTest() {
+    // ---------- 函数调用 ----------
+    fmt.println(fsAdd(3, 4));       // 7
+    fmt.println(fsGreet("世界"));
+    fmt.println(fsFib(10));         // 55
+    fmt.println(fsFact(5));         // 120
+    fmt.println(fsHalf(7));         // 3.5
+
+    // ---------- 重载：按参数个数 ----------
+    fmt.println(fsArea(3));         // 9
+    fmt.println(fsArea(3, 4));      // 12
+
+    // ---------- 重载：按参数类型 ----------
+    fmt.println(fsDescribe(7));     // Int 7
+    fmt.println(fsDescribe("hi"));  // String hi
+
+    // ---------- 重载：Int -> Double 提升 ----------
+    fmt.println(fsReport(5));       // i=5
+    fmt.println(fsReport(2.5));     // d=2.5
+
+    // ---------- 函数作值 ----------
+    val addFn: (Int, Int) -> Int = fsAddPair;
+    fmt.println(addFn(20, 22));     // 42
+}

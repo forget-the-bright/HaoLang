@@ -1,0 +1,177 @@
+package collections;
+
+// ============================================================
+//  BinarySearchTree<K,V> —— 二叉搜索树（教学/小数据）
+// ------------------------------------------------------------
+//  职责：按 compare 有序的键值树；不自平衡，最坏 O(n)。
+//  排序：构造器传入 Func<K,K,Int>（<0 / 0 / >0），因语言尚无 where T:Comparable。
+//  Int 键示例：val cmp: Func<Int,Int,Int> = { a, b -> Integer.compare(a, b) };
+//  线程安全：否。
+//  不是：红黑树/TreeMap（要平衡请用 RedBlackTree / TreeMap）。
+// ============================================================
+
+class BSTNode<K, V> {
+    var key: K;
+    var value: V;
+    var left: BSTNode<K, V>?;
+    var right: BSTNode<K, V>?;
+
+    constructor(k: K, v: V) {
+        this.key = k;
+        this.value = v;
+        this.left = null;
+        this.right = null;
+    }
+}
+
+class BinarySearchTree<K, V> {
+    var root: BSTNode<K, V>?;
+    var count: Int;
+    var compare: Func<K, K, Int>;
+
+    // @param compare 键比较：负=a<b，0=相等，正=a>b
+    // 复杂度：O(1)
+    constructor(compare: Func<K, K, Int>) {
+        this.root = null;
+        this.count = 0;
+        this.compare = compare;
+    }
+
+    // @return 节点数
+    // 复杂度：O(1)
+    func size(): Int { return this.count; }
+
+    // @return 是否为空
+    // 复杂度：O(1)
+    func isEmpty(): Bool { return this.count == 0; }
+
+    // 插入或覆盖。
+    // @param key 键
+    // @param value 值
+    // 复杂度：平均 O(log n)，最坏 O(n)
+    func put(key: K, value: V) {
+        if (this.root == null) {
+            this.root = new BSTNode<K, V>(key, value);
+            this.count += 1;
+            return;
+        }
+        var cur = this.root!!;
+        while (true) {
+            val cmp = this.compare(key, cur.key);
+            if (cmp == 0) {
+                cur.value = value;
+                return;
+            } else if (cmp < 0) {
+                if (cur.left == null) {
+                    cur.left = new BSTNode<K, V>(key, value);
+                    this.count += 1;
+                    return;
+                }
+                cur = cur.left!!;
+            } else {
+                if (cur.right == null) {
+                    cur.right = new BSTNode<K, V>(key, value);
+                    this.count += 1;
+                    return;
+                }
+                cur = cur.right!!;
+            }
+        }
+    }
+
+    // @param key 键
+    // @return 值或 null
+    // 复杂度：平均 O(log n)，最坏 O(n)
+    func get(key: K): V? {
+        var cur = this.root;
+        while (cur != null) {
+            val cmp = this.compare(key, cur!!.key);
+            if (cmp == 0) { return cur!!.value; }
+            if (cmp < 0) { cur = cur!!.left; }
+            else { cur = cur!!.right; }
+        }
+        return null;
+    }
+
+    // @param key 键
+    // @return 是否存在
+    // 复杂度：平均 O(log n)，最坏 O(n)
+    func containsKey(key: K): Bool {
+        var cur = this.root;
+        while (cur != null) {
+            val cmp = this.compare(key, cur!!.key);
+            if (cmp == 0) { return true; }
+            if (cmp < 0) { cur = cur!!.left; }
+            else { cur = cur!!.right; }
+        }
+        return false;
+    }
+
+    // 删除键；不存在则 false。
+    // @param key 键
+    // @return 是否删除成功
+    // 复杂度：平均 O(log n)，最坏 O(n)
+    func remove(key: K): Bool {
+        if (this.root == null) { return false; }
+        // 用父指针迭代删除
+        var parent: BSTNode<K, V>? = null;
+        var cur = this.root;
+        var isLeft = false;
+        while (cur != null) {
+            val cmp = this.compare(key, cur!!.key);
+            if (cmp == 0) { break; }
+            parent = cur;
+            if (cmp < 0) {
+                isLeft = true;
+                cur = cur!!.left;
+            } else {
+                isLeft = false;
+                cur = cur!!.right;
+            }
+        }
+        if (cur == null) { return false; }
+
+        val replacement = this.mergeChildren(cur!!.left, cur!!.right);
+        if (parent == null) {
+            this.root = replacement;
+        } else if (isLeft) {
+            val p = parent!!;
+            p.left = replacement;
+        } else {
+            val p = parent!!;
+            p.right = replacement;
+        }
+        this.count -= 1;
+        return true;
+    }
+
+    // 将右子树挂到左子树最大节点右侧（或返回另一方）。
+    func mergeChildren(left: BSTNode<K, V>?, right: BSTNode<K, V>?): BSTNode<K, V>? {
+        if (left == null) { return right; }
+        if (right == null) { return left; }
+        // 找 left 的最右
+        var cur = left!!;
+        while (cur.right != null) {
+            cur = cur.right!!;
+        }
+        cur.right = right;
+        return left;
+    }
+
+    // 中序遍历键（升序）。
+    // @return 新数组
+    // 复杂度：O(n)
+    // 数组形参按引用传递：walk 内 out += 扩容会写回调用方。
+    func inorderKeys(): [K] {
+        var out: [K] = [];
+        this.walk(this.root, out);
+        return out;
+    }
+
+    func walk(n: BSTNode<K, V>?, out: [K]) {
+        if (n == null) { return; }
+        this.walk(n!!.left, out);
+        out += n!!.key;
+        this.walk(n!!.right, out);
+    }
+}

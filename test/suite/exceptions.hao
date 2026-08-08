@@ -1,0 +1,193 @@
+// ============================================================
+//  多文件测试套件 · exceptions：异常 try/catch/finally/throw + 标准库 Exception
+//  覆盖：except + exception
+// ============================================================
+package main;
+
+import exception;
+
+// 自定义异常类型（必须是类，用虚表判定，故有虚方法）
+class ExMyError {
+    var message: String = "";
+    var code: Int = 0;
+    constructor(message: String, code: Int) {
+        this.message = message;
+        this.code = code;
+    }
+    func describe(): String { return $"错误({this.code}): {this.message}"; }
+}
+
+class ExSubError : ExMyError {
+    constructor() {
+        this.message = "子类错误";
+        this.code = -1;
+    }
+}
+
+// 继承标准库 exception.Exception 层次的异常
+class ExDivideByZeroError : exception.Exception {
+    constructor(message: String) {
+        this.message = message;
+    }
+}
+
+class ExNotFoundError : exception.Exception {
+    constructor(message: String) {
+        this.message = message;
+    }
+}
+
+func exFailHard(n: Int) {
+    if (n < 0) {
+        throw new ExMyError("参数为负", n);
+    }
+}
+
+func exDivide(a: Int, b: Int): Int {
+    if (b == 0) {
+        throw new ExDivideByZeroError("除数不能为零");
+    }
+    return a / b;
+}
+
+func exFind(key: String): String {
+    if (key != "hao") {
+        throw new ExNotFoundError($"未找到键: {key}");
+    }
+    return "ok";
+}
+
+func exWithReturn(): Int {
+    try {
+        return 42;
+    } finally {
+        fmt.println("finally-ran");
+    }
+}
+
+func exceptionsTest() {
+    // 1. 基本 catch
+    try {
+        throw new ExMyError("出错了", 1);
+    } catch (e: ExMyError) {
+        fmt.println(e.describe());   // 错误(1): 出错了
+    }
+
+    // 2. 子类异常匹配父类 catch
+    try {
+        throw new ExSubError();
+    } catch (e: ExMyError) {
+        fmt.println(e.code);         // -1
+        fmt.println(e.message);      // 子类错误
+    }
+
+    // 3. finally 始终执行
+    var ran = 0;
+    try {
+        ran = 1;
+    } finally {
+        ran = 99;
+    }
+    fmt.println(ran);                // 99
+
+    // 4. 异常时 finally 也执行
+    var flag = "";
+    try {
+        flag = "try";
+        throw new ExMyError("boom", 7);
+    } catch (e: ExMyError) {
+        flag = flag + "-catch";
+    } finally {
+        flag = flag + "-finally";
+    }
+    fmt.println(flag);               // try-catch-finally
+
+    // 5. return 穿过 finally
+    fmt.println(exWithReturn());     // finally-ran / 42
+
+    // 6. break 穿过 finally
+    var sum = 0;
+    var done = false;
+    var i = 0;
+    while (i < 5) {
+        try {
+            if (i == 3) { break; }
+            sum += i;
+        } finally {
+            done = true;
+        }
+        i += 1;
+    }
+    fmt.println(sum);                // 0+1+2 = 3
+    fmt.println(done);               // true
+
+    // 6b. continue 穿过 finally
+    var csum = 0;
+    var cfin = 0;
+    var j = 0;
+    while (j < 5) {
+        try {
+            j += 1;
+            if (j == 3) { continue; }
+            csum += j;
+        } finally {
+            cfin += 1;
+        }
+    }
+    fmt.println(csum);               // 1+2+4+5 = 12
+    fmt.println(cfin);               // 5
+
+    // 7. 跨函数传播并被外层捕获
+    try {
+        exFailHard(-5);
+    } catch (e: ExMyError) {
+        fmt.println(e.code);         // -5
+    }
+
+    // 8. 没有异常时 catch 不执行
+    var hit = 0;
+    try {
+        hit = 1;
+    } catch (e: ExMyError) {
+        hit = 2;
+    }
+    fmt.println(hit);                // 1
+
+    // 9. 嵌套 try：内层未匹配，外层捕获
+    try {
+        try {
+            throw new ExMyError("deep", 100);
+        } catch (e: ExSubError) {
+            fmt.println("不应到这里");
+        }
+    } catch (e: ExMyError) {
+        fmt.println(e.code);         // 100
+    }
+
+    // 10. 标准库 Exception 层次：子类被基类捕获
+    try {
+        exDivide(10, 0);
+    } catch (e: exception.Exception) {
+        fmt.println(e.getMessage());       // 除数不能为零
+        fmt.println(e.toString());         // Exception: 除数不能为零
+    }
+
+    // 11. 正常路径不进 catch
+    fmt.println(exDivide(10, 2));    // 5
+
+    // 12. 另一个子类，同样被 Exception 捕获
+    try {
+        exFind("xxx");
+    } catch (e: exception.Exception) {
+        fmt.println(e.getMessage());       // 未找到键: xxx
+    }
+
+    // 13. 基类异常本身也可直接抛
+    try {
+        throw new exception.Exception("普通异常");
+    } catch (e: exception.Exception) {
+        fmt.println(e.getMessage());       // 普通异常
+    }
+
+    fmt.println("done");                   // done
+}

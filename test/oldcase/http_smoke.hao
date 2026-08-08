@@ -1,0 +1,48 @@
+package main;
+import net;
+import thread;
+import json;
+
+func httpHandler(req: net.HttpRequest): net.HttpResponse {
+    val resp = new net.HttpResponse();
+    resp.status = 200;
+    if (req.path == "/ping") {
+        resp.body = "pong";
+    } else if (req.path == "/json") {
+        resp.body = "{\"msg\":\"hi\"}";
+    } else {
+        resp.body = "ok";
+    }
+    return resp;
+}
+
+func main() {
+    val sv = new net.HttpServer();
+    if (!sv.listen(7899)) {
+        fmt.println("listen-fail");
+        return;
+    }
+
+    val t = new thread.Thread();
+    t.start({
+        sv.serveOnce(httpHandler);
+    });
+
+    thread.sleep(80);
+    val r1 = net.Http.get("http://127.0.0.1:7899/ping");
+    fmt.println(r1.status);
+    fmt.println(r1.body);
+
+    val t2 = new thread.Thread();
+    t2.start({
+        sv.serveOnce(httpHandler);
+    });
+    thread.sleep(80);
+    val r2 = net.Http.get("http://127.0.0.1:7899/json");
+    fmt.println(r2.status);
+    fmt.println(r2.bodyJSON().getString("msg"));
+
+    t.join();
+    t2.join();
+    sv.close();
+}

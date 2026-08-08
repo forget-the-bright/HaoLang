@@ -1,0 +1,38 @@
+package main;
+
+import net;
+
+// net 网络库（v0.14.0）：TCP 回环 echo + UDP 自发自收
+// 单线程下用「先 listen -> 客户端 connect（进 backlog）-> accept」顺序
+// 绕过 accept 阻塞；UDP 绑定端口后 sendto 自己即可收到。
+func main() {
+    // ---- TCP：本机回环 echo ----
+    val sv = new net.ServerSocket();
+    if (!sv.listen(7890)) { fmt.println("listen 失败"); return; }
+
+    val client = new net.Socket();
+    if (!client.connect("127.0.0.1", 7890)) { fmt.println("connect 失败"); return; }
+    client.send("hello-net");
+
+    val c = new net.Socket();
+    if (!sv.accept(c)) { fmt.println("accept 失败"); return; }
+    val got = c.recv(100);
+    fmt.println("服务端收到: " + (got ?? "(null)"));
+    c.send("echo:" + (got ?? ""));
+
+    val back = client.recv(100);
+    fmt.println("客户端收到: " + (back ?? "(null)"));
+
+    client.close();
+    c.close();
+    sv.close();
+
+    // ---- UDP：绑定端口后自发自收 ----
+    val u = new net.UdpSocket();
+    if (!u.open()) { fmt.println("udp open 失败"); return; }
+    if (!u.bind(7891)) { fmt.println("udp bind 失败"); return; }
+    u.sendTo("127.0.0.1", 7891, "ping-udp");
+    val r = u.recvFrom(100);
+    fmt.println("UDP 收到: " + (r ?? "(null)"));
+    u.close();
+}

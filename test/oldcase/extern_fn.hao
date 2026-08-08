@@ -1,0 +1,14 @@
+package main;
+
+// extern 函数：声明外部 C 函数（运行时/系统库），无函数体。
+// = "hao_println_int" 指定 LLVM IR 中的 C 符号名；省略则用函数短名。
+extern func printInt(x: Int) = "hao_println_int";
+extern func printStr(s: String) = "hao_println_str";
+// 省略链接名：IR 符号即为函数名本身 @hao_str_len（恰好与运行时同名）
+extern func hao_str_len(s: String): Int;
+
+func main() {
+    printInt(42);                 // 直接 call @hao_println_int
+    printStr("hello extern");
+    printInt(hao_str_len("HaoLang"));   // 7
+}

@@ -1,0 +1,10 @@
+package main;
+
+// 直接调手写 C 库：hao run test/extc/extc.hao --link test/extc/extc.c
+extern func addext(a: Int, b: Int): Int = "hao_addext";
+extern func sq(x: Double): Double = "hao_sq";
+
+func main() {
+    fmt.println(addext(1, 2));   // 1+2+100 = 103
+    fmt.println(sq(3.0));        // 3*3 = 9
+}

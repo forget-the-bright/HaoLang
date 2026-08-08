@@ -1,0 +1,32 @@
+package main;
+import collections;
+
+// Set<T> 与 Queue<T> 验证（v0.9.0）
+func main() {
+    // Set<Int>
+    val s = new collections.Set<Int>();
+    s.add(1);
+    s.add(2);
+    s.add(3);
+    s.add(2);                          // 重复，忽略
+    fmt.println(s.size());             // 3
+    fmt.println(s.contains(2));        // true
+    fmt.println(s.contains(9));        // false
+    fmt.println(s.remove(2));          // true
+    fmt.println(s.contains(2));        // false
+    fmt.println(s.size());             // 2
+
+    // Queue<Int>
+    val q = new collections.Queue<Int>();
+    q.enqueue(10);
+    q.enqueue(20);
+    q.enqueue(30);
+    fmt.println(q.size());             // 3
+    fmt.println(q.peek() ?? -1);       // 10
+    fmt.println(q.dequeue() ?? -1);    // 10
+    fmt.println(q.dequeue() ?? -1);    // 20
+    fmt.println(q.isEmpty());          // false
+    fmt.println(q.dequeue() ?? -1);    // 30
+    fmt.println(q.isEmpty());          // true
+    fmt.println(q.dequeue() ?? -1);    // -1（空队列）
+}

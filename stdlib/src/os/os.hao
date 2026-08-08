@@ -1,0 +1,48 @@
+// HaoLang 标准库 —— os 系统库（v0.12.0；v0.23.0 并入 path/io）
+// ----------------------------------------------
+//  文件读写 / 路径 / 环境变量 / 进程。基于 C 标准库，跨平台。
+//
+//  用法：
+//      import os;
+//      os.writeFile("a.txt", "hello");
+//      os.readText("a.txt");           // 文本别名
+//      os.Path.join("a", "b");         // 路径工具（同包类）
+//
+//  说明：文件路径相对当前工作目录（C 的 fopen 语义）。
+//  readFile / getenv 可空——失败或不存在返回 null。
+package os;
+
+// 读取文件全部内容；失败返回 null
+public extern func readFile(path: String): String? = "hao_os_readfile";
+
+// 写文件（覆盖）；成功返回 true，失败返回 false
+public extern func writeFile(path: String, content: String): Bool = "hao_os_writefile";
+
+// 文件是否存在
+public extern func exists(path: String): Bool = "hao_os_exists";
+
+// 读取环境变量；不存在返回 null
+public extern func getenv(name: String): String? = "hao_os_getenv";
+
+// 执行系统命令，返回命令退出码
+public extern func system(cmd: String): Int = "hao_os_system";
+
+// 删除文件；成功返回 true，失败返回 false
+public extern func remove(path: String): Bool = "hao_os_remove";
+
+// ---- 文本 I/O 别名（原独立 io 包，已并入）----
+func readText(path: String): String? {
+    return readFile(path);
+}
+
+func writeText(path: String, content: String): Bool {
+    return writeFile(path, content);
+}
+
+func appendText(path: String, content: String): Bool {
+    val old = readFile(path);
+    if (old == null) {
+        return writeFile(path, content);
+    }
+    return writeFile(path, old!! + content);
+}

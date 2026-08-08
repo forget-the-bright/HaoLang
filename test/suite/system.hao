@@ -1,0 +1,69 @@
+// ============================================================
+//  多文件测试套件 · system：系统库 os / sync / net
+//  覆盖：os + sync + net
+//  （gc 压力测试已移到 test/oldcase/gc.hao，做 GC 特性时再加回）
+// ============================================================
+package main;
+
+import os;
+import sync;
+import net;
+
+func systemTest() {
+    // ---------- os：文件读写 / 环境变量 / 删除 ----------
+    os.writeFile("test/os_tmp.txt", "你好 Hao!\n第二行\n");
+    val content = os.readFile("test/os_tmp.txt") ?? "(读取失败)";
+    fmt.println(content);
+    fmt.println(os.exists("test/os_tmp.txt"));      // true
+    fmt.println(os.exists("不存在_xyz.txt"));        // false
+    fmt.println(os.getenv("PATH") != null);         // true
+    fmt.println(os.getenv("不存在的环境变量_XYZ") == null);   // true
+    fmt.println(os.remove("test/os_tmp.txt"));      // true
+    fmt.println(os.exists("test/os_tmp.txt"));      // false
+
+    // ---------- sync：互斥锁 + 原子操作 ----------
+    val m = new sync.Mutex();
+    m.lock();
+    fmt.println("locked");
+    m.unlock();
+    fmt.println("unlocked");
+
+    var counter: Long? = null;
+    counter = 0;
+    fmt.println(sync.atomicAdd(counter, 5));      // 5
+    fmt.println(sync.atomicFetchAdd(counter, 3)); // 5
+    fmt.println(sync.atomicExchange(counter, 100)); // 8
+    fmt.println(sync.atomicCompareExchange(counter, 100, 200)); // true
+    fmt.println(sync.atomicAdd(counter, 0));      // 200
+    fmt.println(sync.atomicCompareExchange(counter, 100, 999)); // false
+    fmt.println(sync.atomicAdd(counter, 0));      // 200
+
+    // ---------- net：TCP 回环 echo + UDP 自发自收 ----------
+    val sv = new net.ServerSocket();
+    if (!sv.listen(7890)) { fmt.println("listen 失败"); return; }
+
+    val client = new net.Socket();
+    if (!client.connect("127.0.0.1", 7890)) { fmt.println("connect 失败"); return; }
+    client.send("hello-net");
+
+    val cc = new net.Socket();
+    if (!sv.accept(cc)) { fmt.println("accept 失败"); return; }
+    val got = cc.recv(100);
+    fmt.println("服务端收到: " + (got ?? "(null)"));
+    cc.send("echo:" + (got ?? ""));
+
+    val back = client.recv(100);
+    fmt.println("客户端收到: " + (back ?? "(null)"));
+
+    client.close();
+    cc.close();
+    sv.close();
+
+    val u = new net.UdpSocket();
+    if (!u.open()) { fmt.println("udp open 失败"); return; }
+    if (!u.bind(7891)) { fmt.println("udp bind 失败"); return; }
+    u.sendTo("127.0.0.1", 7891, "ping-udp");
+    val r = u.recvFrom(100);
+    fmt.println("UDP 收到: " + (r ?? "(null)"));
+    u.close();
+}

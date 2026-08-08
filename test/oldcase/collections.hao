@@ -1,0 +1,36 @@
+package main;
+
+import collections;
+
+func main() {
+    // List<T> 来自标准库 collections 包
+    val list = new collections.List<Int>();
+    list.add(10);
+    list.add(20);
+    list.add(30);
+    fmt.println(list.size());      // 3
+    fmt.println(list.get(0));     // 10
+    fmt.println(list.get(2));     // 30
+
+    list.set(1, 99);
+    fmt.println(list.get(1));     // 99
+
+    val removed = list.removeAt(0);
+    fmt.println(removed);         // 10
+    fmt.println(list.size());     // 2
+    fmt.println(list.get(0));     // 99
+
+    // for-in 遍历底层数组
+    var sum = 0;
+    for (x in list.toArray()) {
+        sum += x;
+    }
+    fmt.println(sum);             // 99 + 30 = 129
+
+    // 字符串列表
+    val names = new collections.List<String>();
+    names.add("甲");
+    names.add("乙");
+    fmt.println(names.size());    // 2
+    fmt.println(names.get(1));    // 乙
+}

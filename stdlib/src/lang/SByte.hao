@@ -1,0 +1,67 @@
+// ============================================================
+//  lang.SByte —— 基础类型 SByte（i8）的包装类
+//  标注包装写 lang.SByte；裸名 SByte = 内建
+// ============================================================
+package lang;
+
+class SByte {
+    var value: SByte;
+
+    static val SIZE: Int = 8;
+    static val BYTES: Int = 1;
+    static val MAX_VALUE: SByte = 127;
+    static val MIN_VALUE: SByte = 0 - 128;
+
+    constructor(v: SByte) {
+        this.value = v;
+    }
+
+    static func valueOf(v: SByte): lang.SByte {
+        return new lang.SByte(v);
+    }
+
+    func sbyteValue(): SByte {
+        return this.value;
+    }
+
+    func intValue(): Int {
+        return this.value;
+    }
+
+    static func parse(s: String): SByte? {
+        val n = Integer.parse(s);
+        if (n == null) { return null; }
+        val v = n!!;
+        if (v < 0 - 128 || v > 127) { return null; }
+        val b: SByte = v;
+        return b;
+    }
+
+    static func toStr(v: SByte): String {
+        return hao_int_to_str(v);
+    }
+
+    static func compare(a: SByte, b: SByte): Int {
+        if (a < b) { return -1; }
+        if (a > b) { return 1; }
+        return 0;
+    }
+
+    func compareTo(other: lang.SByte): Int {
+        return SByte.compare(this.value, other.value);
+    }
+
+    override func hashCode(): Int {
+        return this.value;
+    }
+
+    override func equals(o: Object): Bool {
+        if (!(o is lang.SByte)) { return false; }
+        val other = o as lang.SByte;
+        return this.value == other.value;
+    }
+
+    override func toString(): String {
+        return hao_int_to_str(this.value);
+    }
+}

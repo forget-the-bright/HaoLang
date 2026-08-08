@@ -1,0 +1,12 @@
+{
+  "project": {
+    "name": "depgraph",
+    "module": "example/depgraph",
+    "version": "0.1.0",
+    "main": "main.hao"
+  },
+  "dependencies": {
+    "example.com/demo/midpkg": "^1.0.0"
+  },
+  "registry": { "includeDefault": false }
+}

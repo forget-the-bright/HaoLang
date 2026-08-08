@@ -1,0 +1,15 @@
+// ============================================================
+//  corp.web.admin：嵌套管理端控制器
+// ============================================================
+package corp.web.admin;
+
+import net.*;
+
+@Controller
+@RequestMapping(path = "/corp/admin")
+class CorpAdminController {
+    @GetMapping(path = "/ping")
+    func ping(req: HttpRequest): HttpResponse {
+        return HttpResponse.of(200, "corp-admin");
+    }
+}

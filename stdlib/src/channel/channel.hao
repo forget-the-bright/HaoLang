@@ -1,0 +1,89 @@
+package channel;
+
+// ============================================================
+//  channel —— 跨线程消息通道（v0.36；v0.37.1 句柄盒 + recvStr 可空）
+// ------------------------------------------------------------
+//  载荷为 Long（整型位型或堆指针的 ptrtoint）。队列中的堆指针挂 GC 根。
+//  原生句柄存 Long? 盒：GC 回收时 finalizer 排空未读并释放 HaoChan。
+//  capacity=0：无缓冲会合；>0：环形缓冲。
+//  与语言关键字 haoroutine / select 配套；关闭后 send 失败；recv 在排空后返回 0。
+//  recvStr：关闭且空时返回 null（String?）；勿再假装非空 String。
+//  select { case x = ch.recv(): ... case ch.send(v): ... default: ... }
+//  trySend/tryRecv：非阻塞；select 内部亦走 try_* 轮询（无 default 时短 sleep）。
+// ============================================================
+
+extern func hao_chan_make(p: Long?, capacity: Int): Bool = "hao_chan_make";
+extern func hao_chan_send(p: Long?, bits: Long): Int = "hao_chan_send";
+extern func hao_chan_recv(p: Long?): Long = "hao_chan_recv";
+extern func hao_chan_try_send(p: Long?, bits: Long): Int = "hao_chan_try_send";
+extern func hao_chan_try_recv(p: Long?, out: Long?): Int = "hao_chan_try_recv";
+extern func hao_chan_close(p: Long?): Unit = "hao_chan_close";
+extern func hao_chan_str_to_i64(p: String): Long = "hao_reflect_ptrtoint";
+extern func hao_chan_i64_to_str(v: Long): String? = "hao_reflect_inttoptr";
+
+class Channel {
+    // 原生 HaoChan* 存于装箱 Long?；finalizer 负责撤根与 free
+    var h: Long? = null;
+
+    // 发送 Long 载荷；已关闭返回 false。可能阻塞。
+    // @param bits  整型位型或堆指针的 ptrtoint
+    // @return      true=入队/会合成功；false=通道已关闭
+    func send(bits: Long): Bool {
+        return hao_chan_send(this.h, bits) == 0;
+    }
+
+    // 接收 Long 载荷；关闭且空时返回 0。可能阻塞。
+    // @return 载荷；关闭排空后为 0（与「发送了 0」不可区分，属 Long 通道语义）
+    func recv(): Long {
+        return hao_chan_recv(this.h);
+    }
+
+    func sendInt(v: Int): Bool { return this.send(v); }
+    func recvInt(): Int { return this.recv(); }
+
+    // 非阻塞发送。缓冲满 / 无缓冲槽已占用 / 已关闭 → false。
+    // 无缓冲且槽空：占槽即成功（select 轮询语义；载荷须随后被 recv/tryRecv 取走）。
+    // @return true=已入队或已占会合槽；false=此刻不可发送
+    func trySend(bits: Long): Bool {
+        return hao_chan_try_send(this.h, bits) == 0;
+    }
+    func trySendInt(v: Int): Bool { return this.trySend(v); }
+    func trySendStr(v: String): Bool {
+        return this.trySend(hao_chan_str_to_i64(v));
+    }
+
+    // 非阻塞接收；空或关闭且无数据时返回 false。
+    // @param out  成功时写入载荷（Long? 盒）
+    // @return     true=读到值；false=此刻无数据
+    func tryRecv(out: Long?): Bool {
+        return hao_chan_try_recv(this.h, out) != 0;
+    }
+
+    // 发送非空字符串（按指针入队并挂 GC 根）。
+    func sendStr(v: String): Bool {
+        return this.send(hao_chan_str_to_i64(v));
+    }
+
+    // 接收字符串；关闭且缓冲已空时返回 null。
+    // @return 非空 String，或 null（勿当非空解引用）
+    func recvStr(): String? {
+        return hao_chan_i64_to_str(this.recv());
+    }
+
+    // 关闭通道：唤醒等待方；未读载荷仍可 recv，直至排空。
+    // GC 回收句柄盒时会 finalizer 排空剩余根并释放原生结构。
+    func close() {
+        hao_chan_close(this.h);
+    }
+}
+
+// 创建通道。capacity=0 无缓冲；>0 为缓冲容量（上限由 runtime 夹紧）。
+// 每次返回新 Channel（新 Long? 盒）；禁止对同一句柄盒重复 make（runtime 拒绝，防 UAF）。
+// @param capacity  缓冲长度；负数按 0
+// @return          已挂 finalizer 的 Channel
+func make(capacity: Int): Channel {
+    val c = new Channel();
+    c.h = 0;
+    hao_chan_make(c.h, capacity);
+    return c;
+}

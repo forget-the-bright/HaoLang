@@ -1,0 +1,74 @@
+package main;
+
+// extends/implements 关键字：显式区分继承与接口实现（v0.17.0）
+// 旧写法 `class Dog : Animal, Shape` 仍兼容（见 inherit.hao）。
+
+interface Shape {
+    func area(): Double;
+}
+
+interface Armed {
+    func fire(): String;
+}
+
+class Animal {
+    var name: String = "";
+    constructor(n: String) { this.name = n; }
+    func speak(): String { return this.name + ": ..."; }
+}
+
+// extends + implements（新语法）
+class Dog extends Animal implements Shape, Armed {
+    var breed: String = "土狗";
+    constructor(n: String) {
+        this.name = n;
+    }
+    override func speak(): String { return "汪汪"; }
+    override func area(): Double { return 0.5; }
+    override func fire(): String { return "开火"; }
+}
+
+// 仅 extends（无接口）
+class Cat extends Animal {
+    constructor(n: String) { this.name = n; }
+    override func speak(): String { return "喵喵"; }
+}
+
+// 仅 implements（无基类，默认继承 Object）
+class Robot implements Shape {
+    override func area(): Double { return 9.0; }
+}
+
+// extends + implements 顺序：先 extends 后 implements
+class Bird extends Animal implements Shape {
+    constructor(n: String) { this.name = n; }
+    override func speak(): String { return "叽叽"; }
+    override func area(): Double { return 0.1; }
+}
+
+func makeArea(s: Shape): Double { return s.area(); }
+
+func main() {
+    val d = new Dog("旺财");
+    fmt.println(d.name);       // 旺财
+    fmt.println(d.breed);      // 土狗
+    fmt.println(d.speak());    // 汪汪
+    fmt.println(d.area());     // 0.5
+    fmt.println(d.fire());     // 开火
+
+    val c = new Cat("咪咪");
+    fmt.println(c.speak());    // 喵喵
+
+    val r = new Robot();
+    fmt.println(r.area());     // 9
+
+    val b = new Bird("小云");
+    fmt.println(b.speak());    // 叽叽
+    fmt.println(b.area());     // 0.1
+
+    // 多态：父类型 / 接口引用
+    val s: Shape = d;
+    fmt.println(s.area());     // 0.5
+    fmt.println(makeArea(r));  // 9
+    fmt.println(makeArea(d));  // 0.5
+}

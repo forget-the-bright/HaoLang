@@ -1,0 +1,77 @@
+// ============================================================
+//  多文件测试套件 · regex（v0.28）
+// ============================================================
+package main;
+
+import regex;
+import exception;
+
+extern func gcFinalizerSets(): Long = "hao_gc_finalizer_sets";
+
+func regexTest() {
+    // matches 全串
+    fmt.println(regex.Pattern.matches("hello", "hello"));     // true
+    fmt.println(regex.Pattern.matches("hello", "hello!"));    // false
+    fmt.println(regex.Pattern.matches("a+", "aaa"));          // true
+    fmt.println(regex.Pattern.matches("\\d+", "12345"));      // true
+    fmt.println(regex.Pattern.matches("[a-z]+", "xyz"));      // true
+
+    // find + 捕获组
+    val p = regex.Pattern.compile("a(\\d+)b");
+    val m = p.matcher("xxa42byy");
+    fmt.println(m.find());                                    // true
+    fmt.println(m.group());                                   // a42b
+    fmt.println(m.groupAt(1));                                // 42
+
+    // 多 Matcher 独立捕获（不串写）
+    val pShare = regex.Pattern.compile("(\\d+)-(\\d+)");
+    val m1 = pShare.matcher("1-2 x 9-8");
+    val m2 = pShare.matcher("1-2 x 9-8");
+    fmt.println(m1.find());                                   // true
+    val g1a = m1.groupAt(1);
+    fmt.println(m2.find());                                   // true
+    fmt.println(m2.find());                                   // true（推进到 9-8）
+    fmt.println(m1.groupAt(1) == g1a && g1a == "1");          // true
+    fmt.println(m2.groupAt(1));                               // 9
+
+    // 同盒 remake 拒绝；close 后可再编
+    val pRem = regex.Pattern.compile("a+");
+    fmt.println(!pRem.tryRemake("b+"));                       // true（拒绝）
+    pRem.close();
+    fmt.println(pRem.tryRemake("b+"));                        // true
+    fmt.println(pRem.matchFull("bbb"));                       // true
+    pRem.close();
+
+    // replaceAll / split
+    val p2 = regex.Pattern.compile(",");
+    fmt.println(p2.replaceAll("a,b,c", "|"));                 // a|b|c
+    val parts = p2.split("a,b,c");
+    fmt.println(parts.length);                                // 3
+    fmt.println(parts[0]);                                    // a
+    fmt.println(parts[2]);                                    // c
+
+    // 交替 / 可选
+    fmt.println(regex.Pattern.matches("foo|bar", "bar"));     // true
+    fmt.println(regex.Pattern.matches("colou?r", "color"));   // true
+    fmt.println(regex.Pattern.matches("colou?r", "colour"));  // true
+
+    // 非法模式抛异常
+    try {
+        regex.Pattern.compile("(");
+        fmt.println("no-throw");
+    } catch (e: exception.Exception) {
+        fmt.println("bad-re");                                // bad-re
+    }
+
+    // 将就债 C：compile 挂接 finalizer；close 幂等（clear 后不再二次释放）
+    val sets0 = gcFinalizerSets();
+    // 灾难性回溯：步数上限内须失败而非挂死
+    fmt.println(regex.Pattern.matches("(a+)+$", "aaaaaaaaaaaaaaaaaaaaX")); // false
+
+    val pFin = regex.Pattern.compile("z+");
+    fmt.println(gcFinalizerSets() > sets0);                   // true
+    fmt.println(pFin.matchFull("zzz"));                       // true
+    pFin.close();
+    pFin.close();
+    fmt.println(pFin.matchFull("zzz"));                       // false（已释放）
+}

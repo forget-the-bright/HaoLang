@@ -1,0 +1,10 @@
+package main;
+
+// Windows 系统库示例：链接 ws2_32，调用 ntohs（网络字节序转换）。
+// hao run test/winsys.hao -lws2_32
+// 0x1234（大端） -> 0x3412 = 13330（小端）
+extern func ntohs(x: Int): Int = "ntohs" @link("ws2_32");
+
+func main() {
+    fmt.println(ntohs(0x1234));   // 13330
+}

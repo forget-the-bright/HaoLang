@@ -1,0 +1,16 @@
+// ============================================================
+//  可复用多包扫描夹具 · corp.marker：注解 + 插件接口
+// ============================================================
+package corp.marker;
+
+@interface Service {
+    val value: String = "";
+}
+
+@interface Component {
+    val value: String = "";
+}
+
+public interface Plugin {
+    func pluginId(): String;
+}

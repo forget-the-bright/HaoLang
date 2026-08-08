@@ -1,0 +1,37 @@
+// Probe: prove static field can be UAF'd if not a GC root.
+package main;
+
+import gc;
+
+class Probe {
+    static var label: String = "alive-static";
+}
+
+class Junk {
+    var s: String;
+    constructor(s: String) { this.s = s; }
+}
+
+func ensure() {
+    val n = Probe.label.length;
+    if (n < 0) { fmt.println("x"); }
+}
+
+func main() {
+    ensure();
+    val before = gc.GC.collectCount();
+    gc.GC.collect();
+    fmt.println(gc.GC.collectCount() > before);
+
+    // Reuse freed GC blocks so a swept @Probe.label becomes real corruption
+    var i = 0;
+    while (i < 5000) {
+        val j = new Junk("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+        if (j.s.length < 0) { i = i; }
+        i += 1;
+    }
+
+    // If label was swept, this is UAF (crash or wrong bytes)
+    fmt.println(Probe.label);
+    fmt.println(Probe.label == "alive-static");
+}

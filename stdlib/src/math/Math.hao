@@ -1,0 +1,311 @@
+// ============================================================
+//  math —— 数学库（v0.22.0；v0.23.0 修正：允许 class Math）
+// ------------------------------------------------------------
+//  用法：import math;
+//      math.abs(-3) / math.sqrt(2.0) / math.pi()
+//      math.Math.PI / math.Math.E     （类静态常量，推荐）
+// ============================================================
+package math;
+
+class Math {
+    static val PI: Double = 3.141592653589793;
+    static val E: Double = 2.718281828459045;
+    static val TAU: Double = 6.283185307179586;
+    static val LN2: Double = 0.6931471805599453;
+}
+
+func pi(): Double { return Math.PI; }
+func e(): Double { return Math.E; }
+func tau(): Double { return Math.TAU; }
+func ln2(): Double { return Math.LN2; }
+
+func abs(x: Int): Int {
+    // Java 语义：MIN_VALUE 取反溢出，原样返回
+    if (x == (0 - 2147483647 - 1)) { return x; }
+    if (x < 0) { return 0 - x; }
+    return x;
+}
+
+func min(a: Int, b: Int): Int {
+    if (a < b) { return a; }
+    return b;
+}
+
+func max(a: Int, b: Int): Int {
+    if (a > b) { return a; }
+    return b;
+}
+
+func clamp(x: Int, lo: Int, hi: Int): Int {
+    return min(max(x, lo), hi);
+}
+
+func sign(x: Int): Int {
+    if (x > 0) { return 1; }
+    if (x < 0) { return -1; }
+    return 0;
+}
+
+func isEven(x: Int): Bool { return x % 2 == 0; }
+func isOdd(x: Int): Bool { return x % 2 != 0; }
+
+func gcd(a: Int, b: Int): Int {
+    var x = abs(a);
+    var y = abs(b);
+    while (y != 0) {
+        val t = y;
+        y = x % y;
+        x = t;
+    }
+    return x;
+}
+
+// Int 乘法溢出 → 0（与 pow 负指数 / factorial 负参约定一致）
+func lcm(a: Int, b: Int): Int {
+    if (a == 0 || b == 0) { return 0; }
+    val g = gcd(a, b);
+    val aa = abs(a / g);
+    val bb = abs(b);
+    val la: Long = aa;
+    val lb: Long = bb;
+    val p = la * lb;
+    val maxv: Long = 2147483647;
+    if (p > maxv) { return 0; }
+    var r: Int = 0;
+    r = p;
+    return r;
+}
+
+func pow(base: Int, exp: Int): Int {
+    if (exp < 0) { return 0; }
+    var r: Long = 1;
+    var b: Long = base;
+    var e = exp;
+    val maxv: Long = 2147483647;
+    val minv: Long = 0 - 2147483647 - 1;
+    while (e > 0) {
+        if (e % 2 == 1) {
+            r = r * b;
+            if (r > maxv || r < minv) { return 0; }
+        }
+        e = e / 2;
+        if (e == 0) { break; }
+        b = b * b;
+        if (b > maxv || b < minv) { return 0; }
+    }
+    var out: Int = 0;
+    out = r;
+    return out;
+}
+
+func factorial(n: Int): Int {
+    if (n < 0) { return 0; }
+    // 13! 已超出 Int；更大 n 直接拒绝，避免无意义连乘
+    if (n > 12) { return 0; }
+    var r: Int = 1;
+    var i: Int = 2;
+    while (i <= n) {
+        r = r * i;
+        i += 1;
+    }
+    return r;
+}
+
+func abs(x: Double): Double {
+    if (x < 0.0) { return 0.0 - x; }
+    return x;
+}
+
+func min(a: Double, b: Double): Double {
+    if (a < b) { return a; }
+    return b;
+}
+
+func max(a: Double, b: Double): Double {
+    if (a > b) { return a; }
+    return b;
+}
+
+func clamp(x: Double, lo: Double, hi: Double): Double {
+    return min(max(x, lo), hi);
+}
+
+func sign(x: Double): Double {
+    if (x > 0.0) { return 1.0; }
+    if (x < 0.0) { return -1.0; }
+    return 0.0;
+}
+
+func sqrt(x: Double): Double {
+    if (x <= 0.0) { return 0.0; }
+    var g = x;
+    if (g < 1.0) { g = 1.0; }
+    var i = 0;
+    while (i < 40) {
+        g = 0.5 * (g + x / g);
+        i += 1;
+    }
+    return g;
+}
+
+func cbrt(x: Double): Double {
+    if (x == 0.0) { return 0.0; }
+    var g = abs(x);
+    if (g < 1.0) { g = 1.0; }
+    var i = 0;
+    while (i < 40) {
+        g = (2.0 * g + abs(x) / (g * g)) / 3.0;
+        i += 1;
+    }
+    if (x < 0.0) { return 0.0 - g; }
+    return g;
+}
+
+func hypot(a: Double, b: Double): Double {
+    return sqrt(a * a + b * b);
+}
+
+func pow(base: Double, exp: Int): Double {
+    if (exp == 0) { return 1.0; }
+    var n = exp;
+    var inv = false;
+    if (n < 0) { inv = true; n = 0 - n; }
+    var r: Double = 1.0;
+    var b = base;
+    while (n > 0) {
+        if (n % 2 == 1) { r = r * b; }
+        b = b * b;
+        n = n / 2;
+    }
+    if (inv) { return 1.0 / r; }
+    return r;
+}
+
+func trunc(x: Double): Double {
+    if (x >= 0.0) {
+        var n: Double = 0.0;
+        while (n + 1.0 <= x) { n = n + 1.0; }
+        return n;
+    }
+    var n: Double = 0.0;
+    while (n - 1.0 >= x) { n = n - 1.0; }
+    return n;
+}
+
+func floor(x: Double): Double {
+    val t = trunc(x);
+    if (x >= 0.0 || t == x) { return t; }
+    return t - 1.0;
+}
+
+func ceil(x: Double): Double {
+    val t = trunc(x);
+    if (x <= 0.0 || t == x) { return t; }
+    return t + 1.0;
+}
+
+func round(x: Double): Double {
+    if (x >= 0.0) { return floor(x + 0.5); }
+    return ceil(x - 0.5);
+}
+
+func normAngle(x: Double): Double {
+    var a = x;
+    val t = tau();
+    val p = pi();
+    while (a > t) { a = a - t; }
+    while (a < 0.0 - t) { a = a + t; }
+    if (a > p) { a = a - t; }
+    if (a < 0.0 - p) { a = a + t; }
+    return a;
+}
+
+func sin(x: Double): Double {
+    val a = normAngle(x);
+    var term = a;
+    var sum = a;
+    var k: Int = 1;
+    while (k < 12) {
+        val f1 = (2 * k) * (2 * k + 1) + 0.0;
+        term = 0.0 - term * a * a / f1;
+        sum = sum + term;
+        k += 1;
+    }
+    return sum;
+}
+
+func cos(x: Double): Double {
+    val a = normAngle(x);
+    var term: Double = 1.0;
+    var sum: Double = 1.0;
+    var k: Int = 1;
+    while (k < 12) {
+        val f1 = (2 * k - 1) * (2 * k) + 0.0;
+        term = 0.0 - term * a * a / f1;
+        sum = sum + term;
+        k += 1;
+    }
+    return sum;
+}
+
+func tan(x: Double): Double {
+    val c = cos(x);
+    if (c == 0.0) { return 0.0; }
+    return sin(x) / c;
+}
+
+func exp(x: Double): Double {
+    var n: Int = 0;
+    var f = x;
+    while (f > 1.0) { f = f - 1.0; n += 1; }
+    while (f < -1.0) { f = f + 1.0; n -= 1; }
+    var term: Double = 1.0;
+    var sum: Double = 1.0;
+    var k: Int = 1;
+    while (k < 20) {
+        term = term * f / (k + 0.0);
+        sum = sum + term;
+        k += 1;
+    }
+    val ee = e();
+    if (n > 0) {
+        var i = 0;
+        while (i < n) { sum = sum * ee; i += 1; }
+    } else if (n < 0) {
+        var i = 0;
+        while (i < 0 - n) { sum = sum / ee; i += 1; }
+    }
+    return sum;
+}
+
+func log(x: Double): Double {
+    if (x <= 0.0) { return 0.0; }
+    var v = x;
+    var adj: Double = 0.0;
+    val l2 = ln2();
+    while (v > 2.0) { v = v / 2.0; adj = adj + l2; }
+    while (v < 0.5) { v = v * 2.0; adj = adj - l2; }
+    val y = (v - 1.0) / (v + 1.0);
+    val y2 = y * y;
+    var term = y;
+    var sum = y;
+    var k: Int = 1;
+    while (k < 20) {
+        term = term * y2;
+        sum = sum + term / (2 * k + 1 + 0.0);
+        k += 1;
+    }
+    return adj + 2.0 * sum;
+}
+
+func log10(x: Double): Double {
+    return log(x) / log(10.0);
+}
+
+func pow(base: Double, exponent: Double): Double {
+    if (base <= 0.0) {
+        if (base == 0.0 && exponent > 0.0) { return 0.0; }
+        return 0.0;
+    }
+    return exp(exponent * log(base));
+}

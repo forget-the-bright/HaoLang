@@ -1,0 +1,60 @@
+// ============================================================
+//  lang.Integer —— 基础类型 Int（i32）的包装类
+// ------------------------------------------------------------
+//  三种形态：内建 Int / 可空 Int?（hao_box_i32）/ 对象 Integer
+//  无隐式自动装箱；需要 Object 时显式 Integer.valueOf(n)
+// ============================================================
+package lang;
+
+class Integer {
+    var value: Int;
+
+    static val SIZE: Int = 32;
+    static val BYTES: Int = 4;
+    static val MAX_VALUE: Int = 2147483647;
+    static val MIN_VALUE: Int = 0 - 2147483647 - 1;
+
+    constructor(v: Int) {
+        this.value = v;
+    }
+
+    static func valueOf(v: Int): Integer {
+        return new Integer(v);
+    }
+
+    func intValue(): Int {
+        return this.value;
+    }
+
+    static func parse(s: String): Int? {
+        return hao_parse_int(s);
+    }
+
+    static func toStr(v: Int): String {
+        return hao_int_to_str(v);
+    }
+
+    static func compare(a: Int, b: Int): Int {
+        if (a < b) { return -1; }
+        if (a > b) { return 1; }
+        return 0;
+    }
+
+    func compareTo(other: Integer): Int {
+        return Integer.compare(this.value, other.value);
+    }
+
+    override func hashCode(): Int {
+        return this.value;
+    }
+
+    override func equals(o: Object): Bool {
+        if (!(o is Integer)) { return false; }
+        val other = o as Integer;
+        return this.value == other.value;
+    }
+
+    override func toString(): String {
+        return hao_int_to_str(this.value);
+    }
+}

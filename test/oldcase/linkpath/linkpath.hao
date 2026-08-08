@@ -1,0 +1,12 @@
+package main;
+
+// @link 路径形态（v0.11.0）：直接引用 C 源码文件（相对当前目录），等价 --link。
+// 含路径分隔符 → 视为文件路径，找到即引用、找不到报错。
+// 复用 test/extc/extc.c 提供的两个 C 函数。
+extern func addext(a: Int, b: Int): Int = "hao_addext" @link("test/extc/extc.c");
+extern func sq(x: Double): Double = "hao_sq";
+
+func main() {
+    fmt.println(addext(1, 2));   // 1+2+100 = 103
+    fmt.println(sq(3.0));        // 9
+}

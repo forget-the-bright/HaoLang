@@ -1,0 +1,65 @@
+// ============================================================
+//  多文件测试套件 · byte：语言级 Byte + 紧凑 [Byte]（v0.24.0）
+// ============================================================
+package main;
+
+import collections;
+
+func byteTest() {
+    // ---------- 标量：Int → Byte trunc，Byte → Int zext ----------
+    var b: Byte = 42;
+    fmt.println(b);              // 42（经 println Int 重载）
+    val asInt: Int = b;
+    fmt.println(asInt);          // 42
+
+    var z: Byte = 0;
+    var hi: Byte = 255;
+    fmt.println(z);              // 0
+    fmt.println(hi);             // 255
+    var wrapSrc: Byte = 0;
+    wrapSrc = 256;
+    fmt.println(wrapSrc);           // 0（Int→Byte trunc）
+
+    // ---------- 运算：Byte 提升为 Int ----------
+    fmt.println(b + 8);          // 50
+    fmt.println(hi & 15);        // 15
+    fmt.println(b << 1);         // 84
+
+    // ---------- 紧凑 [Byte] 字面量 / 下标 / 赋值 ----------
+    var buf: [Byte] = [0, 1, 255, 128];
+    fmt.println(buf.length);     // 4
+    fmt.println(buf[0]);         // 0
+    fmt.println(buf[2]);         // 255
+    buf[1] = 200;
+    fmt.println(buf[1]);         // 200
+    buf[0] += 10;
+    fmt.println(buf[0]);         // 10
+
+    // ---------- push / pop ----------
+    buf += 77;
+    fmt.println(buf.length);     // 5
+    fmt.println(buf[4]);         // 77
+    val last = buf.pop();
+    fmt.println(last);           // 77
+    fmt.println(buf.length);     // 4
+
+    // ---------- for-in（含 0 与 255）----------
+    var sum: Int = 0;
+    for (x in buf) {
+        sum = sum + x;
+    }
+    // 10 + 200 + 255 + 128 = 593
+    fmt.println(sum);            // 593
+
+    // ---------- 与 [Int] 并存 ----------
+    val ints = [1, 2, 3];
+    fmt.println(ints.length);    // 3
+    fmt.println(ints[1]);        // 2
+
+    // ---------- List<Byte> 冒烟 ----------
+    val list = new collections.List<Byte>();
+    list.add(1);
+    list.add(255);
+    fmt.println(list.size());    // 2
+    fmt.println(list.get(1));    // 255
+}

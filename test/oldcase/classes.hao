@@ -1,0 +1,149 @@
+package main;
+
+class Point {
+    var x: Int = 0;
+    var y: Int = 0;
+
+    constructor(x: Int, y: Int) {
+        this.x = x;
+        this.y = y;
+    }
+
+    func describe(): String {
+        return $"Point({this.x}, {this.y})";
+    }
+
+    func sum(): Int {
+        return this.x + this.y;
+    }
+
+    func move(dx: Int, dy: Int) {
+        this.x += dx;
+        this.y += dy;
+    }
+
+    func scale(k: Int): Point {
+        return new Point(this.x * k, this.y * k);
+    }
+}
+
+class Counter {
+    var n: Int = 100;          // 字段默认值
+
+    func inc() {
+        this.n += 1;
+    }
+
+    func get(): Int {
+        return this.n;
+    }
+}
+
+class Person {
+    var name: String = "";
+    var age: Int = 0;
+    var score: Double = 0.0;
+
+    constructor(name: String, age: Int) {
+        this.name = name;
+        this.age = age;
+    }
+
+    func greet(): String {
+        return $"我是 {this.name}，{this.age} 岁";
+    }
+
+    func isAdult(): Bool {
+        return this.age >= 18;
+    }
+}
+
+// 无构造函数的类
+class Box {
+    var value: Int = 42;
+
+    func get(): Int {
+        return this.value;
+    }
+}
+
+func main() {
+    // ---------- 构造与方法调用 ----------
+    val p = new Point(3, 4);
+    fmt.println(p.describe());       // Point(3, 4)
+    fmt.println(p.sum());            // 7
+
+    // ---------- 字段直接读取 ----------
+    fmt.println(p.x);                // 3
+    fmt.println(p.y);                // 4
+
+    // ---------- 字段赋值 ----------
+    p.x = 10;
+    fmt.println(p.x);                // 10
+    p.y += 6;
+    fmt.println(p.y);                // 10
+    fmt.println(p.sum());            // 20
+
+    // ---------- 方法修改状态 ----------
+    val q = new Point(1, 1);
+    q.move(2, 3);
+    fmt.println(q.describe());       // Point(3, 4)
+
+    // ---------- 方法返回对象 ----------
+    val r = q.scale(10);
+    fmt.println(r.describe());       // Point(30, 40)
+
+    // ---------- 字段默认值 ----------
+    val c = new Counter();
+    fmt.println(c.get());            // 100
+    c.inc();
+    c.inc();
+    fmt.println(c.get());            // 102
+
+    // ---------- 无构造函数的类 ----------
+    val b = new Box();
+    fmt.println(b.get());            // 42
+
+    // ---------- 多字段与不同类型 ----------
+    val alice = new Person("爱丽丝", 20);
+    fmt.println(alice.greet());
+    fmt.println(alice.isAdult());    // true
+    alice.score = 95.5;
+    fmt.println(alice.score);        // 95.5
+
+    val kid = new Person("小明", 10);
+    fmt.println(kid.greet());
+    fmt.println(kid.isAdult());      // false
+
+    // ---------- 对象数组 ----------
+    val pts = [new Point(1, 1), new Point(2, 2), new Point(3, 3)];
+    fmt.println(pts.length);         // 3
+    for (pt in pts) {
+        fmt.println(pt.sum());       // 2, 4, 6
+    }
+
+    // ---------- 对象作为参数与返回值 ----------
+    val moved = shift(p);
+    fmt.println(moved.describe());   // Point(11, 11)
+
+    // ---------- when 中使用对象 ----------
+    val kind = when {
+        alice.age >= 18 -> "成年";
+        else -> "未成年";
+    };
+    fmt.println(kind);               // 成年
+
+    // ---------- 循环中创建对象 ----------
+    var total = 0;
+    var i = 1;
+    while (i <= 3) {
+        val t = new Point(i, i);
+        total += t.sum();
+        i += 1;
+    }
+    fmt.println($"总和={total}");    // 12
+}
+
+func shift(pt: Point): Point {
+    return new Point(pt.x + 1, pt.y + 1);
+}

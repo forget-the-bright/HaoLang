@@ -1,0 +1,48 @@
+package main;
+
+// ---- 高阶函数：把函数当参数 ----
+func apply(f: (Int) -> Int, x: Int): Int {
+    return f(x);
+}
+
+func add(a: Int, b: Int): Int {
+    return a + b;
+}
+
+// 返回一个函数（闭包捕获参数 n）
+func makeAdder(n: Int): (Int) -> Int {
+    return { x: Int -> x + n };
+}
+
+func main() {
+    // 1. 无捕获 lambda，显式参数类型
+    val square: (Int) -> Int = { x: Int -> x * x };
+    fmt.println(square(5));                       // 25
+
+    // 2. 作为实参传给高阶函数，参数类型由形参推断（隐式 it）
+    fmt.println(apply({ it + 10 }, 32));          // 42
+
+    // 3. 顶层函数当值传递（包装为闭包）
+    val addFn: (Int, Int) -> Int = add;
+    fmt.println(addFn(20, 22));                   // 42
+
+    // 4. 闭包捕获不可变值
+    val base: Int = 100;
+    val plusBase: (Int) -> Int = { x: Int -> x + base };
+    fmt.println(plusBase(5));                     // 105
+
+    // 5. 闭包捕获可变变量并修改（共享 cell）
+    var counter: Int = 0;
+    val tick: () -> Int = { counter = counter + 1; counter };
+    fmt.println(tick());                          // 1
+    fmt.println(tick());                          // 2
+    fmt.println(counter);                         // 2（外层观察到修改）
+
+    // 6. 函数返回闭包
+    val add3 = makeAdder(3);
+    fmt.println(add3(40));                        // 43
+
+    // 7. 无参 lambda + 末尾表达式隐式返回
+    val greet: () -> String = { "你好，闭包" };
+    fmt.println(greet());                         // 你好，闭包
+}

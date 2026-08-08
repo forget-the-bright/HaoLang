@@ -1,0 +1,15 @@
+{
+  "project": {
+    "name": "depexclude",
+    "module": "example/depexclude",
+    "version": "0.1.0",
+    "main": "main.hao"
+  },
+  "dependencies": {
+    "example.com/demo/midpkg": "1.0.0"
+  },
+  "exclude": {
+    "example.com/demo/leafpkg": "*"
+  },
+  "registry": { "includeDefault": false }
+}

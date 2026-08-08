@@ -1,0 +1,68 @@
+// ============================================================
+//  os.FileStream —— 文件流（v0.28）
+//  文本读写 + 二进制 [Byte]；句柄 Long? 存 FILE*
+// ============================================================
+package os;
+
+public class FileStream {
+    var handle: Long? = null;
+
+    static val SEEK_SET: Int = 0;
+    static val SEEK_CUR: Int = 1;
+    static val SEEK_END: Int = 2;
+
+    constructor() {
+        this.handle = 0;
+    }
+
+    static func open(path: String, mode: String): FileStream? {
+        val fs = new FileStream();
+        fs.handle = 0;
+        if (!_fsOpen(fs.handle, path, mode)) {
+            return null;
+        }
+        return fs;
+    }
+
+    func close() {
+        _fsClose(this.handle);
+    }
+
+    func write(text: String): Int {
+        return _fsWriteStr(this.handle, text);
+    }
+
+    func read(maxLen: Int): String? {
+        return _fsReadStr(this.handle, maxLen);
+    }
+
+    func writeBytes(data: [Byte]): Int {
+        return _fsWriteBytes(this.handle, data);
+    }
+
+    func readBytes(maxLen: Int): [Byte] {
+        return _fsReadBytes(this.handle, maxLen);
+    }
+
+    func seek(offset: Long, whence: Int): Bool {
+        return _fsSeek(this.handle, offset, whence);
+    }
+
+    func tell(): Long {
+        return _fsTell(this.handle);
+    }
+
+    func flush(): Bool {
+        return _fsFlush(this.handle);
+    }
+}
+
+extern func _fsOpen(h: Long?, path: String, mode: String): Bool = "hao_fs_open";
+extern func _fsClose(h: Long?): Int = "hao_fs_close";
+extern func _fsWriteStr(h: Long?, data: String): Int = "hao_fs_write_str";
+extern func _fsReadStr(h: Long?, max: Int): String? = "hao_fs_read_str";
+extern func _fsWriteBytes(h: Long?, data: [Byte]): Int = "hao_fs_write_bytes";
+extern func _fsReadBytes(h: Long?, max: Int): [Byte] = "hao_fs_read_bytes";
+extern func _fsSeek(h: Long?, off: Long, whence: Int): Bool = "hao_fs_seek";
+extern func _fsTell(h: Long?): Long = "hao_fs_tell";
+extern func _fsFlush(h: Long?): Bool = "hao_fs_flush";

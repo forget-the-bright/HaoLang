@@ -1,0 +1,98 @@
+// ============================================================
+//  多文件测试套件 · primitives：v0.26 全套内建数值类型
+//  字面量/提升/截断/无符号比较除法/移位掩码/~/esz/包装 SIZE/Bit
+// ============================================================
+package main;
+
+func primitivesTest() {
+    // ---- 有符号 / 无符号成对 ----
+    val sb: SByte = 0 - 1;
+    val ub: Byte = 255;
+    fmt.println(sb);                   // -1
+    fmt.println(ub);                   // 255
+    // sext / zext 到 Int
+    val sbi: Int = sb;
+    val ubi: Int = ub;
+    fmt.println(sbi);                  // -1
+    fmt.println(ubi);                  // 255
+
+    val us: UShort = 65535;
+    val ui: UInt = 4000000000;
+    fmt.println(us);                   // 65535
+    fmt.println(ui);                   // 4000000000
+
+    val ul: ULong = 0xFFFFFFFFFFFFFFFF;
+    val ulZero: ULong = 0;
+    val oneUL: ULong = 1;
+    fmt.println(ul == (ulZero - oneUL));   // true（全 1；减数须同为 ULong）
+
+    val up: UIntPtr = 1;
+    val twoUP: UIntPtr = 2;
+    fmt.println(up + twoUP);               // 3
+
+    // ---- 提升：UInt+Int → Long ----
+    val mix: Long = ui + 1;
+    fmt.println(mix);                  // 4000000001
+
+    // ---- 无符号比较 / 除法 ----
+    fmt.println(ui > 100);             // true（无符号）
+    val tenU: UInt = 10;
+    val threeU: UInt = 3;
+    fmt.println(tenU / threeU);        // 3
+
+    // ---- 移位掩码（Java：Int &31 / Long &63）----
+    fmt.println(1 << 40);              // 256（== 1<<8）
+    fmt.println((1 << 40) == (1 << 8)); // true
+    val oneLsh: Long = 1;
+    fmt.println((oneLsh << 70) == (oneLsh << 6)); // true（&63）
+
+    // ---- 无符号逻辑右移（高位不符号扩展；移位结果保留左操作数类型）----
+    val hiU: UInt = 0x80000000;
+    fmt.println(hiU >> 1);             // 1073741824
+    val hiUL: ULong = 1;
+    val hiULbit: ULong = hiUL << 63;
+    fmt.println(hiULbit >> 1);         // 4611686018427387904
+
+    // ---- 一元 ~ ----
+    fmt.println(~0);                   // -1
+    val zl: Long = 0;
+    fmt.println(~zl);                  // -1
+
+    // ---- 紧凑数组 esz + push/pop（boxToI64 全类型）----
+    var sbytes: [SByte] = [0 - 1, 1];
+    fmt.println(sbytes[0]);            // -1
+    sbytes += 0 - 2;
+    fmt.println(sbytes.pop());         // -2
+    var ushorts: [UShort] = [1, 2];
+    fmt.println(ushorts[1]);           // 2
+    ushorts += 3;
+    fmt.println(ushorts.pop());        // 3
+    var uints: [UInt] = [1, 2];
+    fmt.println(uints[0]);             // 1
+    uints += 9;
+    fmt.println(uints.pop());          // 9
+    var ulongs: [ULong] = [1, 2];
+    fmt.println(ulongs[1]);            // 2
+    ulongs += 7;
+    fmt.println(ulongs.pop());         // 7
+
+    // ---- 包装 SIZE/BYTES ----
+    fmt.println(Integer.SIZE);         // 32
+    fmt.println(Integer.BYTES);        // 4
+    fmt.println(Long.SIZE);            // 64
+    fmt.println(Byte.SIZE);            // 8
+    fmt.println(SByte.BYTES);          // 1
+    fmt.println(UInt.SIZE);            // 32
+    fmt.println(ULong.BYTES);          // 8
+    fmt.println(ULong.MAX_VALUE == (ulZero - oneUL)); // true（全 1，防 strtoll 夹断）
+    fmt.println(Bit.SIZE);             // 64
+    fmt.println(Bit.INT_SIZE);         // 32
+
+    // ---- Bit Int / Long 重载 ----
+    fmt.println(Bit.leadingZeros(1));  // 31
+    val oneL: Long = 1;
+    fmt.println(Bit.leadingZeros(oneL)); // 63
+    fmt.println(Bit.bitCount(7));      // 3（Int）
+    fmt.println(Bit.not(0));           // -1
+    fmt.println(Bit.highestOneBit(10)); // 8
+}

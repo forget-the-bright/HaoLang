@@ -1,0 +1,10 @@
+package main;
+
+// 被测代码（普通 build 只编本文件；测试在 add_test.hao）
+func add(a: Int, b: Int): Int {
+    return a + b;
+}
+
+func main() {
+    fmt.println(add(1, 2));
+}

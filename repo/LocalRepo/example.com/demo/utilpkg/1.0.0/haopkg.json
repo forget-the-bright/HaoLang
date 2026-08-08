@@ -1,0 +1,5 @@
+{
+  "module": "example.com/demo/utilpkg",
+  "version": "1.0.0",
+  "description": "依赖冒烟包（精确版 / HTTP 拉取）"
+}

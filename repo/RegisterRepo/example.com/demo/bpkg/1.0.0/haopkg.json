@@ -1,0 +1,8 @@
+{
+  "module": "example.com/demo/bpkg",
+  "version": "1.0.0",
+  "description": "冲突用例父包 B（要 leaf ^2）",
+  "dependencies": {
+    "example.com/demo/leafpkg": "^2.0.0"
+  }
+}

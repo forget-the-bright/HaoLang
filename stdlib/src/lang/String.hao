@@ -1,0 +1,124 @@
+// ============================================================
+//  lang.String —— 基础类型 String 的方法包装（对标 Java java.lang.String）
+// ------------------------------------------------------------
+//  文件名 String.hao。
+//
+//  HaoLang 的 String 是引用类型：ptr → HaoString{len,cap,data[]}（UTF-8，
+//  llvm 为 ptr），【不是】值类型：
+//    - String? 的 null 就是指针 0（零开销），非空即堆头指针
+//    - .length / charAt / s[i] 按 Unicode 码点（不是字节）
+//    - 本类是「API / Object 包装」：集中暴露方法表；需要 Object 时装箱
+//
+//  ⚠ 类名与内建类型同名 String：
+//     - 类型标注裸名 `String` = 内建字符串
+//     - 包装类型请写 `lang.String`，或靠 valueOf 推断
+//     - 字面量 "hi" 仍是内建 String；属性 .length 为码点数
+//     - `new String(s)` 会失败；请用 String.valueOf(s)
+//
+//  ═══════════════════════════════════════════════════════════
+//  【内建 String 已有能力】（无需包装）
+//  ═══════════════════════════════════════════════════════════
+//    拼接 a+b / += ；相等 a==b ；长度 s.length（码点）；s[i]→Char；
+//    模板 $"…" / 逐字 @"…" / @$…" ；fmt.println
+//
+//  【可空 String?】null=指针0；?. / ?? / !! 与引用类型相同
+//
+//  【对象包装 lang.String】
+//    装箱 String.valueOf(s) / fromInt|fromDouble|fromBool
+//    拆箱 box.toString() / box.value
+//    无字面量→包装的隐式自动装箱
+//
+//  ═══════════════════════════════════════════════════════════
+//  【实例 API】（码点下标；substring 为半开区间 [start,end)）
+//  ═══════════════════════════════════════════════════════════
+//    length / isEmpty / substring / indexOf / lastIndexOf / contains
+//    startsWith / endsWith / charAt→Char / trim / toUpperCase / toLowerCase
+//    hashCode / equals / toString
+//  【静态】valueOf / fromInt / fromDouble / fromBool / compare
+//
+//  不包装时调用：String.valueOf(s).substring(0, 2)
+//  或内建："hi".length / "hi"[0]
+// ============================================================
+package lang;
+
+import hash;
+
+class String {
+    var value: String;
+
+    constructor(s: String) {
+        this.value = s;
+    }
+
+    static func valueOf(s: String): lang.String {
+        return new lang.String(s);
+    }
+    static func fromInt(n: Int): lang.String {
+        return new lang.String(hao_int_to_str(n));
+    }
+    static func fromLong(n: Long): lang.String {
+        return new lang.String(hao_long_to_str(n));
+    }
+    static func fromFloat(f: Float): lang.String {
+        return new lang.String(hao_float_to_str(f));
+    }
+    static func fromDouble(d: Double): lang.String {
+        return new lang.String(hao_double_to_str(d));
+    }
+    static func fromBool(b: Bool): lang.String {
+        return new lang.String(hao_bool_to_str(b));
+    }
+
+    static func compare(a: String, b: String): Int {
+        return hao_str_compare(a, b);
+    }
+
+    func length(): Int {
+        return this.value.length;
+    }
+    func isEmpty(): Bool {
+        return hao_str_is_empty(this.value);
+    }
+    func substring(start: Int, end: Int): String {
+        return hao_str_substring(this.value, start, end);
+    }
+    func indexOf(sub: String): Int {
+        return hao_str_index_of(this.value, sub);
+    }
+    func lastIndexOf(sub: String): Int {
+        return hao_str_last_index_of(this.value, sub);
+    }
+    func contains(sub: String): Bool {
+        return hao_str_contains(this.value, sub);
+    }
+    func startsWith(prefix: String): Bool {
+        return hao_str_starts_with(this.value, prefix);
+    }
+    func endsWith(suffix: String): Bool {
+        return hao_str_ends_with(this.value, suffix);
+    }
+    func charAt(i: Int): Char {
+        return hao_str_char_at(this.value, i);
+    }
+    func trim(): String {
+        return hao_str_trim(this.value);
+    }
+    func toUpperCase(): String {
+        return hao_str_to_upper(this.value);
+    }
+    func toLowerCase(): String {
+        return hao_str_to_lower(this.value);
+    }
+
+    override func hashCode(): Int {
+        return hash.hashOf(this.value);
+    }
+    override func equals(o: Object): Bool {
+        if (!(o is lang.String)) { return false; }
+        val other = o as lang.String;
+        return this.value == other.value;
+    }
+    override func toString(): String {
+        return this.value;
+    }
+}

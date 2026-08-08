@@ -1,0 +1,5 @@
+{
+  "module": "example.com/demo/utilpkg",
+  "version": "2.0.0",
+  "description": "主版本升级（^1 不应选中）"
+}

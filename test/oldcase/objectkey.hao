@@ -1,0 +1,36 @@
+package main;
+import collections;
+
+// 用作 Map/Set 的 key：所有类默认继承 Object，覆写 hashCode/equals 即按内容相等
+class Person : Object {
+    var name: String;
+    var age: Int;
+    constructor(n: String, a: Int) { this.name = n; this.age = a; }
+
+    override func hashCode(): Int {
+        return collections.hashOf(this.name) * 31 + this.age;
+    }
+    override func equals(o: Object): Bool {
+        val other = o as Person;
+        return this.name == other.name && this.age == other.age;
+    }
+}
+
+func main() {
+    // Map<Person, String>
+    val m = new collections.Map<Person, String>();
+    m.put(new Person("alice", 30), "engineer");
+    m.put(new Person("bob", 25), "designer");
+    fmt.println(m.size());                       // 2
+    fmt.println(m.get(new Person("alice", 30)) ?? "nil");  // engineer（内容相等命中）
+    fmt.println(m.get(new Person("alice", 31)) ?? "nil");  // nil（age 不同）
+    fmt.println(m.containsKey(new Person("bob", 25)));     // true
+    fmt.println(m.remove(new Person("bob", 25)));          // true
+    fmt.println(m.size());                       // 1
+
+    // Set<Person>
+    val s = new collections.Set<Person>();
+    s.add(new Person("carol", 40));
+    fmt.println(s.contains(new Person("carol", 40)));      // true（内容相等）
+    fmt.println(s.contains(new Person("carol", 41)));      // false
+}

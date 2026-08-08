@@ -1,0 +1,145 @@
+package main;
+
+// ---------- 接口声明 ----------
+interface Shape {
+    func area(): Double;
+    func name(): String;
+}
+
+interface Printable {
+    func show();
+}
+
+// ---------- 实现单个接口 ----------
+class Circle : Shape {
+    var r: Double = 0.0;
+
+    constructor(r: Double) {
+        this.r = r;
+    }
+
+    override func area(): Double {
+        return 3.14159 * this.r * this.r;
+    }
+
+    override func name(): String {
+        return "圆";
+    }
+}
+
+class Rect : Shape {
+    var w: Double = 0.0;
+    var h: Double = 0.0;
+
+    constructor(w: Double, h: Double) {
+        this.w = w;
+        this.h = h;
+    }
+
+    override func area(): Double {
+        return this.w * this.h;
+    }
+
+    override func name(): String {
+        return "矩形";
+    }
+}
+
+// ---------- 实现多个接口 ----------
+class Square : Shape, Printable {
+    var side: Double = 0.0;
+
+    constructor(side: Double) {
+        this.side = side;
+    }
+
+    override func area(): Double {
+        return this.side * this.side;
+    }
+
+    override func name(): String {
+        return "正方形";
+    }
+
+    override func show() {
+        fmt.println($"{this.name()} 边长={this.side} 面积={this.area()}");
+    }
+
+    // 非接口方法：静态绑定，不进虚表
+    func perimeter(): Double {
+        return 4.0 * this.side;
+    }
+}
+
+// ---------- 不实现接口的类（无虚表，字段从槽位 0 开始）----------
+class Plain {
+    var v: Int = 7;
+    func get(): Int {
+        return this.v;
+    }
+}
+
+// ---------- 接口作为参数：动态分派 ----------
+func describe(s: Shape) {
+    fmt.println($"{s.name()} 的面积是 {s.area()}");
+}
+
+func totalArea(a: Shape, b: Shape): Double {
+    return a.area() + b.area();
+}
+
+// ---------- 接口作为返回值 ----------
+func makeShape(kind: Int): Shape {
+    if (kind == 1) {
+        return new Circle(1.0);
+    }
+    return new Rect(2.0, 3.0);
+}
+
+func main() {
+    // ---------- 直接调用（静态绑定）----------
+    val c = new Circle(2.0);
+    fmt.println(c.area());              // 12.5664
+    fmt.println(c.name());              // 圆
+
+    // ---------- 通过接口调用（动态分派）----------
+    describe(c);
+    describe(new Rect(3.0, 4.0));
+    describe(new Square(5.0));
+
+    // ---------- 同一函数，不同实现 ----------
+    fmt.println(totalArea(new Circle(1.0), new Rect(2.0, 5.0)));  // 13.1416
+
+    // ---------- 接口类型变量 ----------
+    val s: Shape = new Rect(10.0, 2.0);
+    fmt.println(s.name());              // 矩形
+    fmt.println(s.area());              // 20
+
+    // ---------- 接口作为返回值 ----------
+    val s1 = makeShape(1);
+    fmt.println(s1.name());             // 圆
+    val s2 = makeShape(2);
+    fmt.println(s2.name());             // 矩形
+
+    // ---------- 实现多接口 ----------
+    val sq = new Square(3.0);
+    sq.show();                          // 通过 Printable
+    describe(sq);                       // 通过 Shape
+    fmt.println(sq.perimeter());        // 12  非接口方法
+
+    val p: Printable = new Square(2.0);
+    p.show();
+
+    // ---------- 接口数组：多态遍历 ----------
+    val shapes = [new Circle(1.0), new Rect(1.0, 1.0), new Square(2.0)];
+    for (sh in shapes) {
+        describe(sh);
+    }
+
+    // ---------- 无虚表的类仍正常（字段偏移不同）----------
+    val pl = new Plain();
+    fmt.println(pl.get());              // 7
+    fmt.println(pl.v);                  // 7
+    pl.v = 99;
+    fmt.println(pl.v);                  // 99
+}

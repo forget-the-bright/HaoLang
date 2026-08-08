@@ -1,0 +1,70 @@
+// 临时验证：泛型接口核心机制（v0.18.0）
+//  —— 在 genFor 迭代协议重做前，先手动走接口分派测试泛型接口。
+package main;
+
+import collections;
+
+// 自定义泛型接口
+interface MyIterable<T> {
+    func iterator(): MyIterator<T>;
+}
+interface MyIterator<T> {
+    func hasNext(): Bool;
+    func next(): T;
+}
+
+// 自定义泛型类实现泛型接口
+class MyList<T> : MyIterable<T> {
+    var items: [T];
+    constructor() { this.items = []; }
+    func add(x: T) { this.items += x; }
+    func iterator(): MyIterator<T> {
+        return new MyListIter<T>(this.items);
+    }
+}
+class MyListIter<T> : MyIterator<T> {
+    var arr: [T];
+    var index: Int;
+    constructor(arr: [T]) { this.arr = arr; this.index = 0; }
+    func hasNext(): Bool { return this.index < this.arr.length; }
+    func next(): T { val i = this.index; this.index += 1; return this.arr[i]; }
+}
+
+func main() {
+    val ml = new MyList<Int>();
+    ml.add(10);
+    ml.add(20);
+    ml.add(30);
+
+    // 经接口类型变量接收泛型类实例（isAssignable 按实例名）
+    val it: MyIterable<Int> = ml;
+    val iter = it.iterator();
+
+    var sum = 0;
+    while (iter.hasNext()) {
+        sum += iter.next();
+    }
+    fmt.println("sum=" + sum);   // 期望 60
+
+    // 直接用列表迭代器
+    val iter2 = ml.iterator();
+    var concat = "";
+    while (iter2.hasNext()) {
+        concat += "" + iter2.next() + ",";
+    }
+    fmt.println("concat=" + concat);   // 期望 10,20,30,
+
+    // genFor 走 Iterable 接口路径（自定义泛型接口）
+    var total = 0;
+    for (x in ml) {
+        total += x;
+    }
+    fmt.println("fortotal=" + total);   // 期望 60
+
+    // 经接口类型变量迭代（类型为 MyIterable<Int>）
+    var total2 = 0;
+    for (y in it) {
+        total2 += y;
+    }
+    fmt.println("forit=" + total2);   // 期望 60
+}

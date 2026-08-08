@@ -1,0 +1,48 @@
+package main;
+
+// C# 风格静态构造器：static ClassName()，类首次被引用前自动执行一次（v0.17.0）
+
+class Counter {
+    static var count: Int;
+    static var seed: Int = make_seed();   // 非常量静态字段初始化（合成进静态构造器）
+    static val NAME: String = "counter";
+
+    // 静态构造器（无参，类首次被引用前执行一次）
+    static Counter() {
+        Counter.count = 100;
+    }
+
+    static func add(n: Int): Int {
+        Counter.count += n;
+        return Counter.count;
+    }
+    static func get(): Int { return Counter.count; }
+}
+
+func make_seed(): Int { return 42; }
+
+// 静态构造器由首次 new 触发，且只执行一次
+class Widget {
+    static var created: Int = 0;
+    static Widget() {
+        Widget.created += 1;
+    }
+    var id: Int;
+    constructor(i: Int) { this.id = i; }
+}
+
+func main() {
+    // 首次访问静态成员触发静态构造器
+    fmt.println(Counter.get());        // 100（静态构造器设置 count）
+    fmt.println(Counter.seed);         // 42 （非常量静态字段初始化）
+    fmt.println(Counter.NAME);         // counter
+    fmt.println(Counter.add(5));       // 105
+    fmt.println(Counter.add(5));       // 110（静态构造器只跑一次，未重置 count）
+
+    // 静态构造器由首次 new 触发，且只执行一次
+    val w1 = new Widget(1);
+    val w2 = new Widget(2);
+    val w3 = new Widget(3);
+    fmt.println(Widget.created);       // 1（静态构造器只跑一次）
+    fmt.println(w3.id);                // 3
+}

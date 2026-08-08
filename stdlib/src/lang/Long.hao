@@ -1,0 +1,61 @@
+// ============================================================
+//  lang.Long —— 基础类型 Long（i64）的包装类
+//  标注包装写 lang.Long；裸名 Long = 内建
+// ============================================================
+package lang;
+
+import hash;
+
+class Long {
+    var value: Long;
+
+    static val SIZE: Int = 64;
+    static val BYTES: Int = 8;
+    static val MAX_VALUE: Long = 9223372036854775807;
+    static val MIN_VALUE: Long = 0 - 9223372036854775807 - 1;
+
+    constructor(v: Long) {
+        this.value = v;
+    }
+
+    static func valueOf(v: Long): lang.Long {
+        return new lang.Long(v);
+    }
+
+    func longValue(): Long {
+        return this.value;
+    }
+
+    static func parse(s: String): Long? {
+        return hao_parse_long(s);
+    }
+
+    static func toStr(v: Long): String {
+        return hao_long_to_str(v);
+    }
+
+    static func compare(a: Long, b: Long): Int {
+        if (a < b) { return -1; }
+        if (a > b) { return 1; }
+        return 0;
+    }
+
+    func compareTo(other: lang.Long): Int {
+        return Long.compare(this.value, other.value);
+    }
+
+    override func hashCode(): Int {
+        // 与 hash.hashOf(Long) 同算法（splitmix 低 32 位）
+        return hash.hashOf(this.value);
+    }
+
+    override func equals(o: Object): Bool {
+        if (!(o is lang.Long)) { return false; }
+        val other = o as lang.Long;
+        return this.value == other.value;
+    }
+
+    override func toString(): String {
+        return hao_long_to_str(this.value);
+    }
+}

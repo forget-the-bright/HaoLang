@@ -1,0 +1,20 @@
+// HaoLang 标准库 —— sync 并发原语
+// 原子单元用 Long?（8 字节 i64 装箱），与句柄/时间戳同宽。
+package sync;
+
+public class Mutex {
+    var state: Long? = null;
+    public constructor() {
+        this.state = 0;
+    }
+    public func lock()   { _lock(this.state); }
+    public func unlock() { _unlock(this.state); }
+}
+
+extern func _lock(p: Long?): Unit = "hao_sync_lock";
+extern func _unlock(p: Long?): Unit = "hao_sync_unlock";
+
+public extern func atomicAdd(p: Long?, delta: Long): Long = "hao_sync_atomic_add";
+public extern func atomicFetchAdd(p: Long?, delta: Long): Long = "hao_sync_atomic_fetch_add";
+public extern func atomicExchange(p: Long?, value: Long): Long = "hao_sync_atomic_exchange";
+public extern func atomicCompareExchange(p: Long?, expected: Long, desired: Long): Bool = "hao_sync_atomic_compare_exchange";

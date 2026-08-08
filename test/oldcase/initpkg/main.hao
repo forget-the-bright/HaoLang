@@ -1,0 +1,10 @@
+package main;
+import lib;
+
+func init() {
+    fmt.println("main.init");
+}
+
+func main() {
+    fmt.println(lib.greet());
+}

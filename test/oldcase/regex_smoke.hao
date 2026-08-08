@@ -1,0 +1,21 @@
+package main;
+import regex;
+import exception;
+
+func main() {
+    fmt.println(regex.Pattern.matches("hello", "hello"));
+    fmt.println(regex.Pattern.matches("a+", "aaa"));
+    fmt.println(regex.Pattern.matches("\\d+", "12345"));
+    val p = regex.Pattern.compile("a(\\d+)b");
+    val m = p.matcher("xxa42byy");
+    fmt.println(m.find());
+    fmt.println(m.group());
+    fmt.println(m.groupAt(1));
+    fmt.println(regex.Pattern.compile(",").replaceAll("a,b,c", "|"));
+    try {
+        regex.Pattern.compile("(");
+        fmt.println("no-throw");
+    } catch (e: exception.Exception) {
+        fmt.println("bad-re");
+    }
+}

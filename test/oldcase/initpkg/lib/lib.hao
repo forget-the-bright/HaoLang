@@ -1,0 +1,9 @@
+package lib;
+
+func init() {
+    fmt.println("lib.init");
+}
+
+func greet(): String {
+    return "hello from lib";
+}

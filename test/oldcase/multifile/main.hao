@@ -1,0 +1,7 @@
+package main;
+
+func main() {
+    fmt.println(greet("世界"));
+    fmt.println(add(3, 4));
+    fmt.println(join("Hao", "Lang"));
+}

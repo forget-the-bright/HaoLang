@@ -1,0 +1,136 @@
+// ============================================================
+//  多文件测试套件 · statics：static 成员 / 静态构造器 / 枚举类
+//  覆盖：static + static_ctor + enum
+// ============================================================
+package main;
+
+// ---------- 静态成员：类级变量/常量/方法 ----------
+class StCounter {
+    static var count: Int = 0;
+    static val MAX: Int = 100;
+    static val MIN: Int = -5;
+    static var label: String = "counter";
+    static var ratio: Double = 1.5;
+    static var enabled: Bool = true;
+    static var zero: Int;              // 无初始化 -> 0
+
+    static func next(): Int {
+        StCounter.count += 1;
+        return StCounter.count;
+    }
+    static func add(a: Int, b: Int): Int {
+        return a + b;
+    }
+    static func getCount(): Int {
+        return StCounter.count;
+    }
+    static func describe(): String {
+        return StCounter.label + ":" + StCounter.getCount();
+    }
+}
+
+// ---------- 静态构造器（C# 风格，首次引用前执行一次）----------
+class StWidget {
+    static var count: Int;
+    static var seed: Int = stMakeSeed();   // 非常量静态字段初始化（合成进静态构造器）
+    static val NAME: String = "widget";
+
+    static StWidget() {
+        StWidget.count = 100;
+    }
+    static func add(n: Int): Int {
+        StWidget.count += n;
+        return StWidget.count;
+    }
+    static func get(): Int { return StWidget.count; }
+}
+
+// 静态构造器由首次 new 触发，且只执行一次
+class StGadget {
+    static var created: Int = 0;
+    static StGadget() {
+        StGadget.created += 1;
+    }
+    var id: Int;
+    constructor(i: Int) { this.id = i; }
+}
+
+func stMakeSeed(): Int { return 42; }
+
+// ---------- 用户类静态重载（按签名选 Int/Long）----------
+class StOver {
+    static func tag(x: Int): String { return "I"; }
+    static func tag(x: Long): String { return "L"; }
+}
+
+// ---------- 枚举类 ----------
+enum StColor {
+    RED, GREEN, BLUE
+}
+enum StDirection {
+    NORTH, EAST, SOUTH, WEST
+}
+
+func stDescribeColor(c: StColor): String {
+    return c.name() + ":" + c.ordinal();
+}
+
+func staticsTest() {
+    // ---------- 静态成员 ----------
+    fmt.println(StCounter.count);       // 0
+    fmt.println(StCounter.MAX);         // 100
+    fmt.println(StCounter.MIN);         // -5
+    fmt.println(StCounter.label);       // counter
+    fmt.println(StCounter.ratio);       // 1.5
+    fmt.println(StCounter.enabled);     // true
+    fmt.println(StCounter.zero);        // 0
+    fmt.println(StCounter.add(2, 3));   // 5
+    fmt.println(StCounter.next());      // 1
+    fmt.println(StCounter.next());      // 2
+    fmt.println(StCounter.getCount());  // 2
+    fmt.println(StCounter.describe());  // counter:2
+
+    StCounter.count = 100;              // 静态字段赋值
+    fmt.println(StCounter.count);       // 100
+    StCounter.count += 5;               // 复合赋值
+    fmt.println(StCounter.count);       // 105
+    StCounter.label += "!";             // 字符串拼接
+    fmt.println(StCounter.label);       // counter!
+
+    // ---------- 静态构造器 ----------
+    fmt.println(StWidget.get());        // 100（静态构造器设置 count）
+    fmt.println(StWidget.seed);         // 42 （非常量静态字段初始化）
+    fmt.println(StWidget.NAME);         // widget
+    fmt.println(StWidget.add(5));       // 105
+    fmt.println(StWidget.add(5));       // 110（静态构造器只跑一次）
+
+    val w1 = new StGadget(1);
+    val w2 = new StGadget(2);
+    val w3 = new StGadget(3);
+    fmt.println(StGadget.created);      // 1（静态构造器只跑一次）
+    fmt.println(w3.id);                 // 3
+
+    // ---------- 静态重载 ----------
+    fmt.println(StOver.tag(1));              // I
+    val longArg: Long = 1;
+    fmt.println(StOver.tag(longArg));        // L
+
+    // ---------- 枚举 ----------
+    fmt.println(StColor.RED.name());      // RED
+    fmt.println(StColor.GREEN.name());    // GREEN
+    fmt.println(StColor.BLUE.ordinal());  // 2
+    fmt.println(StColor.RED.ordinal());   // 0
+    fmt.println(StDirection.WEST.name()); // WEST
+    fmt.println(StDirection.EAST.ordinal()); // 1
+    fmt.println(StColor.RED.toString());  // RED
+    fmt.println(stDescribeColor(StColor.GREEN)); // GREEN:1
+    fmt.println(stDescribeColor(StColor.BLUE));  // BLUE:2
+    fmt.println(StColor.RED == StColor.RED);   // true
+    fmt.println(StColor.RED == StColor.GREEN); // false
+
+    val colors = [StColor.RED, StColor.GREEN, StColor.BLUE];
+    fmt.println(colors.length);          // 3
+    for (c in colors) {
+        fmt.println(c.ordinal());        // 0 1 2
+    }
+}

@@ -1,0 +1,120 @@
+package main;
+
+// 自定义异常类型（必须是类，用虚表判定，故有虚方法）
+class MyError {
+    var message: String = "";
+    var code: Int = 0;
+    constructor(message: String, code: Int) {
+        this.message = message;
+        this.code = code;
+    }
+    func describe(): String { return $"错误({this.code}): {this.message}"; }
+}
+
+class SubError : MyError {
+    constructor() {
+        this.message = "子类错误";
+        this.code = -1;
+    }
+}
+
+func failHard(n: Int) {
+    if (n < 0) {
+        throw new MyError("参数为负", n);
+    }
+}
+
+func main() {
+    // 1. 基本 catch
+    try {
+        throw new MyError("出错了", 1);
+    } catch (e: MyError) {
+        fmt.println(e.describe());   // 错误(1): 出错了
+    }
+
+    // 2. 子类异常匹配父类 catch
+    try {
+        throw new SubError();
+    } catch (e: MyError) {
+        fmt.println(e.code);         // -1
+        fmt.println(e.message);      // 子类错误
+    }
+
+    // 3. finally 始终执行
+    var ran = 0;
+    try {
+        ran = 1;
+    } finally {
+        ran = 99;
+    }
+    fmt.println(ran);                // 99
+
+    // 4. 异常时 finally 也执行
+    var flag = "";
+    try {
+        flag = "try";
+        throw new MyError("boom", 7);
+    } catch (e: MyError) {
+        flag = flag + "-catch";
+    } finally {
+        flag = flag + "-finally";
+    }
+    fmt.println(flag);               // try-catch-finally
+
+    // 5. return 穿过 finally
+    fmt.println(withReturn());       // finally-ran / 42
+
+    // 6. break 穿过 finally
+    var sum = 0;
+    var done = false;
+    var i = 0;
+    while (i < 5) {
+        try {
+            if (i == 3) { break; }
+            sum += i;
+        } finally {
+            done = true;
+        }
+        i += 1;
+    }
+    fmt.println(sum);                // 0+1+2 = 3
+    fmt.println(done);               // true
+
+    // 7. 跨函数传播并被外层捕获
+    try {
+        failHard(-5);
+    } catch (e: MyError) {
+        fmt.println(e.code);         // -5
+    }
+
+    // 8. 没有异常时 catch 不执行
+    var hit = 0;
+    try {
+        hit = 1;
+    } catch (e: MyError) {
+        hit = 2;
+    }
+    fmt.println(hit);                // 1
+
+    // 9. 嵌套 try：内层未匹配，外层捕获
+    try {
+        try {
+            throw new MyError("deep", 100);
+        } catch (e: SubError) {
+            fmt.println("不应到这里");
+        }
+    } catch (e: MyError) {
+        fmt.println(e.code);         // 100
+    }
+
+    // 10. catch 内正常继续，后面的代码执行
+    fmt.println("after all");        // after all
+}
+
+func withReturn(): Int {
+    try {
+        return 42;
+    } finally {
+        fmt.println("finally-ran");
+    }
+}

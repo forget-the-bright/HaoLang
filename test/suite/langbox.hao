@@ -1,0 +1,122 @@
+// ============================================================
+//  多文件测试套件 · lang：基础类型包装（装箱/拆箱 + String API）
+// ============================================================
+package main;
+
+func langBoxTest() {
+    // Integer 装箱 / 拆箱
+    val bi = Integer.valueOf(42);
+    fmt.println(bi.intValue());
+    fmt.println(bi.toString());
+    fmt.println(bi.equals(Integer.valueOf(42)));
+    fmt.println(bi.equals(Integer.valueOf(7)));
+    fmt.println(Integer.toStr(99));
+
+    // Int? 可空装箱（编译器）与 parse
+    val p = Integer.parse("100");
+    fmt.println(p != null);
+    fmt.println(p!!);
+    val bad = Integer.parse("x");
+    fmt.println(bad == null);
+
+    // Boolean
+    val bb = Boolean.valueOf(true);
+    fmt.println(bb.booleanValue());
+    fmt.println(Boolean.parse("false")!!);
+
+    // Double 包装
+    val bd = Double.valueOf(3.5);
+    fmt.println(bd.doubleValue());
+    fmt.println(Double.parse("2.5")!!);
+
+    // String：先装箱再调实例 API
+    val ws = String.valueOf("  Hello  ");
+    fmt.println(ws.length());
+    fmt.println(ws.isEmpty());
+    fmt.println(ws.trim());
+    fmt.println(ws.toUpperCase());
+    fmt.println(String.valueOf("abcdef").substring(2, 5));
+    fmt.println(String.valueOf("hello").indexOf("ll"));
+    fmt.println(String.valueOf("hello").contains("ell"));
+    fmt.println(String.valueOf("hello").startsWith("he"));
+    fmt.println(String.valueOf("hello").endsWith("lo"));
+    fmt.println(String.compare("a", "b"));
+
+    // 包装 → Object
+    var o: Object = String.valueOf("hi");
+    fmt.println(o.toString());
+    fmt.println(String.valueOf("hi").equals(String.valueOf("hi")));
+
+    // ---- v0.25 补全：Short/Byte/Long/Float 包装 + 可空拆箱 ----
+    val bs = Short.valueOf(1000);
+    fmt.println(bs.shortValue());
+    fmt.println(bs.equals(Short.valueOf(1000)));
+    val bby = Byte.valueOf(255);
+    fmt.println(bby.byteValue());
+    fmt.println(bby.intValue());
+    val bl = Long.valueOf(3000000000);
+    fmt.println(bl.longValue());
+    fmt.println(Long.parse("99")!!);
+    val bf = Float.valueOf(1.25);
+    fmt.println(bf.floatValue());
+    fmt.println(Float.parse("2.5")!!);
+
+    var ns: Short? = null;
+    fmt.println(ns ?? 0 - 1);          // -1（null 默认）
+    ns = 42;
+    fmt.println(ns!!);
+    fmt.println(ns ?? 0);              // 42
+    var nb: Byte? = null;
+    fmt.println(nb ?? 1);              // 1
+    nb = 200;
+    fmt.println(nb!!);
+    fmt.println(nb ?? 0);              // 200
+    var nf: Float? = null;
+    nf = 3.5;
+    fmt.println(nf!!);
+    var bn0: Bool? = null;
+    fmt.println(bn0 ?? false);         // false
+    bn0 = true;
+    fmt.println(bn0 ?? false);         // true
+
+    fmt.println(String.fromLong(100));
+    fmt.println(String.fromFloat(1.5));
+
+    // ---- v0.26：SIZE/BYTES + 新包装 ----
+    fmt.println(Integer.SIZE);
+    fmt.println(Long.BYTES);
+    fmt.println(SByte.MAX_VALUE);
+    fmt.println(UInt.MIN_VALUE);
+    val bu = UInt.valueOf(10);
+    fmt.println(bu.uintValue());
+
+    // ---- v0.26.1：Bool=i8 / [Bool] esz=1 / Boolean.compare / MIN_VALUE / 无符号 toStr ----
+    var ba: [Bool] = [true, false, true];
+    fmt.println(ba[0]);
+    fmt.println(ba[1]);
+    ba += false;
+    fmt.println(ba.length);
+    var bn: Bool? = null;
+    bn = true;
+    fmt.println(bn!!);
+    fmt.println(Boolean.compare(false, true));
+    fmt.println(Boolean.compare(true, true));
+    fmt.println(Float.MIN_VALUE > 0.0);
+    fmt.println(Double.MIN_VALUE > 0.0);
+    fmt.println(UInt.toStr(4000000000));
+    fmt.println(Bit.getBit(0, 99) == false); // true（越界→false）
+    if (Bit.getBit(1, 0)) { fmt.println(true); } else { fmt.println(false); } // true
+    // [Bool] 扩容后读写不错位
+    ba += true;
+    ba += false;
+    fmt.println(ba[0] == true);
+    fmt.println(ba[ba.length - 1] == false);
+    val pb = Byte.parse("200");
+    fmt.println(pb!!);
+    val pbad = Byte.parse("300");
+    fmt.println(pbad == null);
+    // Long/ULong 溢出须返回 null（ERANGE）
+    fmt.println(Long.parse("9223372036854775808") == null);
+    fmt.println(ULong.parse("18446744073709551616") == null);
+    fmt.println(UInt.parse("-1") == null);
+}

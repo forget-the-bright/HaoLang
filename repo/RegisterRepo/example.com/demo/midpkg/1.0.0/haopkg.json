@@ -1,0 +1,8 @@
+{
+  "module": "example.com/demo/midpkg",
+  "version": "1.0.0",
+  "description": "传递依赖中间包 → leafpkg",
+  "dependencies": {
+    "example.com/demo/leafpkg": "1.0.0"
+  }
+}

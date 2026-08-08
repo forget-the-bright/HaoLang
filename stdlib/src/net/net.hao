@@ -1,0 +1,50 @@
+// HaoLang 标准库 —— net 网络库
+// socket 句柄存于 Long?（8 字节 GC 块，对标指针宽 SOCKET/fd）。
+package net;
+
+public class Socket {
+    var fd: Long? = null;
+    public constructor() { this.fd = 0; }
+    public func connect(host: String, port: Int): Bool { return _connect(this.fd, host, port); }
+    public func send(data: String): Int { return _send(this.fd, data); }
+    public func recv(maxLen: Int): String? { return _recv(this.fd, maxLen); }
+    public func setTimeout(ms: Int): Bool { return _setTimeout(this.fd, ms); }
+    public func close(): Unit { _close(this.fd); }
+}
+
+public class ServerSocket {
+    var fd: Long? = null;
+    public constructor() { this.fd = 0; }
+    public func listen(port: Int): Bool { return _listen(this.fd, port); }
+    public func listenBacklog(port: Int, backlog: Int): Bool {
+        return _listenBacklog(this.fd, port, backlog);
+    }
+    public func accept(client: Socket): Bool { return _accept(this.fd, client.fd); }
+    public func setTimeout(ms: Int): Bool { return _setTimeout(this.fd, ms); }
+    public func close(): Unit { _close(this.fd); }
+}
+
+public class UdpSocket {
+    var fd: Long? = null;
+    public constructor() { this.fd = 0; }
+    public func open(): Bool { return _udp_open(this.fd); }
+    public func bind(port: Int): Bool { return _udp_bind(this.fd, port); }
+    public func sendTo(host: String, port: Int, data: String): Int {
+        return _udp_sendto(this.fd, host, port, data);
+    }
+    public func recvFrom(maxLen: Int): String? { return _udp_recvfrom(this.fd, maxLen); }
+    public func close(): Unit { _close(this.fd); }
+}
+
+extern func _connect(p: Long?, host: String, port: Int): Bool = "hao_net_connect";
+extern func _send(p: Long?, data: String): Int = "hao_net_send";
+extern func _recv(p: Long?, max: Int): String? = "hao_net_recv";
+extern func _close(p: Long?): Unit = "hao_net_close";
+extern func _listen(p: Long?, port: Int): Bool = "hao_net_listen";
+extern func _listenBacklog(p: Long?, port: Int, backlog: Int): Bool = "hao_net_listen_backlog";
+extern func _setTimeout(p: Long?, ms: Int): Bool = "hao_net_set_timeout";
+extern func _accept(s: Long?, c: Long?): Bool = "hao_net_accept";
+extern func _udp_open(p: Long?): Bool = "hao_net_udp_open";
+extern func _udp_bind(p: Long?, port: Int): Bool = "hao_net_udp_bind";
+extern func _udp_sendto(p: Long?, host: String, port: Int, data: String): Int = "hao_net_udp_sendto";
+extern func _udp_recvfrom(p: Long?, max: Int): String? = "hao_net_udp_recvfrom";

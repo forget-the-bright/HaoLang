@@ -1,0 +1,29 @@
+# 构建与产物
+/build/
+/output/
+/target/
+
+# 本机代理（勿提交）
+/script/win/proxy.local.ps1
+
+# 工具链：靠 script/setup_env.ps1 → script/win/fetch_*.ps1 获取，不进仓库
+/lib/llvm/
+/lib/_cache/
+/lib/sysroot/
+# ANTLR：保留 jar + install + zip；不解压源码树
+/lib/antlr4/runtime-src/
+
+# 运行时库产物（build_runtime.ps1 生成）
+/stdlib/*.a
+/stdlib/*.obj
+/stdlib/*.o
+
+# 编辑器 / OS
+.vs/
+.vscode/
+*.user
+Thumbs.db
+Desktop.ini
+.qwen/
+# 备份（规则 12：收工应已删除）
+*.bak

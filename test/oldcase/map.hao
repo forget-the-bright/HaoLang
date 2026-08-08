@@ -1,0 +1,42 @@
+package main;
+import collections;
+
+// Map<K,V> 开放寻址哈希表验证（v0.9.0）
+func main() {
+    // Map<Int,String>
+    val ages = new collections.Map<Int, String>();
+    ages.put(1, "one");
+    ages.put(2, "two");
+    ages.put(3, "three");
+    fmt.println(ages.size());            // 3
+    fmt.println(ages.get(2) ?? "nil");   // two
+    fmt.println(ages.get(99) ?? "nil");  // nil
+    fmt.println(ages.containsKey(1));    // true
+    fmt.println(ages.containsKey(9));    // false
+
+    // 更新已有 key
+    ages.put(2, "TWO");
+    fmt.println(ages.get(2) ?? "nil");   // TWO
+
+    // 删除
+    fmt.println(ages.remove(1));         // true
+    fmt.println(ages.size());            // 2
+    fmt.println(ages.containsKey(1));    // false
+
+    // Map<String,Int>（String key 内容哈希）
+    val scores = new collections.Map<String, Int>();
+    scores.put("alice", 90);
+    scores.put("bob", 85);
+    fmt.println(scores.get("alice") ?? 0);  // 90
+    fmt.println(scores.get("eve") ?? 0);    // 0
+
+    // 扩容（装载因子 0.7，>11 触发 resize）
+    val big = new collections.Map<Int, Int>();
+    var i = 0;
+    while (i < 50) {
+        big.put(i, i * i);
+        i += 1;
+    }
+    fmt.println(big.size());             // 50
+    fmt.println(big.get(49) ?? -1);      // 2401
+}

@@ -1,0 +1,64 @@
+package collections;
+
+// ============================================================
+//  Set<T> —— 基于 Map<T,Bool> 的集合（对标 Java HashSet）
+// ------------------------------------------------------------
+//  职责：去重集合；成员测试摊销 O(1)。
+//  线程安全：否。内部 Map，散列语义同 Map。
+// ============================================================
+
+class Set<T> : Iterable<T> {
+    var map: Map<T, Bool>;
+
+    // 构造空集合。
+    // 复杂度：O(1)
+    constructor() {
+        this.map = new Map<T,Bool>();
+    }
+
+    // Iterable：toArray 收集 key 后迭代。
+    // @return ArrayIterator
+    // 复杂度：O(n) 拷贝
+    func iterator(): Iterator<T> {
+        return new ArrayIterator<T>(this.toArray());
+    }
+
+    // 加入元素（已存在则覆盖占位值）。
+    // @param x 元素
+    // 复杂度：摊销 O(1)
+    func add(x: T) { this.map.put(x, true); }
+
+    // @param x 元素
+    // @return 是否包含
+    // 复杂度：摊销 O(1)
+    func contains(x: T): Bool { return this.map.containsKey(x); }
+
+    // @param x 元素
+    // @return 是否删除成功
+    // 复杂度：摊销 O(1)
+    func remove(x: T): Bool { return this.map.remove(x); }
+
+    // @return 元素个数
+    // 复杂度：O(1)
+    func size(): Int { return this.map.size(); }
+
+    // @return 是否为空
+    // 复杂度：O(1)
+    func isEmpty(): Bool { return this.map.isEmpty(); }
+
+    // 收集全部元素（无序快照）。
+    // @return 新数组
+    // 复杂度：O(capacity)
+    func toArray(): [T] {
+        var keys: [T] = [];
+        var i = 0;
+        while (i < this.map.table.length) {
+            val e = this.map.table[i];
+            if (e != null && e!!.occupied) {
+                keys += e!!.key;
+            }
+            i += 1;
+        }
+        return keys;
+    }
+}

@@ -1,0 +1,20 @@
+// ============================================================
+//  嵌套包 Web demo：demo.web.api（子包控制器，须被 scan("demo/web") 扫到）
+// ============================================================
+package demo.web.api;
+
+import net.*;
+
+@Controller
+@RequestMapping(path = "/web/api")
+class ApiController {
+    @GetMapping(path = "/v1")
+    func v1(req: HttpRequest): HttpResponse {
+        return HttpResponse.of(200, "api-v1");
+    }
+
+    @PostMapping(path = "/echo")
+    func echo(req: HttpRequest): HttpResponse {
+        return HttpResponse.of(200, "api:" + req.body);
+    }
+}

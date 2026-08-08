@@ -1,0 +1,34 @@
+package main;
+import sync;
+
+func main() {
+    // 1. Mutex 互斥锁
+    val m = new sync.Mutex();
+    m.lock();
+    fmt.println("locked");
+    m.unlock();
+    fmt.println("unlocked");
+
+    // 2. 原子加：返回加后新值
+    var counter: Int? = null;
+    counter = 0;
+    fmt.println(sync.atomicAdd(counter, 5));      // 5
+
+    // 3. 原子加：返回加前旧值
+    fmt.println(sync.atomicFetchAdd(counter, 3)); // 5
+
+    // 4. 原子交换：返回旧值
+    fmt.println(sync.atomicExchange(counter, 100)); // 8
+
+    // 5. 比较并交换成功
+    fmt.println(sync.atomicCompareExchange(counter, 100, 200)); // true
+
+    // 6. 确认已更新为 200
+    fmt.println(sync.atomicAdd(counter, 0));      // 200
+
+    // 7. 比较并交换失败（当前是 200 而非 100）
+    fmt.println(sync.atomicCompareExchange(counter, 100, 999)); // false
+
+    // 8. 值未变
+    fmt.println(sync.atomicAdd(counter, 0));      // 200
+}

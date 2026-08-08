@@ -1,0 +1,69 @@
+// ============================================================
+//  lang.Byte —— 基础类型 Byte（u8，0～255）的包装类
+// ------------------------------------------------------------
+//  ⚠ 类名与内建同名：标注包装写 lang.Byte；裸名 Byte = 内建
+//  三种形态：内建 Byte / Byte?（经 i32 装箱）/ 对象 lang.Byte
+// ============================================================
+package lang;
+
+class Byte {
+    var value: Byte;
+
+    static val SIZE: Int = 8;
+    static val BYTES: Int = 1;
+    static val MAX_VALUE: Byte = 255;
+    static val MIN_VALUE: Byte = 0;
+
+    constructor(v: Byte) {
+        this.value = v;
+    }
+
+    static func valueOf(v: Byte): lang.Byte {
+        return new lang.Byte(v);
+    }
+
+    func byteValue(): Byte {
+        return this.value;
+    }
+
+    func intValue(): Int {
+        return this.value;
+    }
+
+    static func parse(s: String): Byte? {
+        val n = Integer.parse(s);
+        if (n == null) { return null; }
+        val v = n!!;
+        if (v < 0 || v > 255) { return null; }
+        val b: Byte = v;
+        return b;
+    }
+
+    static func toStr(v: Byte): String {
+        return hao_int_to_str(v);
+    }
+
+    static func compare(a: Byte, b: Byte): Int {
+        if (a < b) { return -1; }
+        if (a > b) { return 1; }
+        return 0;
+    }
+
+    func compareTo(other: lang.Byte): Int {
+        return Byte.compare(this.value, other.value);
+    }
+
+    override func hashCode(): Int {
+        return this.value;
+    }
+
+    override func equals(o: Object): Bool {
+        if (!(o is lang.Byte)) { return false; }
+        val other = o as lang.Byte;
+        return this.value == other.value;
+    }
+
+    override func toString(): String {
+        return hao_int_to_str(this.value);
+    }
+}

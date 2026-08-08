@@ -1,0 +1,43 @@
+package collections;
+
+// ============================================================
+//  迭代协议（v0.18.0）
+//  for (x in it) 现在走 Iterable<T>/Iterator<T> 接口分派：
+//    Iterable<T>.iterator()  -> Iterator<T>
+//    Iterator<T>.hasNext()    -> Bool
+//    Iterator<T>.next()       -> T
+//  编译器 genFor 检测可迭代接口（含 iterator(): Iterator<X> 方法），
+//  经虚表分派调用 iterator()/hasNext()/next()。
+// ============================================================
+
+interface Iterator<T> {
+    func hasNext(): Bool;
+    func next(): T;
+}
+
+interface Iterable<T> {
+    func iterator(): Iterator<T>;
+}
+
+// 基于数组的通用迭代器：各集合 iterator() 统一返回它。
+// List.toArray() 返回内部数组引用（O(1) 不拷贝）；Stack/Queue/Set 的
+// toArray() 拷贝一次，迭代 O(n) 摊销合理。
+class ArrayIterator<T> : Iterator<T> {
+    var arr: [T];
+    var index: Int;
+
+    constructor(arr: [T]) {
+        this.arr = arr;
+        this.index = 0;
+    }
+
+    func hasNext(): Bool {
+        return this.index < this.arr.length;
+    }
+
+    func next(): T {
+        val i = this.index;
+        this.index += 1;
+        return this.arr[i];
+    }
+}

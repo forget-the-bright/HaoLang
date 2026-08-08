@@ -1,0 +1,54 @@
+// ============================================================
+//  random —— 伪随机数（v0.22.0 补充，纯 .hao）
+// ------------------------------------------------------------
+//  线性同余发生器（LCG）。非密码学安全；同 seed 可复现。
+//
+//  用法：
+//      import random;
+//      val rng = new random.Random(42);
+//      fmt.println(rng.nextInt(100));
+// ============================================================
+package random;
+
+class Random {
+    var state: Int;
+
+    constructor(seed: Int) {
+        if (seed == 0) {
+            this.state = 1;
+        } else {
+            this.state = seed;
+        }
+    }
+
+    func nextRaw(): Int {
+        this.state = this.state * 6364136223846793005 + 1;
+        return this.state;
+    }
+
+    func nextInt(bound: Int): Int {
+        if (bound <= 0) { return 0; }
+        val r = this.nextRaw();
+        var u = r;
+        if (u < 0) { u = 0 - u; }
+        return u % bound;
+    }
+
+    func nextIntRange(lo: Int, hi: Int): Int {
+        if (hi < lo) { return lo; }
+        return lo + this.nextInt(hi - lo + 1);
+    }
+
+    func nextDouble(): Double {
+        val r = this.nextInt(1000000);
+        return r / 1000000.0;
+    }
+
+    func nextDoubleRange(lo: Double, hi: Double): Double {
+        return lo + (hi - lo) * this.nextDouble();
+    }
+
+    func nextBool(): Bool {
+        return this.nextInt(2) == 1;
+    }
+}

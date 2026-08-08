@@ -1,0 +1,74 @@
+// ============================================================
+//  多文件测试套件 · v0.23.0：位运算 + lang.Bit / os.Path / os 文本 I/O
+// ============================================================
+package main;
+
+import os;
+import math;
+
+func bitwiseTest() {
+    // ---- 语言运算符 ----
+    fmt.println(5 & 3);          // 1
+    fmt.println(5 | 2);          // 7
+    fmt.println(5 ^ 1);          // 4
+    fmt.println(1 << 4);         // 16
+    fmt.println(-8 >> 1);        // -4（算术右移）
+    var x = 15;
+    x &= 7;
+    fmt.println(x);              // 7
+    x |= 8;
+    fmt.println(x);              // 15
+    x ^= 1;
+    fmt.println(x);              // 14
+    x <<= 1;
+    fmt.println(x);              // 28
+    x >>= 2;
+    fmt.println(x);              // 7
+
+    // ---- lang.Bit：Int 与 Long 重载（v0.26）----
+    fmt.println(Bit.getBit(8, 3));           // true（Int→Bool）
+    fmt.println(Bit.setBit(0, 2));           // 4（Int）
+    fmt.println(Bit.clearBit(7, 1));         // 5（Int）
+    fmt.println(Bit.bitCount(7));            // 3（Int）
+    fmt.println(Bit.trailingZeros(8));       // 3（Int）
+    fmt.println(Bit.mask(4));                // 15（Long）
+    fmt.println(Bit.leadingZeros(1));        // 31（Int）
+    // 高位：须 Long 实参
+    val one: Long = 1;
+    val zeroL: Long = 0;
+    fmt.println(Bit.getBit(one << 40, 40));  // true
+    fmt.println(Bit.setBit(zeroL, 40) == (one << 40)); // true
+    fmt.println(Bit.bitCount(one << 40));    // 1
+    fmt.println(Bit.leadingZeros(one));      // 63
+    fmt.println(Bit.trailingZeros(one << 40)); // 40
+    val bw = Bit.valueOf(one << 33);
+    fmt.println(bw.get(33));                 // true
+    fmt.println(bw.count());                 // 1
+    fmt.println(bw.equals(Bit.valueOf(one << 33))); // true
+    fmt.println(Bit.SIZE);                   // 64
+    fmt.println(Bit.INT_SIZE);               // 32
+    fmt.println(~1);                         // -2
+    // ---- os.Path / 文本 I/O（原 path/io 已并入 os）----
+    fmt.println(os.Path.join("a", "b"));
+    fmt.println(os.Path.basename("a/b/c.txt"));
+    fmt.println(os.Path.dirname("a/b/c.txt"));
+    fmt.println(os.Path.ext("a/b/c.txt"));
+    fmt.println(os.Path.isAbsolute("/x"));
+
+    val p = "target/_suite_io_tmp.txt";
+    fmt.println(os.writeText(p, "hi"));
+    fmt.println(os.readText(p) ?? "fail");
+    fmt.println(os.appendText(p, "!"));
+    fmt.println(os.readText(p) ?? "fail");
+    fmt.println(os.exists(p));
+    fmt.println(os.remove(p));
+
+    // ---- lang 常量 + math.Math（包名=类名已修复）----
+    fmt.println(Integer.MAX_VALUE > 0);
+    fmt.println(Integer.MIN_VALUE < 0);
+    fmt.println(Boolean.TRUE.booleanValue());
+    fmt.println(Boolean.FALSE.booleanValue() == false);
+    fmt.println(Double.MAX_VALUE > 1.0);
+    fmt.println(math.Math.PI > 3.0);
+    fmt.println(math.Math.E > 2.0);
+}

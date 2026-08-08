@@ -1,0 +1,78 @@
+// ============================================================
+//  多文件测试套件 · string_char：Char + HaoString + 字面量体系（v0.27）
+// ============================================================
+package main;
+
+func stringCharTest() {
+    // Char 字面量
+    val c1: Char = 'A';
+    val c2: Char = '好';
+    val nl: Char = '\n';
+    fmt.println(c1);          // A
+    fmt.println(c2);          // 好
+    fmt.println(c1 == 65);    // true
+    fmt.println(nl == 10);    // true
+
+    // 索引取 Char / length 码点
+    val s = "你好Hi";
+    fmt.println(s.length);    // 4
+    fmt.println(s[0]);        // 好
+    fmt.println(s[2]);        // H
+    fmt.println("".length == 0); // true
+
+    // 包装 Character
+    val box = Character.valueOf('Z');
+    fmt.println(box.toString()); // Z
+    fmt.println(box.charValue() == 'Z'); // true
+
+    // 普通转义串
+    val esc = "a\tb";
+    fmt.println(esc.length);  // 3
+
+    // 逐字串 @"..."
+    val path = @"C:\Users\Hao";
+    fmt.println(path);        // C:\Users\Hao
+    val withQ = @"say ""hi""";
+    fmt.println(withQ);       // say "hi"
+
+    // 插值
+    val name = "Hao";
+    fmt.println($"hi-{name}"); // hi-Hao
+
+    // 逐字+插值
+    val cfg = @$"dir=\{name}";
+    fmt.println(cfg);         // dir=\Hao
+    val cfg2 = $@"x\{name}";
+    fmt.println(cfg2);        // x\Hao
+
+    // substring / charAt 码点
+    val w = String.valueOf("abcdef");
+    fmt.println(w.substring(2, 5)); // cde
+    fmt.println(w.charAt(0));       // a
+    fmt.println(String.valueOf("中文").length()); // 2
+
+    // 反向：越界索引
+    val bad: Char = "ab"[9];
+    fmt.println(bad == -1);   // true
+
+    // 码点防回归：Emoji 单码点；逐字串不转义 \n
+    fmt.println("🚀".length == 1);          // true
+    fmt.println(@"a\nb".length == 4);       // true（字面 a \ n b）
+
+    // [Char] esz=4
+    var chars: [Char] = ['A', '好'];
+    fmt.println(chars.length);              // 2
+    fmt.println(chars[0] == 'A');           // true
+    fmt.println(chars[1] == '好');          // true
+    chars += 'Z';
+    fmt.println(chars.length);              // 3
+    fmt.println(chars.pop() == 'Z');        // true
+
+    // Char? 装箱 / !! / ??（正向+反向默认值）
+    var nc: Char? = null;
+    fmt.println(nc == null);                // true
+    fmt.println(nc ?? 'X');                 // X
+    nc = '好';
+    fmt.println(nc!! == '好');              // true
+    fmt.println(nc ?? 'X');                 // 好
+}

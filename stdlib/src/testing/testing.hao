@@ -1,0 +1,137 @@
+// ============================================================
+//  testing —— 单元测试框架（v0.42.0，对标 go testing）
+// ------------------------------------------------------------
+//  由 `hao test` 发现同包 `*_test.hao` 中的 `func TestXxx(t: testing.T)`，
+//  生成 harness 调用本包 `runCase`。普通程序请用 `assert`（抛异常）。
+//
+//  用法：
+//      import testing;
+//      func TestAdd(t: testing.T) {
+//          t.eqInt(1 + 1, 2, "1+1");
+//      }
+// ============================================================
+package testing;
+
+import exception;
+
+// 全局 verbose：由 harness 在 main 开头 setVerbose；控制 t.log / --- PASS
+class Flags {
+    static var verbose: Bool = false;
+}
+
+// @param v  是否打印每个用例 PASS 与 t.log
+func setVerbose(v: Bool) {
+    Flags.verbose = v;
+}
+
+// @return  当前是否 verbose（供 harness 打印 --- PASS）
+func verbose(): Bool {
+    return Flags.verbose;
+}
+
+// 单用例上下文（对标 testing.T）
+class T {
+    var caseName: String = "";
+    var hasFailed: Bool = false;
+
+    // @param name  用例名（如 TestAdd）
+    constructor(name: String) {
+        this.caseName = name;
+        this.hasFailed = false;
+    }
+
+    // @return  用例名
+    func name(): String {
+        return this.caseName;
+    }
+
+    // @return  是否已失败
+    func failed(): Bool {
+        return this.hasFailed;
+    }
+
+    // 标记失败，继续执行
+    func fail() {
+        this.hasFailed = true;
+    }
+
+    // @param msg  仅 -v 时打印
+    func log(msg: String) {
+        if (Flags.verbose) {
+            fmt.println("    " + this.caseName + ": " + msg);
+        }
+    }
+
+    // @param msg  记录失败并打印，继续执行
+    func error(msg: String) {
+        this.hasFailed = true;
+        fmt.println("    " + this.caseName + ": " + msg);
+    }
+
+    // @param msg  记录失败并结束本用例（抛异常，由 runCase 捕获）
+    func fatal(msg: String) {
+        this.hasFailed = true;
+        fmt.println("    " + this.caseName + ": " + msg);
+        throw new exception.Exception("testing.fatal");
+    }
+
+    // @param cond  条件；假则 error
+    // @param msg   失败说明
+    func check(cond: Bool, msg: String) {
+        if (!cond) {
+            this.error(msg);
+        }
+    }
+
+    // @param got / want  Int 比较
+    // @param msg        失败说明
+    func eqInt(got: Int, want: Int, msg: String) {
+        if (got != want) {
+            this.error(msg + " (got " + got + ", want " + want + ")");
+        }
+    }
+
+    // @param got / want  Long 比较
+    func eqLong(got: Long, want: Long, msg: String) {
+        if (got != want) {
+            this.error(msg + " (got " + got + ", want " + want + ")");
+        }
+    }
+
+    // @param got / want  String 比较
+    func eqString(got: String, want: String, msg: String) {
+        if (got != want) {
+            this.error(msg + " (got \"" + got + "\", want \"" + want + "\")");
+        }
+    }
+
+    // @param got / want  Bool 比较
+    func eqBool(got: Bool, want: Bool, msg: String) {
+        if (got != want) {
+            this.error(msg);
+        }
+    }
+}
+
+// 跑单个用例：构造 T、调用 body、捕获异常；失败返回 1，成功返回 0。
+// @param name  用例名
+// @param body  Action<T>，通常为顶层 TestXxx
+// @return      0=通过，1=失败
+func runCase(name: String, body: Action<T>): Int {
+    val t = new T(name);
+    try {
+        body(t);
+    } catch (e: exception.Exception) {
+        if (!t.failed()) {
+            t.error("panic: " + e.getMessage());
+        }
+    }
+    if (t.failed()) {
+        fmt.println("--- FAIL: " + name);
+        return 1;
+    }
+    if (Flags.verbose) {
+        fmt.println("--- PASS: " + name);
+    }
+    return 0;
+}

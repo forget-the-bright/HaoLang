@@ -1,0 +1,240 @@
+package collections;
+
+import sync;
+import hash;
+
+// ============================================================
+//  ConcurrentHashMap<K,V> —— 线程安全 Map（条带分段锁）
+// ------------------------------------------------------------
+//  职责：多线程下安全的 put/get/remove 等。
+//  对标：Java ConcurrentHashMap 的「可并发访问」语义子集。
+//  实现：固定 16 段，每段独立 Map + 自旋锁；键按 hash.hashOf(key)%16 分桶。
+//  非整表一把锁，也非 Java 8 CAS 桶锁；高争用下不同段可并行。
+//  跨段操作（size/keys/values/clear）按段序 0..15 加锁，防死锁。
+//  异常路径：全部公开方法 try/finally 保证解锁（禁止锁泄漏）。
+// ============================================================
+
+class ChmSegment<K, V> {
+    var map: Map<K, V>;
+    var state: Long?;
+
+    constructor() {
+        this.map = new Map<K, V>();
+        this.state = 0;
+    }
+
+    func lock() {
+        while (!sync.atomicCompareExchange(this.state, 0, 1)) {
+        }
+    }
+
+    func unlock() {
+        sync.atomicExchange(this.state, 0);
+    }
+}
+
+class ConcurrentHashMap<K, V> {
+    var segments: [ChmSegment<K, V>];
+
+    // 构造空表（16 段）。
+    // 复杂度：O(1)
+    constructor() {
+        this.segments = [];
+        var i = 0;
+        while (i < 16) {
+            this.segments += new ChmSegment<K, V>();
+            i += 1;
+        }
+    }
+
+    func segmentOf(key: K): ChmSegment<K, V> {
+        var h = hash.hashOf(key);
+        if (h < 0) { h = 0 - h; }
+        val idx = h % 16;
+        return this.segments[idx];
+    }
+
+    // 按段序加锁全部条带（防死锁）。
+    func lockAll() {
+        var i = 0;
+        while (i < 16) {
+            this.segments[i].lock();
+            i += 1;
+        }
+    }
+
+    func unlockAll() {
+        var i = 15;
+        while (i >= 0) {
+            this.segments[i].unlock();
+            i -= 1;
+        }
+    }
+
+    // @return 有效映射数（全表持锁快照）
+    // 复杂度：O(段数) + 锁
+    func size(): Int {
+        this.lockAll();
+        try {
+            var n = 0;
+            var i = 0;
+            while (i < 16) {
+                n = n + this.segments[i].map.size();
+                i += 1;
+            }
+            return n;
+        } finally {
+            this.unlockAll();
+        }
+    }
+
+    // @return 是否为空
+    // 复杂度：O(段数) + 锁
+    func isEmpty(): Bool {
+        return this.size() == 0;
+    }
+
+    // 插入或覆盖（仅锁目标段）。
+    // @param key 键
+    // @param value 值
+    // 复杂度：摊销 O(1) + 段锁
+    // 异常：满表无法扩容 → Exception（同 Map）；仍会解锁
+    func put(key: K, value: V) {
+        val seg = this.segmentOf(key);
+        seg.lock();
+        try {
+            seg.map.put(key, value);
+        } finally {
+            seg.unlock();
+        }
+    }
+
+    // @param key 键
+    // @return 值或 null
+    // 复杂度：摊销 O(1) + 段锁
+    func get(key: K): V? {
+        val seg = this.segmentOf(key);
+        seg.lock();
+        try {
+            return seg.map.get(key);
+        } finally {
+            seg.unlock();
+        }
+    }
+
+    // @param key 键
+    // @return 是否存在
+    // 复杂度：摊销 O(1) + 段锁
+    func containsKey(key: K): Bool {
+        val seg = this.segmentOf(key);
+        seg.lock();
+        try {
+            return seg.map.containsKey(key);
+        } finally {
+            seg.unlock();
+        }
+    }
+
+    // @param key 键
+    // @return 是否删除成功
+    // 复杂度：摊销 O(1) + 段锁
+    func remove(key: K): Bool {
+        val seg = this.segmentOf(key);
+        seg.lock();
+        try {
+            return seg.map.remove(key);
+        } finally {
+            seg.unlock();
+        }
+    }
+
+    // 清空（全表按段序持锁）。
+    // 复杂度：O(段数) + 锁
+    func clear() {
+        this.lockAll();
+        try {
+            var i = 0;
+            while (i < 16) {
+                this.segments[i].map.clear();
+                i += 1;
+            }
+        } finally {
+            this.unlockAll();
+        }
+    }
+
+    // 仅缺席时插入。
+    // @return 旧值或 null（语义同 Map.putIfAbsent）
+    // 复杂度：摊销 O(1) + 段锁
+    // 异常：新插入满表失败 → Exception；仍会解锁
+    func putIfAbsent(key: K, value: V): V? {
+        val seg = this.segmentOf(key);
+        seg.lock();
+        try {
+            return seg.map.putIfAbsent(key, value);
+        } finally {
+            seg.unlock();
+        }
+    }
+
+    // 查找或默认值。
+    // @param key 键
+    // @param def 默认值
+    // @return 命中值或 def
+    // 复杂度：摊销 O(1) + 段锁
+    func getOrDefault(key: K, def: V): V {
+        val seg = this.segmentOf(key);
+        seg.lock();
+        try {
+            return seg.map.getOrDefault(key, def);
+        } finally {
+            seg.unlock();
+        }
+    }
+
+    // 键快照（全表持锁拷贝，无序）。
+    // @return 新数组
+    // 复杂度：O(n) + 全表锁
+    func keys(): [K] {
+        this.lockAll();
+        try {
+            var out: [K] = [];
+            var i = 0;
+            while (i < 16) {
+                val ks = this.segments[i].map.keys();
+                var j = 0;
+                while (j < ks.length) {
+                    out += ks[j];
+                    j += 1;
+                }
+                i += 1;
+            }
+            return out;
+        } finally {
+            this.unlockAll();
+        }
+    }
+
+    // 值快照（全表持锁拷贝，无序）。
+    // @return 新数组
+    // 复杂度：O(n) + 全表锁
+    func values(): [V] {
+        this.lockAll();
+        try {
+            var out: [V] = [];
+            var i = 0;
+            while (i < 16) {
+                val vs = this.segments[i].map.values();
+                var j = 0;
+                while (j < vs.length) {
+                    out += vs[j];
+                    j += 1;
+                }
+                i += 1;
+            }
+            return out;
+        } finally {
+            this.unlockAll();
+        }
+    }
+}

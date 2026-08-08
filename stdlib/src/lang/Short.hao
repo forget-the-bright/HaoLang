@@ -1,0 +1,67 @@
+// ============================================================
+//  lang.Short —— 基础类型 Short（i16）的包装类
+//  标注包装写 lang.Short；裸名 Short = 内建
+// ============================================================
+package lang;
+
+class Short {
+    var value: Short;
+
+    static val SIZE: Int = 16;
+    static val BYTES: Int = 2;
+    static val MAX_VALUE: Short = 32767;
+    static val MIN_VALUE: Short = 0 - 32768;
+
+    constructor(v: Short) {
+        this.value = v;
+    }
+
+    static func valueOf(v: Short): lang.Short {
+        return new lang.Short(v);
+    }
+
+    func shortValue(): Short {
+        return this.value;
+    }
+
+    func intValue(): Int {
+        return this.value;
+    }
+
+    static func parse(s: String): Short? {
+        val n = Integer.parse(s);
+        if (n == null) { return null; }
+        val v = n!!;
+        if (v < 0 - 32768 || v > 32767) { return null; }
+        val b: Short = v;
+        return b;
+    }
+
+    static func toStr(v: Short): String {
+        return hao_int_to_str(v);
+    }
+
+    static func compare(a: Short, b: Short): Int {
+        if (a < b) { return -1; }
+        if (a > b) { return 1; }
+        return 0;
+    }
+
+    func compareTo(other: lang.Short): Int {
+        return Short.compare(this.value, other.value);
+    }
+
+    override func hashCode(): Int {
+        return this.value;
+    }
+
+    override func equals(o: Object): Bool {
+        if (!(o is lang.Short)) { return false; }
+        val other = o as lang.Short;
+        return this.value == other.value;
+    }
+
+    override func toString(): String {
+        return hao_int_to_str(this.value);
+    }
+}

@@ -1,0 +1,57 @@
+// ============================================================
+//  v0.34.1 / 审计：!! 赋值左值 + 数组形参 += + 可空数组形参 / when 方法
+// ============================================================
+package main;
+
+class LfNode {
+    var value: Int = 0;
+    var next: LfNode? = null;
+    constructor(v: Int) { this.value = v; }
+    func get(): Int { return this.value; }
+}
+
+func langFixPush(out: [Int], x: Int) {
+    out += x;
+}
+
+// [Int]? 形参须按值（数据指针/null），不可误走 by-ref 砸堆
+func langFixOptLen(a: [Int]?): Int {
+    if (a == null) { return -1; }
+    return a!!.length;
+}
+
+func langFixTest() {
+    // !! 可作字段赋值左值
+    var n: LfNode? = new LfNode(1);
+    n!!.value = 42;
+    fmt.println(n!!.value);                    // 42
+    n!!.next = new LfNode(7);
+    n!!.next!!.value = 9;
+    fmt.println(n!!.next!!.value);             // 9
+
+    // 数组形参 += 扩容后调用方可见
+    var a: [Int] = [];
+    var i = 0;
+    while (i < 20) {
+        langFixPush(a, i);
+        i += 1;
+    }
+    fmt.println(a.length);                     // 20
+    fmt.println(a[0]);                         // 0
+    fmt.println(a[19]);                        // 19
+
+    // 可空数组形参：非空与 null 均安全
+    fmt.println(langFixOptLen([10, 20, 30]));  // 3
+    fmt.println(langFixOptLen(null));          // -1
+
+    // when 表达式：方法调用 / 字段须正确推断（勿误判 Unit）
+    val c = new LfNode(5);
+    val wg = when { true -> c.get(); else -> 0 };
+    fmt.println(wg);                           // 5
+    val wf = when { true -> c.value; else -> 0 };
+    fmt.println(wf);                           // 5
+
+    // 字符串 Long 下标（勿经 Int 截断）
+    val li: Long = 1;
+    fmt.println("ab"[li]);                     // 98 ('b')
+}

@@ -1,0 +1,52 @@
+// ============================================================
+//  多文件测试套件 · 入口：按顺序运行各模块测试 + 跨包用例
+//  package main 支持多文件（本目录所有 .hao 一起编译成一份程序）。
+//  做新特性时：写单文件临时验证 → 合并进对应模块 → 单文件移 oldcase。
+//  输出总行数 = 本套件基线（见 script/test.sh）。
+// ============================================================
+package main;
+
+func main() {
+    featuresTest();      // 基础/变量/算术/字符串/if/while/Unicode
+    functionsTest();     // 函数/递归/重载/函数作值
+    arraysTest();        // 数组/when/动态扩容 + v0.32 定长/展开
+    classesTest();       // 类/字段/构造/方法
+    oopTest();           // 继承/接口/多态/super/is-as
+    genericsTest();      // 泛型
+    genericIfaceTest();  // 泛型接口（v0.18.0）
+    lambdasTest();       // 闭包/高阶函数
+    collectionsTest();   // List/Map/Set/Queue/Stack + for-in + 对象key
+    collectionsExtraTest(); // v0.34：LinkedList/LHM/树/CHM/Map新API
+    langFixTest();       // v0.34.1：!! 赋值 + 数组形参 +=
+    gcApiTest();         // v0.34：gc.GC（中途 collect 应安全）
+    gcv3Test();          // v0.35.1：remset/静态根/by-ref 屏障
+    objectTest();        // Object 根/hashCode/equals/toString
+    nullsafeTest();      // T?/?.?/!!
+    exceptionsTest();    // try/catch/finally/throw
+    staticsTest();       // static 成员/静态构造器/enum
+    externTest();        // extern C 函数声明
+    systemTest();        // os/sync/net 系统库
+    initTest();          // init() 已在 main 前执行，这里验证其副作用
+    packagesTest();      // 跨包 import/通配/别名/init 顺序
+    v20ActionFuncTest(); // v0.20.0：Action/Func 委托别名
+    v20InvokeTest();     // v0.20.0：反射通用 invoke
+    v20GCTest();         // v0.20.0：多线程分配 + GC
+    v19DelegateTest();   // v0.19.0：delegate 命名函数类型 + 方法组转换
+    v19ReflectTest();    // v0.19.0：注解 + 反射自省与字段读写
+    v19TimeTest();       // v0.19.0：time 时间/时区/格式化
+    v19ThreadTest();     // v0.19.0：Thread/Pool（shutdown 现 join）
+    haoroutineTest();    // v0.36：haoroutine + channel
+    langBoxTest();       // v0.22.0：基础类型包装 Integer/Boolean/String API
+    stdlibExtraTest();   // v0.22.0 补充：hash/math/random/assert/text
+    bitwiseTest();       // v0.23.0：位运算 + lang.Bit + os.Path/文本 I/O + math.Math
+    byteTest();          // v0.24.0：语言级 Byte + 紧凑 [Byte]
+    numericTest();       // v0.25.0：Short/Int/Long/Float/Double + 包装
+    primitivesTest();    // v0.26.0：全套有符号/无符号 + Bit 重载 + ~
+    stringCharTest();    // v0.27.0：Char + HaoString + @" / @$
+    regexTest();         // v0.28.0：regex Pattern/Matcher
+    jsonTest();          // v0.28.0：json Fastjson2 风
+    ioHttpTest();        // v0.28.0：FileStream + Http
+    mvcTest();           // v0.29.0：HttpApp MVC 路由/注解/过滤器
+    webDemoTest();       // v0.30.0：嵌套包扫描 HttpApp.scan
+    pkgScanTest();       // v0.32.0：可扩展包扫描 + corp 多包夹具
+}

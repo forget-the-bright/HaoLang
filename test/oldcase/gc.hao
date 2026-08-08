@@ -1,0 +1,84 @@
+// ============================================================
+//  GC 压力测试（已从多文件 suite 中排除，归档于此）
+//  等做 GC 特性（v2/v3 精确堆扫描/分代）时再加回测试，见 test/suite/system.hao。
+//  覆盖：临时字符串 / 临时对象 / 长链表垃圾 / 数组扩容垃圾 / 装箱值类型。
+// ============================================================
+package main;
+
+class Node {
+    var value: Int = 0;
+    var next: Node? = null;
+    constructor(value: Int) { this.value = value; }
+}
+
+// 构造一个长链表，让大量对象同时存活，最后整体变为垃圾
+func makeList(n: Int): Node? {
+    var head: Node? = null;
+    var i = 0;
+    while (i < n) {
+        val node = new Node(i);
+        node.next = head;
+        head = node;
+        i += 1;
+    }
+    return head;
+}
+
+func sumList(head: Node?): Int {
+    var total = 0;
+    var cur = head;
+    while (cur != null) {
+        total += cur!!.value;
+        cur = cur!!.next;
+    }
+    return total;
+}
+
+func main() {
+    // 1. 大量临时字符串：模板字符串每次都 malloc 新串。
+    //    若没有 GC，进程内存会随循环线性增长。
+    var i = 0;
+    var acc = "";
+    while (i < 40000) {
+        // 产生两个临时串（int_to_str + concat），只有 acc 链上的最新串存活
+        acc = $"n{i}";
+        i += 1;
+    }
+    fmt.println(acc.length);    // 6 ("n199999")
+
+    // 2. 大量对象分配并丢弃：触发多次 GC
+    i = 0;
+    while (i < 80000) {
+        val n = new Node(i);
+        n.value = n.value + 1;
+        i += 1;
+    }
+    fmt.println("done-objects");
+
+    // 3. 链表：构造 10 万个节点，统计总和，然后整条链变垃圾
+    val big = makeList(20000);
+    fmt.println(big != null);       // true
+    fmt.println(sumList(big));      // 0+1+...+99999 = 4999950000
+
+    // 4. 数组反复扩容：产生大量旧数组垃圾
+    var arr: [Int] = [];
+    i = 0;
+    while (i < 20000) {
+        arr += i;
+        i += 1;
+    }
+    fmt.println(arr.length);        // 20000
+    fmt.println(arr[19999]);        // 19999
+
+    // 5. 装箱值类型 Int? 大量分配
+    i = 0;
+    var sum = 0;
+    while (i < 20000) {
+        var boxed: Int? = i;
+        sum += boxed!!;
+        i += 1;
+    }
+    fmt.println(sum);               // 0+1+...+99999 = 4999950000
+
+    fmt.println("gc-ok");
+}

@@ -1,0 +1,41 @@
+// HaoLang 标准库 —— time 包
+// 时间戳为 Unix 纳秒（Long）；时区偏移为秒（Int）。
+package time;
+
+class Time {
+    var ts: Long = 0;
+    var offset: Int = 0;
+
+    func getYear(): Int { return hao_time_field(this.ts, this.offset, 0); }
+    func getMonth(): Int { return hao_time_field(this.ts, this.offset, 1); }
+    func getDay(): Int { return hao_time_field(this.ts, this.offset, 2); }
+    func getHour(): Int { return hao_time_field(this.ts, this.offset, 3); }
+    func getMinute(): Int { return hao_time_field(this.ts, this.offset, 4); }
+    func getSecond(): Int { return hao_time_field(this.ts, this.offset, 5); }
+    func getWeekday(): Int { return hao_time_field(this.ts, this.offset, 6); }
+    func getDayOfYear(): Int { return hao_time_field(this.ts, this.offset, 7); }
+    func unixNano(): Long { return this.ts; }
+    func unixSecond(): Long { return this.ts / 1000000000; }
+    func format(pattern: String): String {
+        return hao_time_format(this.ts, this.offset, pattern);
+    }
+}
+
+func now(): Time {
+    val t = new Time();
+    t.ts = hao_time_now_ns();
+    t.offset = hao_time_offset();
+    return t;
+}
+
+func nowUtc(): Time {
+    val t = new Time();
+    t.ts = hao_time_now_ns();
+    t.offset = 0;
+    return t;
+}
+
+extern func hao_time_now_ns(): Long = "hao_time_now_ns";
+extern func hao_time_offset(): Int = "hao_time_offset";
+extern func hao_time_field(ts: Long, offset: Int, field: Int): Int = "hao_time_field";
+extern func hao_time_format(ts: Long, offset: Int, pattern: String): String = "hao_time_format";

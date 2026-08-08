@@ -1,0 +1,79 @@
+package main;
+
+// map：把 [T] 通过 (T)->R 转换成 [R]。T 从数组推断，R 从 lambda 返回推断
+func map<T, R>(arr: [T], f: (T) -> R): [R] {
+    var out: [R] = [];
+    var i = 0;
+    while (i < arr.length) {
+        out += f(arr[i]);
+        i += 1;
+    }
+    return out;
+}
+
+// filter：保留谓词为 true 的元素
+func filter<T>(arr: [T], pred: (T) -> Bool): [T] {
+    var out: [T] = [];
+    var i = 0;
+    while (i < arr.length) {
+        if (pred(arr[i])) {
+            out += arr[i];
+        }
+        i += 1;
+    }
+    return out;
+}
+
+// forEach：对每个元素执行副作用
+func forEach<T>(arr: [T], f: (T) -> Unit) {
+    var i = 0;
+    while (i < arr.length) {
+        f(arr[i]);
+        i += 1;
+    }
+}
+
+// reduce：折叠
+func reduce<T, R>(arr: [T], init: R, f: (R, T) -> R): R {
+    var acc = init;
+    var i = 0;
+    while (i < arr.length) {
+        acc = f(acc, arr[i]);
+        i += 1;
+    }
+    return acc;
+}
+
+func add(a: Int, b: Int): Int { return a + b; }
+
+func main() {
+    var nums = [1, 2, 3, 4, 5];
+
+    // map T=Int, R=Int（显式参数类型）
+    var doubled = map(nums, { x: Int -> x * 2 });
+    fmt.println(doubled.length);       // 5
+    fmt.println(doubled[0]);           // 2
+    fmt.println(doubled[4]);           // 10
+
+    // map T=Int, R=String（隐式 it，R 从返回类型推断）
+    var labels = map(nums, { $"n={it}" });
+    fmt.println(labels.length);        // 5
+    fmt.println(labels[2]);            // n=3
+
+    // filter
+    var evens = filter(nums, { it % 2 == 0 });
+    fmt.println(evens.length);         // 2
+    fmt.println(evens[0]);             // 2
+    fmt.println(evens[1]);             // 4
+
+    // forEach
+    var sum = 0;
+    forEach(nums, { sum = sum + it });
+    fmt.println(sum);                  // 15
+
+    // reduce
+    var total = reduce(nums, 0, add);
+    fmt.println(total);                // 15
+    var product = reduce(nums, 1, { acc, x -> acc * x });
+    fmt.println(product);              // 120
+}

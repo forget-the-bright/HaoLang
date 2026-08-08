@@ -1,0 +1,220 @@
+// ============================================================
+//  多文件测试套件 · arrays：数组 / 索引 / 动态扩容 / pop / when
+//  覆盖：arrays + dynarr + when 语句/表达式
+// ============================================================
+package main;
+
+class ArrItem {
+    var tag: Int = 0;
+    constructor(tag: Int) { this.tag = tag; }
+    func label(): String { return $"item{this.tag}"; }
+}
+
+func arrSum(a: [Int]): Int {
+    var t = 0;
+    for (x in a) {
+        t += x;
+    }
+    return t;
+}
+
+func arraysTest() {
+    // ---------- 数组字面量与索引 ----------
+    val a = [10, 20, 30];
+    fmt.println(a.length);        // 3
+    fmt.println(a[0]);            // 10
+    fmt.println(a[2]);            // 30
+
+    // ---------- 索引赋值 ----------
+    var b = [1, 2, 3];
+    b[1] = 99;
+    fmt.println(b[1]);            // 99
+    b[2] += 7;
+    fmt.println(b[2]);            // 10
+
+    // ---------- 表达式作为索引 ----------
+    val i = 1;
+    fmt.println(a[i]);            // 20
+    fmt.println(a[i + 1]);        // 30
+
+    // ---------- 数组作为参数 ----------
+    fmt.println(arrSum(a));          // 60
+    fmt.println(arrSum([1, 2, 3, 4]));  // 10
+
+    // ---------- 空数组 ----------
+    val e = [];
+    fmt.println(e.length);        // 0
+
+    // ---------- 浮点 / 字符串数组 ----------
+    val f = [1.5, 2.5, 3.0];
+    fmt.println(f[0] + f[1]);     // 4
+    val s = ["甲", "乙", "丙"];
+    for (x in s) {
+        fmt.println(x);
+    }
+
+    // ---------- break / continue ----------
+    var n = 0;
+    while (true) {
+        n += 1;
+        if (n > 5) {
+            break;
+        }
+    }
+    fmt.println($"break 后 n={n}");   // 6
+
+    var odd = 0;
+    for (x in [1, 2, 3, 4, 5, 6]) {
+        if (x % 2 == 0) {
+            continue;
+        }
+        odd += x;
+    }
+    fmt.println($"奇数和={odd}");      // 9
+
+    // ---------- 动态数组（带类型标注空数组 + push）----------
+    var xs: [Int] = [];
+    xs += 10;
+    xs += 20;
+    xs += 30;
+    fmt.println(xs.length);      // 3
+    fmt.println(xs[0]);          // 10
+    fmt.println(xs[2]);          // 30
+
+    // 触发 2 倍扩容
+    var k = 0;
+    while (k < 10) {
+        xs += k * 100;
+        k += 1;
+    }
+    fmt.println(xs.length);      // 13
+    fmt.println(xs[12]);         // 900
+
+    // 字符串数组 push
+    var names: [String] = [];
+    names += "alpha";
+    names += "beta";
+    names += "gamma";
+    fmt.println(names[1]);       // beta
+
+    // 字面量数组也可增长
+    var ds = [1.5, 2.5];
+    ds += 3.5;
+    fmt.println(ds.length);      // 3
+    fmt.println(ds[2]);          // 3.5
+
+    // push 对象引用
+    var items: [ArrItem] = [];
+    var m = 0;
+    while (m < 5) {
+        items += new ArrItem(m);
+        m += 1;
+    }
+    fmt.println(items.length);   // 5
+    fmt.println(items[4].label()); // item4
+
+    // for-in 遍历动态数组
+    var total = 0;
+    for (x in xs) {
+        total += x;
+    }
+    fmt.println(total);          // 60 + 4500 = 4560
+
+    // pop：移除并返回末尾
+    fmt.println(xs.pop());       // 900
+    fmt.println(xs.pop());       // 800
+    fmt.println(xs.length);      // 11
+    fmt.println(names.pop());    // gamma
+    fmt.println(items.pop().label()); // item4
+
+    // ---------- when 语句 ----------
+    val k2 = 2;
+    when (k2) {
+        1 -> fmt.println("一");
+        2 -> fmt.println("二");
+        else -> fmt.println("其他");
+    }
+    when (k2) {
+        1, 2, 3 -> fmt.println("小");
+        else -> fmt.println("大");
+    }
+    when {
+        k2 > 10 -> fmt.println("很大");
+        k2 > 1  -> fmt.println("较大");
+        else    -> fmt.println("小");
+    }
+    val nm = "hao";
+    when (nm) {
+        "go"  -> fmt.println("Go");
+        "hao" -> fmt.println("HaoLang");
+        else  -> fmt.println("未知");
+    }
+
+    // ---------- when 表达式 ----------
+    val label = when (k2) {
+        1 -> "一";
+        2 -> "二";
+        else -> "多";
+    };
+    fmt.println(label);           // 二
+
+    val num = when {
+        k2 > 5 -> 100;
+        k2 > 1 -> 50;
+        else   -> 0;
+    };
+    fmt.println(num);             // 50
+
+    fmt.println($"结果: {when (k2) { 2 -> "偶"; else -> "奇" }}");
+
+    // ---------- when 跨宽度整数（Int 主体 + Long 分支，须提升后 icmp）----------
+    val wi: Int = 2;
+    val w1: Long = 1;
+    val w2: Long = 2;
+    when (wi) {
+        w1 -> fmt.println("whenL1");
+        w2 -> fmt.println("whenL2");
+        else -> fmt.println("whenLelse");
+    }
+    val wxe = when (wi) {
+        w1 -> "A";
+        w2 -> "B";
+        else -> "C";
+    };
+    fmt.println(wxe);                  // B
+
+    // ---------- v0.32：定长 / 展开 ----------
+    arraysV32Extra();
+}
+
+func arraysV32Extra() {
+    // ---------- v0.32：定长 new [T](n) / new [T](n, fill) ----------
+    val z = new [Int](4);
+    fmt.println(z.length);             // 4
+    fmt.println(z[0]);                 // 0（零填充）
+    fmt.println(z[3]);                 // 0
+    val filled = new [Int](3, 7);
+    fmt.println(filled[0]);            // 7
+    fmt.println(filled[2]);            // 7
+    val zs = new [String](2, "x");
+    fmt.println(zs[1]);                // x
+
+    // ---------- v0.32：数组展开 [...a] ----------
+    val base = [1, 2];
+    val mid = [3, 4];
+    val spread = [...base, 9, ...mid];
+    fmt.println(spread.length);        // 5
+    fmt.println(spread[0]);            // 1
+    fmt.println(spread[2]);            // 9
+    fmt.println(spread[4]);            // 4
+    val onlySpread = [...filled];
+    fmt.println(onlySpread.length);    // 3
+    fmt.println(onlySpread[1]);        // 7
+
+    // ---------- 展开跨宽度：源按 esz 读再 coerce（勿用目标宽度 GEP）----------
+    val z0: Long = 0;
+    val widen: [Long] = [z0, ...base];
+    fmt.println(widen.length);         // 3
+    fmt.println(widen[1]);             // 1
+    fmt.println(widen[2]);             // 2
+}

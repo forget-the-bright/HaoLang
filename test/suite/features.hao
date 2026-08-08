@@ -1,0 +1,105 @@
+// ============================================================
+//  多文件测试套件 · features：基础特性
+//  变量/类型推断/算术/字符串/模板串/比较/if/while/作用域/中文Unicode
+//  覆盖：hello + features + zh
+// ============================================================
+package main;
+
+func featuresTest() {
+    // ---------- 变量与类型推断 ----------
+    val name = "HaoLang";
+    var count = 3;
+    val pi = 3.14;
+    val yes = true;
+    fmt.println(name);
+    fmt.println(count);
+    fmt.println(pi);
+    fmt.println(yes);
+
+    // ---------- 显式类型标注 ----------
+    val n: Int = 42;
+    val d: Double = 2.5;
+    fmt.println(n);
+    fmt.println(d);
+
+    // ---------- 整数算术 ----------
+    fmt.println(1 + 2 * 3);          // 7
+    fmt.println((1 + 2) * 3);        // 9
+    fmt.println(17 / 5);             // 3
+    fmt.println(17 % 5);             // 2
+    fmt.println(-count);             // -3
+
+    // ---------- 浮点与类型提升 ----------
+    fmt.println(1.5 + 2.5);          // 4
+    fmt.println(count + 0.5);        // 3.5
+    fmt.println(10 / 4.0);           // 2.5
+
+    // ---------- 字符串 ----------
+    fmt.println("a" + "b" + "c");
+    fmt.println("count = " + count);
+    fmt.println(name.length);        // 7
+
+    // ---------- 模板字符串 ----------
+    fmt.println($"名称={name}, 数量={count}");
+    fmt.println($"计算: {count} * 2 = {count * 2}");
+
+    // ---------- 比较与逻辑 ----------
+    fmt.println(count > 2);
+    fmt.println(count == 3);
+    fmt.println(name == "HaoLang");
+    fmt.println(count > 1 && count < 10);
+    fmt.println(count > 100 || count == 3);
+    fmt.println(!yes);
+
+    // ---------- 赋值与复合赋值 ----------
+    count = 10;
+    fmt.println(count);
+    count += 5;
+    fmt.println(count);              // 15
+    count -= 3;
+    fmt.println(count);              // 12
+    count *= 2;
+    fmt.println(count);              // 24
+    count /= 4;
+    fmt.println(count);              // 6
+
+    // ---------- if / else ----------
+    if (count > 5) {
+        fmt.println("count 大于 5");
+    } else {
+        fmt.println("count 不大于 5");
+    }
+
+    // ---------- while 循环 ----------
+    var i = 0;
+    while (i < 3) {
+        fmt.println($"i = {i}");
+        i += 1;
+    }
+
+    // ---------- 嵌套循环 ----------
+    var sum = 0;
+    var r = 0;
+    while (r < 3) {
+        var c = 0;
+        while (c < 3) {
+            sum += r * c;
+            c += 1;
+        }
+        r += 1;
+    }
+    fmt.println($"sum = {sum}");     // 9
+
+    // ---------- 作用域遮蔽 ----------
+    val x = 1;
+    if (true) {
+        val x = 2;
+        fmt.println(x);              // 2
+    }
+    fmt.println(x);                  // 1
+
+    // ---------- 中文 / Unicode / Emoji ----------
+    fmt.println("中文测试：你好，世界！");
+    fmt.println($"模板：{1 + 1} 个汉字");
+    fmt.println("Emoji: 🚀 符号: ±×÷");
+}

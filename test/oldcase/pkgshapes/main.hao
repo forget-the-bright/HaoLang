@@ -1,0 +1,16 @@
+package main;
+
+import shapes as s;
+
+func totalArea(): Double {
+    val c = new s.Circle(2.0);
+    val r = new s.Rect(3.0, 4.0);
+    return c.area() + r.area();
+}
+
+func main() {
+    val c = new s.Circle(1.0);
+    fmt.println(c.area());          // 3.14159
+    fmt.println(c.name());          // 圆
+    fmt.println(totalArea());       // 12.56636 + 12 = 24.56636
+}

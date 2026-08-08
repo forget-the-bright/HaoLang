@@ -1,0 +1,33 @@
+package main;
+import collections;
+
+// 泛型方法验证（v0.9.0）：List<T>.map<R> 的方法级类型参数 R 在调用时
+// 从 lambda 返回类型推断，单态化为 List$Int.map$String 等具体方法。
+
+func main() {
+    val list = new collections.List<Int>();
+    list.add(1);
+    list.add(2);
+    list.add(3);
+
+    // map：R 推断为 Int（lambda 返回 Int）
+    val doubled = list.map({ it * 2 });
+    fmt.println(doubled.size());       // 3
+    fmt.println(doubled.get(0));       // 2
+    fmt.println(doubled.get(2));       // 6
+
+    // map：R 推断为 String（lambda 返回模板字符串）
+    val labels = list.map({ $"n={it}" });
+    fmt.println(labels.size());        // 3
+    fmt.println(labels.get(1));        // n=2
+
+    // filter：普通方法（T 是类级，无方法级类型参数）
+    val evens = list.filter({ it % 2 == 0 });
+    fmt.println(evens.size());         // 1
+    fmt.println(evens.get(0));         // 2
+
+    // forEach：捕获可变变量 sum 并累加
+    var sum = 0;
+    list.forEach({ sum = sum + it });
+    fmt.println(sum);                  // 6
+}

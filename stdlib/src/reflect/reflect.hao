@@ -1,0 +1,360 @@
+// HaoLang 标准库 —— reflect 包
+// meta / 槽位用 Long? / [Long]（8 字节），与指针宽及 invoke ABI 一致。
+package reflect;
+
+import exception;
+
+class Type {
+    var meta: Long?;
+
+    func name(): String {
+        return hao_reflect_name(this.meta);
+    }
+    func getSuperclass(): String {
+        return hao_reflect_super(this.meta);
+    }
+    func isAbstract(): Bool {
+        return hao_reflect_is_abstract(this.meta) != 0;
+    }
+    func isEnum(): Bool {
+        return hao_reflect_is_enum(this.meta) != 0;
+    }
+    func getInterfaceCount(): Int {
+        return hao_reflect_iface_count(this.meta);
+    }
+    func getInterface(i: Int): String {
+        return hao_reflect_iface_at(this.meta, i);
+    }
+    func getFieldCount(): Int {
+        return hao_reflect_field_count(this.meta);
+    }
+    func getFieldName(i: Int): String {
+        return hao_reflect_field_name(this.meta, i);
+    }
+    func getFieldType(i: Int): String {
+        return hao_reflect_field_type(this.meta, i);
+    }
+    func getMethodCount(): Int {
+        return hao_reflect_method_count(this.meta);
+    }
+    func getMethodName(i: Int): String {
+        return hao_reflect_method_name(this.meta, i);
+    }
+    func getAnnotationCount(): Int {
+        return hao_reflect_anno_count(this.meta);
+    }
+    func getAnnotationName(i: Int): String {
+        return hao_reflect_anno_name(this.meta, i);
+    }
+    // v0.29：类级注解参数串（单值或 path=/x;method=GET）
+    func getAnnotationValue(i: Int): String {
+        return hao_reflect_anno_value(this.meta, i);
+    }
+    // v0.29：方法级注解
+    func getMethodAnnotationCount(mi: Int): Int {
+        return hao_reflect_method_anno_count(this.meta, mi);
+    }
+    func getMethodAnnotationName(mi: Int, ai: Int): String {
+        return hao_reflect_method_anno_name(this.meta, mi, ai);
+    }
+    func getMethodAnnotationValue(mi: Int, ai: Int): String {
+        return hao_reflect_method_anno_value(this.meta, mi, ai);
+    }
+    func getField(o: Object, name: String): String? {
+        return hao_reflect_field_get(this.meta, o, name);
+    }
+    func setField(o: Object, name: String, value: String): Bool {
+        return hao_reflect_field_set(this.meta, o, name, value) == 0;
+    }
+    // 按方法名查形参数量；未找到返回 -1（含父类链）
+    func methodParamCount(name: String): Int {
+        return hao_reflect_method_param_count(this.meta, name);
+    }
+
+    // 校验方法存在且 arity 匹配；失败抛 Exception（与合法返回 0 可区分）
+    func ensureInvokeArity(name: String, args: [Long]) {
+        val pc = this.methodParamCount(name);
+        if (pc < 0) {
+            throw new exception.Exception("reflect: 方法不存在: " + name);
+        }
+        if (args.length != pc) {
+            throw new exception.Exception(
+                "reflect: 参数个数不匹配: " + name +
+                " 需要 " + Integer.toStr(pc) +
+                " 个，实际 " + Integer.toStr(args.length));
+        }
+    }
+
+    // args：每槽 8 字节（[Long]）；返回原始 8 字节结果
+    // 方法不存在或 arity 错误 → throw（勿再静默返回 0）
+    func invoke(o: Object, name: String, args: [Long]): Long {
+        this.ensureInvokeArity(name, args);
+        return hao_reflect_invoke(this.meta, o, name, args);
+    }
+    func invokeStr(o: Object, name: String, args: [Long]): String? {
+        this.ensureInvokeArity(name, args);
+        return hao_reflect_invoke_str(this.meta, o, name, args);
+    }
+    func invokeBool(o: Object, name: String, args: [Long]): Bool {
+        this.ensureInvokeArity(name, args);
+        return hao_reflect_invoke_bool(this.meta, o, name, args);
+    }
+    func invokeDouble(o: Object, name: String, args: [Long]): Double {
+        this.ensureInvokeArity(name, args);
+        return hao_reflect_invoke_double(this.meta, o, name, args);
+    }
+    func invokeFloat(o: Object, name: String, args: [Long]): Float {
+        this.ensureInvokeArity(name, args);
+        return hao_reflect_invoke_float(this.meta, o, name, args);
+    }
+    func invokeUnit(o: Object, name: String, args: [Long]) {
+        this.ensureInvokeArity(name, args);
+        hao_reflect_invoke_void(this.meta, o, name, args);
+    }
+
+    // v0.31：是否有构造工厂（含多参；抽象/枚举/无虚表 → false）
+    func hasFactory(): Bool {
+        return hao_reflect_has_factory(this.meta) != 0;
+    }
+
+    // v0.30/v0.31：无参实例化是否可用（包扫描用：须工厂且构造器 0 参）
+    func canNewInstance(): Bool {
+        return this.hasFactory() && this.ctorParamCount() == 0;
+    }
+
+    // v0.31：构造器参数个数（语言本身支持 constructor(a, b, …)）
+    func ctorParamCount(): Int {
+        return hao_reflect_ctor_param_count(this.meta);
+    }
+
+    func ctorParamType(i: Int): String {
+        return hao_reflect_ctor_param_type(this.meta, i);
+    }
+
+    // v0.30：无参 $new；有参构造返回 null（请用 newInstanceArgs）
+    func newInstance(): Object? {
+        return hao_reflect_new_instance(this.meta);
+    }
+
+    // v0.31：多参构造；args 每槽 8 字节（同 invoke），长度须 == ctorParamCount
+    func newInstanceArgs(args: [Long]): Object? {
+        return hao_reflect_new_instance_args(this.meta, args);
+    }
+
+    // 类名 → 包路径：demo$web$api$Foo → demo/web/api；main 顶层 → ""
+    func packagePath(): String {
+        if (this.meta == null) { return ""; }
+        val n = this.name();
+        var last = -1;
+        var i = 0;
+        while (i < n.length) {
+            if (String.valueOf(n).charAt(i) == 36) { last = i; } // '$'
+            i += 1;
+        }
+        if (last < 0) { return ""; }
+        val pref = String.valueOf(n).substring(0, last);
+        var out = "";
+        var j = 0;
+        while (j < pref.length) {
+            val one = String.valueOf(pref).substring(j, j + 1);
+            if (one == "$") { out = out + "/"; }
+            else { out = out + one; }
+            j += 1;
+        }
+        return out;
+    }
+
+    // 是否落在指定包或其嵌套子包（path 支持 demo/web、demo.web、demo$web$）
+    func inPackage(path: String): Bool {
+        if (this.meta == null) { return false; }
+        val want = normalizePackagePrefix(path);
+        if (want.length == 0) {
+            // 空路径：仅 main 包（类名不含 $）
+            return String.valueOf(this.name()).indexOf("$") < 0;
+        }
+        // want=demo$web$ 匹配 demo$web$Foo 与 demo$web$api$Bar（嵌套）
+        return String.valueOf(this.name()).startsWith(want);
+    }
+
+    func hasAnnotationEnding(shortName: String): Bool {
+        if (this.meta == null) { return false; }
+        var i = 0;
+        while (i < this.getAnnotationCount()) {
+            val an = this.getAnnotationName(i);
+            if (an == shortName) { return true; }
+            if (String.valueOf(an).endsWith("." + shortName)) { return true; }
+            if (String.valueOf(an).endsWith("$" + shortName)) { return true; }
+            i += 1;
+        }
+        return false;
+    }
+
+    // v0.32：接口名后缀匹配（同注解：短名 / . / $）
+    func implementsEnding(shortName: String): Bool {
+        if (this.meta == null) { return false; }
+        var i = 0;
+        while (i < this.getInterfaceCount()) {
+            val iname = this.getInterface(i);
+            if (iname == shortName) { return true; }
+            if (String.valueOf(iname).endsWith("." + shortName)) { return true; }
+            if (String.valueOf(iname).endsWith("$" + shortName)) { return true; }
+            i += 1;
+        }
+        return false;
+    }
+
+    // v0.32：仅精确包（不含嵌套子包）。inPackage 会匹配子包。
+    // 实现：前缀 want 匹配，且 want 之后的类名段不再含 `$`。
+    func inPackageExact(path: String): Bool {
+        if (this.meta == null) { return false; }
+        val want = normalizePackagePrefix(path);
+        val n = this.name();
+        if (want.length == 0) {
+            return String.valueOf(n).indexOf("$") < 0;
+        }
+        if (!String.valueOf(n).startsWith(want)) { return false; }
+        var i = want.length;
+        while (i < n.length) {
+            if (String.valueOf(n).charAt(i) == 36) { return false; } // '$'
+            i += 1;
+        }
+        return true;
+    }
+}
+
+func typeOf(o: Object): Type {
+    val t = new Type();
+    t.meta = hao_reflect_getclass(o);
+    return t;
+}
+
+// v0.30：遍历本进程链接进的全部类元数据（含嵌套包）
+func typeCount(): Int {
+    return hao_reflect_type_count();
+}
+
+func typeAt(i: Int): Type {
+    val t = new Type();
+    t.meta = hao_reflect_type_at(i);
+    return t;
+}
+
+// 把用户路径规范成 IR 包前缀，如 demo/web → demo$web$
+func normalizePackagePrefix(path: String): String {
+    if (path.length == 0 || path == "*" || path == "main") { return ""; }
+    var s = path;
+    while (s.length > 0 && String.valueOf(s).startsWith("/")) {
+        s = String.valueOf(s).substring(1, s.length);
+    }
+    while (s.length > 0 && String.valueOf(s).endsWith("/")) {
+        s = String.valueOf(s).substring(0, s.length - 1);
+    }
+    if (s.length == 0) { return ""; }
+    var out = "";
+    var i = 0;
+    while (i < s.length) {
+        val one = String.valueOf(s).substring(i, i + 1);
+        if (one == "." || one == "/" || one == "$") { out = out + "$"; }
+        else { out = out + one; }
+        i += 1;
+    }
+    if (!String.valueOf(out).endsWith("$")) { out = out + "$"; }
+    return out;
+}
+
+// v0.32：用户路径 → 斜杠包路径（与 Type.packagePath 同形），demo.web → demo/web
+func normalizePackagePath(path: String): String {
+    val pref = normalizePackagePrefix(path);
+    if (pref.length == 0) { return ""; }
+    // demo$web$ → demo/web
+    var out = "";
+    var i = 0;
+    while (i < pref.length) {
+        val one = String.valueOf(pref).substring(i, i + 1);
+        if (one == "$") {
+            if (i + 1 < pref.length) { out = out + "/"; }
+        } else {
+            out = out + one;
+        }
+        i += 1;
+    }
+    return out;
+}
+
+// v0.32：可扩展包扫描——按包路径 + 调用方谓词筛选类型表。
+// nested=true：含嵌套子包（demo/web 含 demo/web/api）；false：仅精确包。
+// 隐患：未 import 的包不会进二进制，扫不到；谓词勿假定所有类可 new。
+// v0.32：可扩展包扫描——按包路径 + 调用方谓词筛选类型表。
+// nested=true：含嵌套子包（demo/web 含 demo/web/api）；false：仅精确包。
+// 隐患：未 import 的包不会进二进制，扫不到；谓词勿假定所有类可 new。
+func findTypes(packagePath: String, nested: Bool, pred: Func<Type, Bool>): [Type] {
+    var out: [Type] = [];
+    var i = 0;
+    val total = typeCount();
+    while (i < total) {
+        val t = typeAt(i);
+        var inPkg = false;
+        if (nested) { inPkg = t.inPackage(packagePath); }
+        else { inPkg = t.inPackageExact(packagePath); }
+        if (inPkg && pred(t)) {
+            out += t;
+        }
+        i += 1;
+    }
+    return out;
+}
+
+// 便捷：嵌套扫描（最常见）
+func findTypesNested(packagePath: String, pred: Func<Type, Bool>): [Type] {
+    return findTypes(packagePath, true, pred);
+}
+
+// 便捷：精确包
+func findTypesExact(packagePath: String, pred: Func<Type, Bool>): [Type] {
+    return findTypes(packagePath, false, pred);
+}
+
+extern func hao_reflect_getclass(o: Object): Long? = "hao_reflect_getclass";
+extern func hao_reflect_type_count(): Int = "hao_reflect_type_count";
+extern func hao_reflect_type_at(i: Int): Long? = "hao_reflect_type_at";
+extern func hao_reflect_new_instance(m: Long?): Object? = "hao_reflect_new_instance";
+extern func hao_reflect_new_instance_args(m: Long?, args: [Long]): Object? = "hao_reflect_new_instance_args";
+extern func hao_reflect_has_factory(m: Long?): Int = "hao_reflect_has_factory";
+extern func hao_reflect_ctor_param_count(m: Long?): Int = "hao_reflect_ctor_param_count";
+extern func hao_reflect_ctor_param_type(m: Long?, i: Int): String = "hao_reflect_ctor_param_type";
+extern func hao_reflect_name(m: Long?): String = "hao_reflect_name";
+extern func hao_reflect_super(m: Long?): String = "hao_reflect_super";
+extern func hao_reflect_is_abstract(m: Long?): Int = "hao_reflect_is_abstract";
+extern func hao_reflect_is_enum(m: Long?): Int = "hao_reflect_is_enum";
+extern func hao_reflect_iface_count(m: Long?): Int = "hao_reflect_iface_count";
+extern func hao_reflect_iface_at(m: Long?, i: Int): String = "hao_reflect_iface_at";
+extern func hao_reflect_field_count(m: Long?): Int = "hao_reflect_field_count";
+extern func hao_reflect_field_name(m: Long?, i: Int): String = "hao_reflect_field_name";
+extern func hao_reflect_field_type(m: Long?, i: Int): String = "hao_reflect_field_type";
+extern func hao_reflect_method_count(m: Long?): Int = "hao_reflect_method_count";
+extern func hao_reflect_method_name(m: Long?, i: Int): String = "hao_reflect_method_name";
+extern func hao_reflect_method_param_count(m: Long?, name: String): Int = "hao_reflect_method_param_count";
+extern func hao_reflect_anno_count(m: Long?): Int = "hao_reflect_anno_count";
+extern func hao_reflect_anno_name(m: Long?, i: Int): String = "hao_reflect_anno_name";
+extern func hao_reflect_anno_value(m: Long?, i: Int): String = "hao_reflect_anno_value";
+extern func hao_reflect_method_anno_count(m: Long?, mi: Int): Int = "hao_reflect_method_anno_count";
+extern func hao_reflect_method_anno_name(m: Long?, mi: Int, ai: Int): String = "hao_reflect_method_anno_name";
+extern func hao_reflect_method_anno_value(m: Long?, mi: Int, ai: Int): String = "hao_reflect_method_anno_value";
+extern func hao_reflect_field_get(m: Long?, o: Object, name: String): String? = "hao_reflect_field_get";
+extern func hao_reflect_field_set(m: Long?, o: Object, name: String, value: String): Int = "hao_reflect_field_set";
+
+extern func hao_reflect_invoke(m: Long?, o: Object, name: String, args: [Long]): Long = "hao_reflect_invoke";
+extern func hao_reflect_invoke_str(m: Long?, o: Object, name: String, args: [Long]): String? = "hao_reflect_invoke_str";
+extern func hao_reflect_invoke_bool(m: Long?, o: Object, name: String, args: [Long]): Bool = "hao_reflect_invoke_bool";
+extern func hao_reflect_invoke_double(m: Long?, o: Object, name: String, args: [Long]): Double = "hao_reflect_invoke_double";
+extern func hao_reflect_invoke_float(m: Long?, o: Object, name: String, args: [Long]): Float = "hao_reflect_invoke_float";
+extern func hao_reflect_invoke_void(m: Long?, o: Object, name: String, args: [Long]): Unit = "hao_reflect_invoke_void";
+
+extern func ptrOfStr(s: String): Long = "hao_reflect_ptrtoint";
+extern func ptrOf(o: Object): Long = "hao_reflect_ptrtoint";
+extern func strOfInt(i: Long): String = "hao_reflect_inttoptr";
+extern func objOf(i: Long): Object = "hao_reflect_inttoptr";
+extern func dblBits(d: Double): Long = "hao_reflect_dbl_bits";
+extern func bitsDbl(i: Long): Double = "hao_reflect_bits_dbl";
+extern func fltBits(f: Float): Long = "hao_reflect_flt_bits";
+extern func bitsFlt(i: Long): Float = "hao_reflect_bits_flt";

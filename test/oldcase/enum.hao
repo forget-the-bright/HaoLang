@@ -1,0 +1,46 @@
+package main;
+
+// 枚举类：常量集合 + 名称/序数（Java 风格，v0.17.0）
+// enum Color { RED, GREEN, BLUE } 编译成类，每个常量是静态实例 Color.RED
+
+enum Color {
+    RED, GREEN, BLUE
+}
+
+enum Direction {
+    NORTH, EAST, SOUTH, WEST
+}
+
+func describe(c: Color): String {
+    return c.name() + ":" + c.ordinal();
+}
+
+func main() {
+    // 常量访问、name()/ordinal()
+    fmt.println(Color.RED.name());      // RED
+    fmt.println(Color.GREEN.name());    // GREEN
+    fmt.println(Color.BLUE.ordinal());  // 2
+    fmt.println(Color.RED.ordinal());   // 0
+
+    // Direction 常量
+    fmt.println(Direction.WEST.name()); // WEST
+    fmt.println(Direction.EAST.ordinal()); // 1
+
+    // toString 返回名称
+    fmt.println(Color.RED.toString());  // RED
+
+    // 枚举常量是同一类型实例，可作参数（多态）
+    fmt.println(describe(Color.GREEN)); // GREEN:1
+    fmt.println(describe(Color.BLUE));  // BLUE:2
+
+    // 身份相等（Object.equals 默认身份）
+    fmt.println(Color.RED == Color.RED);   // true
+    fmt.println(Color.RED == Color.GREEN); // false
+
+    // 泛型集合装枚举
+    val colors = [Color.RED, Color.GREEN, Color.BLUE];
+    fmt.println(colors.length);          // 3
+    for (c in colors) {
+        fmt.println(c.ordinal());        // 0 1 2
+    }
+}

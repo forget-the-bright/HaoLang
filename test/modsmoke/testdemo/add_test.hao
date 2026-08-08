@@ -1,0 +1,13 @@
+package main;
+
+import testing;
+
+func TestAdd(t: testing.T) {
+    t.eqInt(add(2, 3), 5, "2+3");
+    t.eqInt(add(0, 0), 0, "0+0");
+    t.log("add ok");
+}
+
+func TestAddString(t: testing.T) {
+    t.eqString("a" + "b", "ab", "concat");
+}

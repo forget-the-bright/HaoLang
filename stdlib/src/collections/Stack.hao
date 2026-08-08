@@ -1,0 +1,62 @@
+package collections;
+
+// ============================================================
+//  Stack<T> —— 基于 List<T> 的后进先出栈（v0.15.0）
+// ------------------------------------------------------------
+//  职责：LIFO。push/pop/peek 均在尾端，O(1)。
+//  线程安全：否。
+// ============================================================
+
+class Stack<T> : Iterable<T> {
+    var items: List<T>;
+
+    // 构造空栈。
+    // 复杂度：O(1)
+    constructor() {
+        this.items = new List<T>();
+    }
+
+    // Iterable：toArray 拷贝后迭代（首元素为栈底）。
+    // @return ArrayIterator
+    // 复杂度：O(n)
+    func iterator(): Iterator<T> {
+        return new ArrayIterator<T>(this.toArray());
+    }
+
+    // 压栈。
+    // @param x 元素
+    // 复杂度：摊销 O(1)
+    func push(x: T) { this.items.add(x); }
+
+    // 弹出栈顶。
+    // @return 栈顶；空栈返回 null
+    // 复杂度：O(1)
+    func pop(): T? {
+        if (this.items.isEmpty()) return null;
+        val top = this.items.size() - 1;
+        return this.items.removeAt(top);
+    }
+
+    // 查看栈顶不弹出。
+    // @return 栈顶；空栈返回 null
+    // 复杂度：O(1)
+    func peek(): T? {
+        if (this.items.isEmpty()) return null;
+        return this.items.get(this.items.size() - 1);
+    }
+
+    // @return 是否为空
+    // 复杂度：O(1)
+    func isEmpty(): Bool { return this.items.isEmpty(); }
+
+    // @return 元素个数
+    // 复杂度：O(1)
+    func size(): Int { return this.items.size(); }
+
+    // 栈底在前的数组。
+    // @return 内部数组引用
+    // 复杂度：O(1)
+    func toArray(): [T] {
+        return this.items.toArray();
+    }
+}

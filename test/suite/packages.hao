@@ -1,0 +1,31 @@
+// ============================================================
+//  多文件测试套件 · packages：跨包 import / 通配 / 别名 / 跨包 init 顺序
+//  覆盖：pkgdemo + pkgshapes + initpkg
+// ============================================================
+package main;
+
+import calc;
+import calc.*;
+import shapes as s;
+import lib;
+
+func packagesTest() {
+    // ---------- 限定名 + 通配导入（calc）----------
+    fmt.println(calc.add(2, 3));       // 5
+    fmt.println(mul(4, 5));           // 20
+
+    // ---------- import as + 跨包类/接口（shapes）----------
+    val c = new s.Circle(1.0);
+    fmt.println(c.area());          // 3.14159
+    fmt.println(c.name());          // 圆
+    fmt.println(pkTotalArea());     // 24.56636
+
+    // ---------- 跨包普通函数（lib）+ init 顺序 ----------
+    fmt.println(lib.greet());       // hello from lib
+}
+
+func pkTotalArea(): Double {
+    val c = new s.Circle(2.0);
+    val r = new s.Rect(3.0, 4.0);
+    return c.area() + r.area();     // 12.56636 + 12 = 24.56636
+}

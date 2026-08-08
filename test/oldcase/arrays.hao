@@ -1,0 +1,130 @@
+package main;
+
+func sum(a: [Int]): Int {
+    var t = 0;
+    for (x in a) {
+        t += x;
+    }
+    return t;
+}
+
+func main() {
+    // ---------- 数组字面量与索引 ----------
+    val a = [10, 20, 30];
+    fmt.println(a.length);        // 3
+    fmt.println(a[0]);            // 10
+    fmt.println(a[2]);            // 30
+
+    // ---------- 索引赋值 ----------
+    var b = [1, 2, 3];
+    b[1] = 99;
+    fmt.println(b[1]);            // 99
+    b[2] += 7;
+    fmt.println(b[2]);            // 10
+
+    // ---------- 表达式作为索引 ----------
+    val i = 1;
+    fmt.println(a[i]);            // 20
+    fmt.println(a[i + 1]);        // 30
+
+    // ---------- for ... in ----------
+    for (x in a) {
+        fmt.println($"元素 {x}");
+    }
+
+    // ---------- 数组作为参数 ----------
+    fmt.println(sum(a));          // 60
+    fmt.println(sum([1, 2, 3, 4]));  // 10
+
+    // ---------- 空数组 ----------
+    val e = [];
+    fmt.println(e.length);        // 0
+
+    // ---------- 浮点数组 ----------
+    val f = [1.5, 2.5, 3.0];
+    fmt.println(f[0] + f[1]);     // 4
+
+    // ---------- 字符串数组 ----------
+    val s = ["甲", "乙", "丙"];
+    for (x in s) {
+        fmt.println(x);
+    }
+
+    // ---------- break / continue ----------
+    var n = 0;
+    while (true) {
+        n += 1;
+        if (n > 5) {
+            break;
+        }
+    }
+    fmt.println($"break 后 n={n}");   // 6
+
+    var odd = 0;
+    for (x in [1, 2, 3, 4, 5, 6]) {
+        if (x % 2 == 0) {
+            continue;
+        }
+        odd += x;
+    }
+    fmt.println($"奇数和={odd}");      // 9
+
+    // ---------- 嵌套循环中的 break ----------
+    var cnt = 0;
+    for (x in [1, 2, 3]) {
+        for (y in [1, 2, 3]) {
+            if (y == 2) {
+                break;
+            }
+            cnt += 1;
+        }
+    }
+    fmt.println($"嵌套 cnt={cnt}");    // 3
+
+    // ---------- when 语句 ----------
+    val k = 2;
+    when (k) {
+        1 -> fmt.println("一");
+        2 -> fmt.println("二");
+        else -> fmt.println("其他");
+    }
+
+    // 多值分支
+    when (k) {
+        1, 2, 3 -> fmt.println("小");
+        else -> fmt.println("大");
+    }
+
+    // 无主体 when（条件式）
+    when {
+        k > 10 -> fmt.println("很大");
+        k > 1  -> fmt.println("较大");
+        else   -> fmt.println("小");
+    }
+
+    // 字符串主体
+    val name = "hao";
+    when (name) {
+        "go"  -> fmt.println("Go");
+        "hao" -> fmt.println("HaoLang");
+        else  -> fmt.println("未知");
+    }
+
+    // ---------- when 表达式 ----------
+    val label = when (k) {
+        1 -> "一";
+        2 -> "二";
+        else -> "多";
+    };
+    fmt.println(label);           // 二
+
+    val num = when {
+        k > 5 -> 100;
+        k > 1 -> 50;
+        else  -> 0;
+    };
+    fmt.println(num);             // 50
+
+    // when 表达式嵌在模板字符串里
+    fmt.println($"结果: {when (k) { 2 -> "偶"; else -> "奇" }}");
+}

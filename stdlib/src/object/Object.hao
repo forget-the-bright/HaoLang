@@ -1,0 +1,26 @@
+// HaoLang 标准库 —— object 包：Object 根父类（v0.15.0）
+// ------------------------------------------------------------
+//  所有类都默认继承 Object（编译器自动补齐基类，无需显式写）。
+//  Object 提供三个默认实现（身份语义），子类可覆写：
+//    hashCode()          身份哈希（对象地址）
+//    equals(o: Object)   身份相等（指针相等）
+//    toString()          "<0x地址>"
+//  覆写 equals 时通常也要覆写 hashCode（与 Java/C# 一致），
+//  以保证「相等对象哈希一致」。Map/Set 的对象 key 依赖这两个方法。
+package object;
+
+class Object {
+    func hashCode(): Int {
+        return hao_object_hashCode(this);
+    }
+    func equals(o: Object): Bool {
+        return hao_object_equals(this, o);
+    }
+    func toString(): String {
+        return hao_object_toString(this);
+    }
+}
+
+extern func hao_object_hashCode(o: Object): Int = "hao_object_hashCode";
+extern func hao_object_equals(a: Object, b: Object): Bool = "hao_object_equals";
+extern func hao_object_toString(o: Object): String = "hao_object_toString";

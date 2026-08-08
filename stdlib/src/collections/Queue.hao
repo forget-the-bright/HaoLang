@@ -1,0 +1,63 @@
+package collections;
+
+// ============================================================
+//  Queue<T> —— 基于 List<T> 的先进先出队列
+// ------------------------------------------------------------
+//  职责：FIFO。enqueue O(1) 摊销；dequeue 用 removeAt(0) 为 O(n)。
+//  线程安全：否。后续可改环形缓冲做 O(1) dequeue。
+// ============================================================
+
+class Queue<T> : Iterable<T> {
+    var items: List<T>;
+
+    // 构造空队列。
+    // 复杂度：O(1)
+    constructor() {
+        this.items = new List<T>();
+    }
+
+    // Iterable：toArray 拷贝后迭代。
+    // @return ArrayIterator
+    // 复杂度：O(n)
+    func iterator(): Iterator<T> {
+        return new ArrayIterator<T>(this.toArray());
+    }
+
+    // 入队（尾部）。
+    // @param x 元素
+    // 复杂度：摊销 O(1)
+    func enqueue(x: T) { this.items.add(x); }
+
+    // 出队（头部）。
+    // @return 队首；空队列返回 null
+    // 复杂度：O(n)
+    func dequeue(): T? {
+        if (this.items.isEmpty()) return null;
+        val v = this.items.get(0);
+        this.items.removeAt(0);
+        return v;
+    }
+
+    // 查看队首不删除。
+    // @return 队首；空则 null
+    // 复杂度：O(1)
+    func peek(): T? {
+        if (this.items.isEmpty()) return null;
+        return this.items.get(0);
+    }
+
+    // @return 是否为空
+    // 复杂度：O(1)
+    func isEmpty(): Bool { return this.items.isEmpty(); }
+
+    // @return 元素个数
+    // 复杂度：O(1)
+    func size(): Int { return this.items.size(); }
+
+    // 队首在前的数组快照。
+    // @return 内部 List 的数组引用
+    // 复杂度：O(1)
+    func toArray(): [T] {
+        return this.items.toArray();
+    }
+}

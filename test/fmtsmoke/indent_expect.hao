@@ -1,0 +1,7 @@
+package main;
+func main() {
+    fmt.println(1);
+    if (true) {
+        fmt.println(2);
+    }
+}

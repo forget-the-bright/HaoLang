@@ -1,0 +1,6 @@
+package utilpkg;
+
+// 供 depsapp 经 file 仓库 + 全局缓存引用
+public func mark(): String {
+    return "deps-ok";
+}

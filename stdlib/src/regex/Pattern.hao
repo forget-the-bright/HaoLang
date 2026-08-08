@@ -1,0 +1,219 @@
+// ============================================================
+//  regex —— 正则表达式（v0.28+，对标 Java Pattern/Matcher）
+// ------------------------------------------------------------
+//  自包含 NFA/回溯引擎（runtime_regex.c），零外部库。
+//  支持：. * + ? | () 捕获 [] \d\w\s ^ $ 及常用转义。
+//  下标为 UTF-8 字节（与 HaoString.len 一致）。
+//  捕获状态在 Matcher 实例上（多 Matcher 互不覆盖）。
+//
+//  用法：
+//      import regex;
+//      val p = regex.Pattern.compile("a(\\d+)");
+//      val m = p.matcher("a42x");
+//      if (m.find()) { fmt.println(m.group(1)); }
+// ============================================================
+package regex;
+
+import exception;
+
+class RegexException : exception.Exception {
+    constructor(message: String) {
+        this.message = message;
+    }
+}
+
+class Pattern {
+    var handle: Long? = null;
+    var source: String = "";
+
+    constructor() {
+        this.handle = 0;
+        this.source = "";
+    }
+
+    // 编译模式；句柄盒不可 remake（须新 Pattern 或先 close）。
+    static func compile(re: String): Pattern {
+        val p = new Pattern();
+        p.source = re;
+        p.handle = 0;
+        if (!_compile(p.handle, re)) {
+            throw new RegexException("invalid regex: " + re);
+        }
+        return p;
+    }
+
+    static func matches(re: String, input: String): Bool {
+        val p = Pattern.compile(re);
+        val ok = p.matchFull(input);
+        p.close();
+        return ok;
+    }
+
+    // 释放原生 NFA；可重复调用。GC 不可达时也会 finalizer 释放；显式 close 仍推荐。
+    func close() {
+        _free(this.handle);
+        this.handle = 0;
+    }
+
+    // 尝试写入本句柄；已有 NFA 时返回 false（禁止 remake，须先 close）。
+    // @return 是否编译成功
+    func tryRemake(re: String): Bool {
+        return _compile(this.handle, re);
+    }
+
+    func pattern(): String {
+        return this.source;
+    }
+
+    func groupCount(): Int {
+        // 不含组 0
+        val n = _groupCount(this.handle);
+        if (n <= 0) { return 0; }
+        return n - 1;
+    }
+
+    func matcher(input: String): Matcher {
+        return new Matcher(this, input);
+    }
+
+    func matchFull(input: String): Bool {
+        return _fullmatch(this.handle, input);
+    }
+
+    func split(input: String): [String] {
+        var out: [String] = [];
+        val m = this.matcher(input);
+        var last = 0;
+        while (m.find()) {
+            out += _byteSlice(input, last, m.start());
+            last = m.end();
+        }
+        out += _byteSlice(input, last, _byteLen(input));
+        return out;
+    }
+
+    func replaceAll(input: String, replacement: String): String {
+        val m = this.matcher(input);
+        var r = "";
+        var last = 0;
+        while (m.find()) {
+            r = r + _byteSlice(input, last, m.start()) + replacement;
+            last = m.end();
+        }
+        r = r + _byteSlice(input, last, _byteLen(input));
+        return r;
+    }
+
+    func replaceFirst(input: String, replacement: String): String {
+        val m = this.matcher(input);
+        if (!m.find()) { return input; }
+        return _byteSlice(input, 0, m.start()) + replacement
+            + _byteSlice(input, m.end(), _byteLen(input));
+    }
+}
+
+class Matcher {
+    var pat: Pattern;
+    var text: String;
+    var searchFrom: Int;
+    var matched: Bool;
+    var mStart: Int;
+    var mEnd: Int;
+    // 每 Matcher 独立捕获（最多 32 组，与 runtime HAO_RE_MAX_CAPS 对齐）
+    var capS: [Int];
+    var capE: [Int];
+
+    constructor(p: Pattern, input: String) {
+        this.pat = p;
+        this.text = input;
+        this.searchFrom = 0;
+        this.matched = false;
+        this.mStart = 0;
+        this.mEnd = 0;
+        this.capS = new [Int](32, -1);
+        this.capE = new [Int](32, -1);
+    }
+
+    func reset(): Matcher {
+        this.searchFrom = 0;
+        this.matched = false;
+        this.mStart = 0;
+        this.mEnd = 0;
+        return this;
+    }
+
+    func find(): Bool {
+        if (!_search(this.pat.handle, this.text, this.searchFrom, this.capS, this.capE)) {
+            this.matched = false;
+            return false;
+        }
+        this.matched = true;
+        this.mStart = this.capS[0];
+        this.mEnd = this.capE[0];
+        // 避免零宽匹配死循环
+        if (this.mEnd == this.searchFrom) {
+            this.searchFrom = this.mEnd + 1;
+        } else {
+            this.searchFrom = this.mEnd;
+        }
+        return true;
+    }
+
+    func matches(): Bool {
+        val ok = _fullmatchInto(this.pat.handle, this.text, this.capS, this.capE);
+        this.matched = ok;
+        if (ok) {
+            this.mStart = this.capS[0];
+            this.mEnd = this.capE[0];
+        }
+        return ok;
+    }
+
+    func start(): Int {
+        return this.mStart;
+    }
+
+    func end(): Int {
+        return this.mEnd;
+    }
+
+    func groupStart(group: Int): Int {
+        if (group < 0 || group >= this.capS.length) { return -1; }
+        return this.capS[group];
+    }
+
+    func groupEnd(group: Int): Int {
+        if (group < 0 || group >= this.capE.length) { return -1; }
+        return this.capE[group];
+    }
+
+    func group(): String {
+        return this.groupAt(0);
+    }
+
+    func groupAt(i: Int): String {
+        if (!this.matched) { return ""; }
+        if (i < 0 || i >= this.capS.length) { return ""; }
+        val s = this.capS[i];
+        val e = this.capE[i];
+        if (s < 0 || e < s) { return ""; }
+        return _byteSlice(this.text, s, e);
+    }
+
+    func replaceAll(replacement: String): String {
+        return this.pat.replaceAll(this.text, replacement);
+    }
+
+    func replaceFirst(replacement: String): String {
+        return this.pat.replaceFirst(this.text, replacement);
+    }
+}
+
+extern func _compile(h: Long?, pattern: String): Bool = "hao_regex_compile";
+extern func _free(h: Long?): Unit = "hao_regex_free";
+extern func _groupCount(h: Long?): Int = "hao_regex_group_count";
+extern func _search(h: Long?, text: String, from: Int, capS: [Int], capE: [Int]): Bool = "hao_regex_search_simple";
+extern func _fullmatch(h: Long?, text: String): Bool = "hao_regex_fullmatch";
+extern func _fullmatchInto(h: Long?, text: String, capS: [Int], capE: [Int]): Bool = "hao_regex_fullmatch_into";
+extern func _byteSlice(s: String, start: Int, end: Int): String = "hao_str_byte_slice";
+extern func _byteLen(s: String): Int = "hao_str_byte_len";

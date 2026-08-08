@@ -1,0 +1,47 @@
+// ============================================================
+//  多文件测试套件 · json（v0.28 Fastjson2 风）
+// ============================================================
+package main;
+
+import json;
+import exception;
+
+func jsonTest() {
+    val obj = json.JSON.parseObject("{\"name\":\"Ada\",\"age\":36,\"ok\":true,\"tags\":[1,2]}");
+    fmt.println(obj.getString("name"));                      // Ada
+    fmt.println(obj.getInt("age"));                          // 36
+    fmt.println(obj.getBool("ok"));                          // true
+    fmt.println(obj.getJSONArray("tags")!!.size());          // 2
+    fmt.println(json.JSON.toJSONString(obj));                // {"name":"Ada",...}
+
+    val arr = json.JSON.parseArray("[10,20,30]");
+    fmt.println(arr.getInt(2));                              // 30
+
+    fmt.println(json.JSON.isValid("{\"a\":1}"));              // true
+    fmt.println(json.JSON.isValid("{bad"));                   // false
+
+    val built = new json.JSONObject();
+    built.putStr("x", "y").putInt("n", 7).putNull("z");
+    fmt.println(built.containsKey("z"));                     // true
+
+    val hit = json.JSONPath.eval(obj, "$.tags[1]");
+    fmt.println(json.JSON.valueToInt(hit));                  // 2
+
+    val deep = json.JSON.parse("{\"a\":{\"b\":{\"c\":9}}}");
+    val c = json.JSONPath.eval(deep, "$..c");
+    fmt.println(json.JSON.valueToInt(c));                    // 9
+
+    try {
+        json.JSON.parse("{");
+        fmt.println("no");
+    } catch (e: exception.Exception) {
+        fmt.println("bad-json");                             // bad-json
+    }
+
+    // \uXXXX / \b / \f 须按字符拼接，禁止 String+Int 十进制
+    val esc = json.JSON.valueToString(json.JSON.parse("\"\\u0041\\b\\f\""));
+    fmt.println(esc.length);                                 // 3
+    fmt.println(esc[0] == 65);                               // true  (A)
+    fmt.println(esc[1] == 8);                                // true  (BS)
+    fmt.println(esc[2] == 12);                               // true  (FF)
+}

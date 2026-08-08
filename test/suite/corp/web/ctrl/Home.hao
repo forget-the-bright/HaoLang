@@ -1,0 +1,15 @@
+// ============================================================
+//  corp.web.ctrl：MVC 控制器（无参）
+// ============================================================
+package corp.web.ctrl;
+
+import net.*;
+
+@Controller
+@RequestMapping(path = "/corp")
+class CorpHomeController {
+    @GetMapping(path = "/home")
+    func home(req: HttpRequest): HttpResponse {
+        return HttpResponse.of(200, "corp-home");
+    }
+}
