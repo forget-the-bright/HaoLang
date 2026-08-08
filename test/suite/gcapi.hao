@@ -5,6 +5,7 @@
 package main;
 
 import gc;
+import os;
 
 class GcProbe {
     var n: Int = 0;
@@ -35,4 +36,13 @@ func gcApiTest() {
 
     val s = gc.GC.summary();
     fmt.println(s.length > 10);                // true
+
+    // v0.49.1：minor/major + 进程资源（对标 .NET Process）
+    fmt.println(gc.GC.minorCount() >= 0);      // true
+    fmt.println(gc.GC.majorCount() >= 1);      // true（刚手动 major）
+    fmt.println(gc.GC.registeredThreads() >= 1); // true
+    fmt.println(os.Process.workingSetBytes() > 0); // true
+    fmt.println(os.Process.handleCount() > 0); // true
+    fmt.println(os.Process.threadCount() >= 1); // true
+    fmt.println(os.Process.uptimeMs() >= 0);   // true
 }

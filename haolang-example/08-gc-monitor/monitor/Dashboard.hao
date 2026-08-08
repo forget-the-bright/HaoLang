@@ -1,0 +1,121 @@
+// GC / 进程资源监控控制器（指标对齐 .NET Process + GC）
+package monitor;
+
+import gc;
+import net.*;
+import os;
+
+// JSON 快照：字段供前端展示；中文含义见模板标签
+class GcSnapshot {
+    // ---- 进程内存（对标 .NET Process）----
+    var workingSetBytes: Long = 0;   // 工作集：占用的物理内存
+    var privateBytes: Long = 0;      // 专用内存：进程独占提交
+
+    // ---- GC 托管堆（对标 GC 堆，非 OS 工作集）----
+    var liveBytes: Long = 0;         // 上次 major 后仍存活的用户区字节 ≈ 托管堆
+    var nurseryBytes: Long = 0;      // 新生代已分配压力
+    var threshold: Long = 0;
+    var allocatedSinceGc: Long = 0;
+    var blockCount: Long = 0;
+
+    // ---- 回收次数（二分代：minor≈Gen0，major≈Gen2；无 Gen1）----
+    var minorCount: Long = 0;        // ≈ Gen0
+    var majorCount: Long = 0;        // ≈ Gen2
+    var collectCount: Long = 0;
+    var finalizerRuns: Long = 0;
+    var finalizerSets: Long = 0;
+
+    // ---- CPU / 线程 / 句柄 / 运行时长 ----
+    var cpuPercent: Int = 0;         // 0～100；首次采样可能为 0
+    var cpuReady: Bool = false;      // false=尚在采样
+    var threadCount: Long = 0;       // OS 线程数
+    var gcThreads: Long = 0;         // 已注册进 GC STW 的线程
+    var handleCount: Long = 0;
+    var uptimeMs: Long = 0;
+
+    var usagePct: Int = 0;
+    var summary: String = "";
+    var note: String = "";
+    var engine: String = "HaoLang GC v3（young/old 二分代）+ os.Process";
+
+    constructor() {
+        this.refresh();
+    }
+
+    func refresh() {
+        this.workingSetBytes = os.Process.workingSetBytes();
+        this.privateBytes = os.Process.privateBytes();
+        this.handleCount = os.Process.handleCount();
+        this.threadCount = os.Process.threadCount();
+        this.uptimeMs = os.Process.uptimeMs();
+        val cpu = os.Process.cpuPercent();
+        if (cpu < 0) {
+            this.cpuReady = false;
+            this.cpuPercent = 0;
+        } else {
+            this.cpuReady = true;
+            this.cpuPercent = cpu;
+        }
+
+        this.liveBytes = gc.GC.liveBytes();
+        this.nurseryBytes = gc.GC.nurseryBytes();
+        this.threshold = gc.GC.threshold();
+        this.allocatedSinceGc = gc.GC.allocatedSinceGc();
+        this.blockCount = gc.GC.blockCount();
+        this.minorCount = gc.GC.minorCount();
+        this.majorCount = gc.GC.majorCount();
+        this.collectCount = gc.GC.collectCount();
+        this.finalizerRuns = gc.GC.finalizerRuns();
+        this.finalizerSets = gc.GC.finalizerSets();
+        this.gcThreads = gc.GC.registeredThreads();
+        this.summary = gc.GC.summary();
+        this.note = "对标说明：工作集/专用内存/句柄/OS线程/CPU/时长来自 os.Process；"
+            + "liveBytes≈托管堆；minor≈Gen0、major≈Gen2（无 Gen1）；"
+            + "栈为保守扫描，无逐帧堆栈 API。";
+        var pct: Int = 0;
+        if (this.threshold > 0) {
+            val thr = this.threshold;
+            val since = this.allocatedSinceGc;
+            if (since >= thr) { pct = 100; }
+            else { pct = Integer.parse(Long.toStr((since * 100) / thr)) ?? 0; }
+        }
+        this.usagePct = pct;
+    }
+}
+
+class CollectResult {
+    var ok: Bool = true;
+    var message: String = "";
+    var after: GcSnapshot?;
+    constructor(msg: String, snap: GcSnapshot) {
+        this.ok = true;
+        this.message = msg;
+        this.after = snap;
+    }
+}
+
+@Controller
+@RequestMapping(path = "/")
+class DashboardController {
+    @GetMapping(path = "/")
+    func index(req: HttpRequest): HttpResponse {
+        Html.setTemplateRoot("haolang-example/08-gc-monitor/templates");
+        // 预热 CPU 采样（首次 -1）
+        os.Process.cpuPercent();
+        val snap = new GcSnapshot();
+        val html = Html.renderFile("dashboard.html", snap);
+        return HttpResponse.html(html);
+    }
+
+    @GetMapping(path = "/api/gc")
+    func apiGc(req: HttpRequest): GcSnapshot {
+        return new GcSnapshot();
+    }
+
+    @PostMapping(path = "/api/gc/collect")
+    func apiCollect(req: HttpRequest): CollectResult {
+        gc.GC.collect();
+        val snap = new GcSnapshot();
+        return new CollectResult("major collect done", snap);
+    }
+}

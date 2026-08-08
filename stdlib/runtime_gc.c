@@ -51,6 +51,8 @@ typedef char gc_block_size_ok[sizeof(GCBlock) == 32 ? 1 : -1];
 static int64_t gc_finalizer_runs = 0;
 static int64_t gc_finalizer_sets = 0;
 static int64_t gc_collect_count = 0;
+static int64_t gc_minor_count = 0; /* young / nursery 回收次数（对标 .NET Gen0） */
+static int64_t gc_major_count = 0; /* 全堆回收次数（对标 .NET Gen2） */
 static int     gc_in_collect = 0;
 
 /* 清扫阶段只摘链入队；解锁后再回调并 free，避免持锁死锁。 */
@@ -723,8 +725,10 @@ void gc_collect_inner(char* regs, size_t regs_size) {
         if (gc_threshold > (size_t)256 << 20) gc_threshold = (size_t)256 << 20;
         gc_allocated = 0;
         gc_minors_since_major = 0;
+        gc_major_count += 1;
     } else {
         gc_minors_since_major += 1;
+        gc_minor_count += 1;
     }
     gc_collect_count += 1;
     gc_mark_major = 1;
@@ -860,6 +864,36 @@ int64_t hao_gc_block_count(void) {
 int64_t hao_gc_collect_count(void) {
     hao_gc_lock();
     int64_t v = gc_collect_count;
+    hao_gc_unlock();
+    return v;
+}
+
+int64_t hao_gc_minor_count(void) {
+    hao_gc_lock();
+    int64_t v = gc_minor_count;
+    hao_gc_unlock();
+    return v;
+}
+
+int64_t hao_gc_major_count(void) {
+    hao_gc_lock();
+    int64_t v = gc_major_count;
+    hao_gc_unlock();
+    return v;
+}
+
+/* 自上次 minor/major 以来 nursery 累计分配（触发 minor 的压力指标） */
+int64_t hao_gc_nursery_bytes(void) {
+    hao_gc_lock();
+    int64_t v = (int64_t)gc_nursery_alloc;
+    hao_gc_unlock();
+    return v;
+}
+
+/* 已向 GC 注册的线程数（参与 STW 栈扫描；≠ OS 线程总数） */
+int64_t hao_gc_registered_threads(void) {
+    hao_gc_lock();
+    int64_t v = (int64_t)gc_thread_count;
     hao_gc_unlock();
     return v;
 }

@@ -23,6 +23,7 @@
 | [05-project-local](05-project-local/) | 工程清单 `haoproject.json` + `localReferences`（无 `haopkg.json`） |
 | [06-project-haopkg](06-project-haopkg/) | 工程清单 + 仓内 `haopkg.json` + `hao mod tidy` |
 | [07-testing](07-testing/) | `hao test` |
+| [08-gc-monitor](08-gc-monitor/) | Web MVC：GC/内存监控页（5s 刷新） |
 
 > **`haoproject.json` ≠ `haopkg.json`**：前者是应用工程清单，后者是发布到仓里的包元数据。详见 [`docs/hao命令.md` §4.0](../docs/hao命令.md#40-haoprojectjson-与-haopkgjson-的区别)。
 

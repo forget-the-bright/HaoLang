@@ -9,6 +9,7 @@
 package net;
 
 import collections;
+import os;
 import reflect;
 import text;
 
@@ -102,6 +103,15 @@ class RouteBinding {
     }
 }
 
+class StaticMount {
+    var prefix: String;
+    var root: String;
+    constructor(prefix: String, root: String) {
+        this.prefix = prefix;
+        this.root = root;
+    }
+}
+
 public class HttpApp {
     var server: ServerSocket;
     var port: Int;
@@ -109,6 +119,7 @@ public class HttpApp {
     var filters: [HttpFilter];
     var interceptors: [HandlerInterceptor];
     var running: Bool;
+    var staticMounts: [StaticMount];
 
     constructor() {
         this.server = new ServerSocket();
@@ -117,6 +128,18 @@ public class HttpApp {
         this.filters = [];
         this.interceptors = [];
         this.running = false;
+        this.staticMounts = [];
+    }
+
+    // v0.49：挂载静态目录；GET urlPrefix/... → root/...
+    func staticFiles(urlPrefix: String, dir: String) {
+        var p = urlPrefix;
+        if (p.length == 0) { p = "/"; }
+        if (!String.valueOf(p).startsWith("/")) { p = "/" + p; }
+        if (p.length > 1 && String.valueOf(p).endsWith("/")) {
+            p = String.valueOf(p).substring(0, p.length - 1);
+        }
+        this.staticMounts += new StaticMount(p, dir);
     }
 
     func listen(port: Int): Bool {
@@ -298,6 +321,11 @@ public class HttpApp {
     }
 
     func dispatch(req: HttpRequest): HttpResponse {
+        // 静态文件（路由前；仅 GET）
+        if (req.method == "GET") {
+            val staticResp = this.tryStatic(req.path);
+            if (staticResp != null) { return staticResp!!; }
+        }
         // 拦截器 pre
         var ii = 0;
         while (ii < this.interceptors.length) {
@@ -321,6 +349,101 @@ public class HttpApp {
         return resp;
     }
 
+    func tryStatic(path: String): HttpResponse? {
+        var mi = 0;
+        while (mi < this.staticMounts.length) {
+            val m = this.staticMounts[mi];
+            mi += 1;
+            val pref = m.prefix;
+            var matched = false;
+            var rel = "";
+            if (path == pref) {
+                matched = true;
+                rel = "";
+            } else if (pref == "/") {
+                matched = true;
+                if (String.valueOf(path).startsWith("/")) {
+                    rel = String.valueOf(path).substring(1, path.length);
+                } else {
+                    rel = path;
+                }
+            } else if (String.valueOf(path).startsWith(pref + "/")) {
+                matched = true;
+                rel = String.valueOf(path).substring(pref.length + 1, path.length);
+            }
+            if (!matched) { continue; }
+            if (!HttpApp.isSafeRelPath(rel)) {
+                return HttpResponse.of(403, "forbidden");
+            }
+            var filePath = m.root;
+            if (rel.length == 0) {
+                filePath = os.Path.join(m.root, "index.html");
+            } else {
+                filePath = HttpApp.safeJoin(m.root, rel);
+                if (filePath.length == 0) {
+                    return HttpResponse.of(403, "forbidden");
+                }
+            }
+            if (!os.exists(filePath)) {
+                // 前缀命中但文件不存在 → 404（不落入其它路由）
+                return HttpResponse.of(404, "not found");
+            }
+            return HttpResponse.file(filePath);
+        }
+        return null;
+    }
+
+    static func isSafeRelPath(rel: String): Bool {
+        if (rel.length == 0) { return true; }
+        if (String.valueOf(rel).indexOf("..") >= 0) { return false; }
+        if (String.valueOf(rel).indexOf(":") >= 0) { return false; } // win 盘符
+        if (String.valueOf(rel).startsWith("/") || String.valueOf(rel).startsWith("\\")) {
+            return false;
+        }
+        return true;
+    }
+
+    static func safeJoin(root: String, rel: String): String {
+        if (!HttpApp.isSafeRelPath(rel)) { return ""; }
+        var cur = root;
+        val parts = text.split(rel, "/");
+        var i = 0;
+        while (i < parts.length) {
+            val p = parts[i];
+            i += 1;
+            if (p.length == 0 || p == ".") { continue; }
+            if (p == "..") { return ""; }
+            cur = os.Path.join(cur, p);
+        }
+        return cur;
+    }
+
+    // v0.49：按返回类型把控制器结果转为 HttpResponse
+    static func coerceResult(retType: String, raw: Long): HttpResponse {
+        if (retType.length == 0) {
+            if (raw == 0) { return HttpResponse.json(200, "null"); }
+            val o = reflect.objOf(raw);
+            if (o is HttpResponse) { return o as HttpResponse; }
+            return HttpResponse.json(o);
+        }
+        if (String.valueOf(retType).indexOf("HttpResponse") >= 0) {
+            if (raw == 0) { return HttpResponse.of(500, "null response"); }
+            val resp = reflect.objOf(raw);
+            return resp as HttpResponse;
+        }
+        if (retType == "String" || retType == "String?") {
+            if (raw == 0) { return HttpResponse.text(""); }
+            return HttpResponse.text(reflect.strOfInt(raw));
+        }
+        if (retType == "Unit" || retType == "void") {
+            return HttpResponse.of(204, "");
+        }
+        if (raw == 0) {
+            return HttpResponse.json(200, "null");
+        }
+        return HttpResponse.json(reflect.objOf(raw));
+    }
+
     func invokeRoute(req: HttpRequest): HttpResponse {
         val key = HttpApp.routeKey(req.method, req.path);
         val b = this.routes.get(key);
@@ -339,9 +462,14 @@ public class HttpApp {
         val t = reflect.typeOf(ctrl);
         var args: [Long] = [];
         args += reflect.ptrOf(req);
+        val retType = t.methodReturnType(bind.methodName);
+        if (retType == "String" || retType == "String?") {
+            val s = t.invokeStr(ctrl, bind.methodName, args);
+            if (s == null) { return HttpResponse.text(""); }
+            return HttpResponse.text(s!!);
+        }
         val raw = t.invoke(ctrl, bind.methodName, args);
-        val obj = reflect.objOf(raw);
-        return obj as HttpResponse;
+        return HttpApp.coerceResult(retType, raw);
     }
 
     func serveOnce(): Bool {

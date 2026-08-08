@@ -5,6 +5,18 @@ package main;
 
 import json;
 import exception;
+import collections;
+
+class JsonBeanUser {
+    var name: String = "";
+    var age: Int = 0;
+    var nested: JsonBeanUser?;
+    constructor(name: String, age: Int) {
+        this.name = name;
+        this.age = age;
+        this.nested = null;
+    }
+}
 
 func jsonTest() {
     val obj = json.JSON.parseObject("{\"name\":\"Ada\",\"age\":36,\"ok\":true,\"tags\":[1,2]}");
@@ -44,4 +56,28 @@ func jsonTest() {
     fmt.println(esc[0] == 65);                               // true  (A)
     fmt.println(esc[1] == 8);                                // true  (BS)
     fmt.println(esc[2] == 12);                               // true  (FF)
+
+    // v0.49：Bean / Map / List → JSON
+    val bean = new JsonBeanUser("Bob", 21);
+    val beanJson = json.JSON.toJSONString(bean);
+    fmt.println(String.valueOf(beanJson).indexOf("\"name\":\"Bob\"") >= 0); // true
+    fmt.println(String.valueOf(beanJson).indexOf("\"age\":21") >= 0);       // true
+
+    val child = new JsonBeanUser("Kid", 5);
+    bean.nested = child;
+    val nestJson = json.JSON.toJSONString(bean);
+    fmt.println(String.valueOf(nestJson).indexOf("\"name\":\"Kid\"") >= 0); // true
+
+    val m = new collections.Map<String, Object>();
+    m.put("a", Integer.valueOf(1));
+    m.put("b", String.valueOf("x"));
+    val mj = json.JSON.toJSONString(m);
+    fmt.println(String.valueOf(mj).indexOf("\"a\":1") >= 0);              // true
+    fmt.println(String.valueOf(mj).indexOf("\"b\":\"x\"") >= 0);          // true
+
+    val lst = new collections.List<Object>();
+    lst.add(Integer.valueOf(9));
+    lst.add(String.valueOf("z"));
+    val lj = json.JSON.toJSONString(lst);
+    fmt.println(lj);                                                     // [9,"z"]
 }

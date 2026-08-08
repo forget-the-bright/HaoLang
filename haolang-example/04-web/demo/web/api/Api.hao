@@ -1,7 +1,17 @@
 // 嵌套子包控制器：demo.web.api（scan("demo/web") 会扫到）
+// v0.49：可直接返回 Bean / String，框架自动转 JSON / text
 package demo.web.api;
 
 import net.*;
+
+class UserDto {
+    var name: String = "";
+    var id: Int = 0;
+    constructor(name: String, id: Int) {
+        this.name = name;
+        this.id = id;
+    }
+}
 
 @Controller
 @RequestMapping(path = "/web/api")
@@ -14,5 +24,17 @@ class ApiController {
     @PostMapping(path = "/echo")
     func echo(req: HttpRequest): HttpResponse {
         return HttpResponse.of(200, "api:" + req.body);
+    }
+
+    // 返回类对象 → application/json
+    @GetMapping(path = "/user")
+    func user(req: HttpRequest): UserDto {
+        return new UserDto("Ada", 1);
+    }
+
+    // 返回 String → text/plain
+    @GetMapping(path = "/ping")
+    func ping(req: HttpRequest): String {
+        return "pong";
     }
 }

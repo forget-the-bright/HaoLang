@@ -54,6 +54,18 @@ int64_t hao_array_check(void* arr, int64_t idx) {
     return idx;
 }
 
+/* 取指针数组元素（esz=8）为 i64；越界 panic。供 json/Map.keys 等（v0.49） */
+int64_t hao_array_get_ptr(void* arr, int64_t idx) {
+    if (!arr) return 0;
+    hao_array_check(arr, idx);
+    int64_t esz = hao_array_esz(arr);
+    if (esz != 8) {
+        fputs("panic: hao_array_get_ptr 仅支持指针宽元素\n", stderr);
+        exit(1);
+    }
+    return (int64_t)(intptr_t)(*(void**)((char*)arr + (size_t)idx * 8));
+}
+
 void* hao_array_push(void* arr, int64_t val) {
     if (!arr) {
         fputs("panic: 对 null 数组执行 push\n", stderr);

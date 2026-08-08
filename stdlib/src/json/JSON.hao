@@ -8,6 +8,10 @@ import lang;
 import os;
 import reflect;
 
+// 反射路径读取 keys()/数组元素（v0.49）
+extern func _jsonArrLen(arr: Long): Int = "hao_array_len";
+extern func _jsonArrGetPtr(arr: Long, idx: Int): Long = "hao_array_get_ptr";
+
 class JSON {
     // Feature 位标志（toJSONString 可选）
     static val PrettyFormat: Int = 1;
@@ -169,7 +173,63 @@ class JSON {
         return false;
     }
 
+    static val MAX_DEPTH: Int = 32;
+
     static func stringify(value: Object, features: Int, indent: Int): String {
+        var stack: [Long] = [];
+        return JSON.stringifyAt(value, features, indent, stack, 0);
+    }
+
+    static func stackHas(stack: [Long], p: Long): Bool {
+        var i = 0;
+        while (i < stack.length) {
+            if (stack[i] == p) { return true; }
+            i += 1;
+        }
+        return false;
+    }
+
+    static func stackPush(stack: [Long], p: Long): [Long] {
+        var n: [Long] = [];
+        var i = 0;
+        while (i < stack.length) {
+            n += stack[i];
+            i += 1;
+        }
+        n += p;
+        return n;
+    }
+
+    // 是否 Map 形态（有无参 keys）
+    static func looksLikeMap(t: reflect.Type): Bool {
+        return t.methodParamCount("keys") == 0;
+    }
+
+    // 是否 List 形态（size+get，无 keys）
+    static func looksLikeList(t: reflect.Type): Bool {
+        if (t.methodParamCount("keys") == 0) { return false; }
+        return t.methodParamCount("size") == 0 && t.methodParamCount("get") == 1;
+    }
+
+    static func fieldIsString(ft: String): Bool {
+        return ft == "String" || ft == "String?";
+    }
+
+    static func fieldIsBool(ft: String): Bool {
+        return ft == "Bool";
+    }
+
+    static func fieldIsNumber(ft: String): Bool {
+        return ft == "Int" || ft == "Long" || ft == "UInt" || ft == "ULong"
+            || ft == "UIntPtr" || ft == "Short" || ft == "UShort"
+            || ft == "Byte" || ft == "SByte" || ft == "Float" || ft == "Double"
+            || ft == "Char";
+    }
+
+    static func stringifyAt(value: Object, features: Int, indent: Int, stack: [Long], depth: Int): String {
+        if (depth > JSON.MAX_DEPTH) {
+            throw new JSONException("JSON depth exceeded");
+        }
         if (value is JSONNull) { return "null"; }
         if (value is Boolean) {
             if ((value as Boolean).booleanValue()) { return "true"; }
@@ -182,15 +242,118 @@ class JSON {
             return JSON.quote((value as lang.String).toString());
         }
         if (value is JSONObject) {
-            return JSON.stringifyObj(value as JSONObject, features, indent);
+            return JSON.stringifyObj(value as JSONObject, features, indent, stack, depth);
         }
         if (value is JSONArray) {
-            return JSON.stringifyArr(value as JSONArray, features, indent);
+            return JSON.stringifyArr(value as JSONArray, features, indent, stack, depth);
         }
-        return JSON.quote(value.toString());
+        val p = reflect.ptrOf(value);
+        if (JSON.stackHas(stack, p)) { return "null"; }
+        val t = reflect.typeOf(value);
+        if (t.meta == null) {
+            return JSON.quote(value.toString());
+        }
+        val next = JSON.stackPush(stack, p);
+        if (JSON.looksLikeMap(t)) {
+            return JSON.stringifyMap(value, t, features, indent, next, depth + 1);
+        }
+        if (JSON.looksLikeList(t)) {
+            return JSON.stringifyList(value, t, features, indent, next, depth + 1);
+        }
+        return JSON.stringifyBean(value, t, features, indent, next, depth + 1);
     }
 
-    static func stringifyObj(obj: JSONObject, features: Int, indent: Int): String {
+    static func stringifyMap(value: Object, t: reflect.Type, features: Int, indent: Int, stack: [Long], depth: Int): String {
+        val pretty = (features & JSON.PrettyFormat) != 0;
+        var emptyArgs: [Long] = [];
+        val keysPtr = t.invoke(value, "keys", emptyArgs);
+        val n = _jsonArrLen(keysPtr);
+        var r = "{";
+        var first = true;
+        var i = 0;
+        while (i < n) {
+            val kPtr = _jsonArrGetPtr(keysPtr, i);
+            val kStr = reflect.strOfInt(kPtr);
+            var gargs: [Long] = [];
+            gargs += kPtr;
+            val vRaw = t.invoke(value, "get", gargs);
+            if (!first) { r = r + ","; }
+            first = false;
+            if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
+            r = r + JSON.quote(kStr) + ":";
+            if (pretty) { r = r + " "; }
+            if (vRaw == 0) {
+                r = r + "null";
+            } else {
+                r = r + JSON.stringifyAt(reflect.objOf(vRaw), features, indent + 1, stack, depth);
+            }
+            i += 1;
+        }
+        if (pretty && !first) { r = r + "\n" + JSON.pad(indent); }
+        return r + "}";
+    }
+
+    static func stringifyList(value: Object, t: reflect.Type, features: Int, indent: Int, stack: [Long], depth: Int): String {
+        val pretty = (features & JSON.PrettyFormat) != 0;
+        var emptyArgs: [Long] = [];
+        val sz = t.invoke(value, "size", emptyArgs);
+        var r = "[";
+        var i = 0;
+        while (i < sz) {
+            if (i > 0) { r = r + ","; }
+            if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
+            var gargs: [Long] = [];
+            gargs += i;
+            val vRaw = t.invoke(value, "get", gargs);
+            if (vRaw == 0) {
+                r = r + "null";
+            } else {
+                r = r + JSON.stringifyAt(reflect.objOf(vRaw), features, indent + 1, stack, depth);
+            }
+            i += 1;
+        }
+        if (pretty && sz > 0) { r = r + "\n" + JSON.pad(indent); }
+        return r + "]";
+    }
+
+    static func stringifyBean(value: Object, t: reflect.Type, features: Int, indent: Int, stack: [Long], depth: Int): String {
+        val pretty = (features & JSON.PrettyFormat) != 0;
+        var r = "{";
+        var first = true;
+        var i = 0;
+        val fc = t.getFieldCount();
+        while (i < fc) {
+            val name = t.getFieldName(i);
+            val ft = t.getFieldType(i);
+            i += 1;
+            // 跳过合成/内部
+            if (String.valueOf(name).startsWith("_")) { continue; }
+            var piece = "";
+            if (JSON.fieldIsString(ft)) {
+                val s = t.getField(value, name);
+                if (s == null) { piece = "null"; }
+                else { piece = JSON.quote(s!!); }
+            } else if (JSON.fieldIsBool(ft) || JSON.fieldIsNumber(ft)) {
+                val s = t.getField(value, name);
+                if (s == null) { piece = "null"; }
+                else { piece = s!!; }
+            } else {
+                val child = t.getFieldObject(value, name);
+                if (child == null) { piece = "null"; }
+                else { piece = JSON.stringifyAt(child!!, features, indent + 1, stack, depth); }
+            }
+            if (!first) { r = r + ","; }
+            first = false;
+            if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
+            r = r + JSON.quote(name) + ":";
+            if (pretty) { r = r + " "; }
+            r = r + piece;
+        }
+        if (pretty && !first) { r = r + "\n" + JSON.pad(indent); }
+        return r + "}";
+    }
+
+    static func stringifyObj(obj: JSONObject, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
         val writeNull = (features & JSON.WriteMapNullValue) != 0;
         var r = "{";
@@ -209,7 +372,7 @@ class JSON {
             }
             r = r + JSON.quote(k) + ":";
             if (pretty) { r = r + " "; }
-            r = r + JSON.stringify(v!!, features, indent + 1);
+            r = r + JSON.stringifyAt(v!!, features, indent + 1, stack, depth + 1);
         }
         if (pretty && !first) {
             r = r + "\n" + JSON.pad(indent);
@@ -217,14 +380,14 @@ class JSON {
         return r + "}";
     }
 
-    static func stringifyArr(arr: JSONArray, features: Int, indent: Int): String {
+    static func stringifyArr(arr: JSONArray, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
         var r = "[";
         var i = 0;
         while (i < arr.size()) {
             if (i > 0) { r = r + ","; }
             if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
-            r = r + JSON.stringify(arr.get(i), features, indent + 1);
+            r = r + JSON.stringifyAt(arr.get(i), features, indent + 1, stack, depth + 1);
             i += 1;
         }
         if (pretty && arr.size() > 0) {

@@ -218,6 +218,38 @@ static const char* field_type(const HaoClassMeta* m, const char* fname) {
     return f ? f->typeStr : "";
 }
 
+/* 类型名是否为 base 或 base?（字段 typeStr 可能带可空后缀） */
+static int type_is_base(const char* t, const char* base) {
+    if (!t || !base) return 0;
+    size_t n = strlen(base);
+    if (strncmp(t, base, n) != 0) return 0;
+    return t[n] == '\0' || t[n] == '?';
+}
+
+/* 非空标量 / String|String?：不走 get_obj（用 field_get）。T? 数值走 get_obj。 */
+static int is_scalar_field_type(const char* t) {
+    if (!t || !*t) return 1;
+    if (type_is_base(t, "String")) return 1;
+    return strcmp(t, "Int") == 0 || strcmp(t, "Long") == 0
+        || strcmp(t, "UInt") == 0 || strcmp(t, "ULong") == 0
+        || strcmp(t, "UIntPtr") == 0 || strcmp(t, "Short") == 0
+        || strcmp(t, "UShort") == 0 || strcmp(t, "Byte") == 0
+        || strcmp(t, "SByte") == 0 || strcmp(t, "Float") == 0
+        || strcmp(t, "Double") == 0 || strcmp(t, "Bool") == 0
+        || strcmp(t, "Char") == 0 || strcmp(t, "Unit") == 0;
+}
+
+/* 引用字段原始对象指针；标量/String/空 → NULL（v0.49） */
+void* hao_reflect_field_get_obj(void* meta, void* obj, HaoString* fname) {
+    const HaoClassMeta* m = (const HaoClassMeta*)meta;
+    const char* name = hao_str_cstr(fname);
+    const HaoFieldMeta* f = find_field(m, name);
+    if (!f || !obj) return NULL;
+    if (is_scalar_field_type(f->typeStr)) return NULL;
+    char* base = (char*)obj + (size_t)f->slot * 8;
+    return *(void**)base;
+}
+
 /* 读字段值转字符串。obj 为对象实例。 */
 HaoString* hao_reflect_field_get(void* meta, void* obj, HaoString* fname) {
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
@@ -227,6 +259,7 @@ HaoString* hao_reflect_field_get(void* meta, void* obj, HaoString* fname) {
     char* base = (char*)obj + (size_t)f->slot * 8;
     char buf[64];
     const char* t = f->typeStr;
+    /* 非空标量按值读；String/String? 按指针；T? 数值勿走此路（槽内是指针） */
     if (t && strcmp(t, "Int") == 0) {
         snprintf(buf, sizeof buf, "%d", (int)(*(int32_t*)base));
     } else if (t && strcmp(t, "Long") == 0) {
@@ -253,7 +286,7 @@ HaoString* hao_reflect_field_get(void* meta, void* obj, HaoString* fname) {
         strcpy(buf, (*(int8_t*)base) ? "true" : "false");
     } else if (t && strcmp(t, "Char") == 0) {
         snprintf(buf, sizeof buf, "%d", (int)(*(int32_t*)base));
-    } else if (t && strcmp(t, "String") == 0) {
+    } else if (type_is_base(t, "String")) {
         HaoString* s = *(HaoString**)base;
         return s;
     } else {
@@ -383,6 +416,16 @@ int32_t hao_reflect_method_param_count(void* meta, HaoString* name) {
     const HaoMethodMeta* mm = find_method(m, hao_str_cstr(name));
     if (!mm || !mm->invoke) return -1;
     return (int32_t)mm->paramCount;
+}
+
+/* 按方法名查返回类型串（含父类链）；未找到 → ""（v0.49） */
+HaoString* hao_reflect_method_return_type(void* meta, HaoString* mname) {
+    const HaoClassMeta* m = (const HaoClassMeta*)meta;
+    const char* name = hao_str_cstr(mname);
+    if (!m || !name) return hao_str_from_cstr("");
+    const HaoMethodMeta* mm = find_method(m, name);
+    if (!mm || !mm->retType) return hao_str_from_cstr("");
+    return hao_str_from_cstr(mm->retType);
 }
 
 int64_t hao_reflect_invoke(void* meta, void* obj, HaoString* name, int64_t* argSlots) {

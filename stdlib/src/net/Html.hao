@@ -1,0 +1,326 @@
+// ============================================================
+//  net.Html —— Mustache 风格模板（v0.49）
+// ------------------------------------------------------------
+//  {{key}} / {{a.b}}  HTML 转义
+//  {{{key}}}         原始输出
+//  {{#name}}…{{/name}}  真值段；List 迭代；. 为当前项
+//  {{^name}}…{{/name}}  反段
+//  {{>partial}}      从 templateRoot 加载 partial.html
+//  首行 {{!<layout}} 正文渲染后嵌入 layout 的 {{{body}}}
+// ============================================================
+package net;
+
+import lang;
+import os;
+import reflect;
+import text;
+
+public class Html {
+    static var templateRoot: String = ".";
+
+    // 设置 partial / renderFile 根目录
+    static func setTemplateRoot(dir: String) {
+        Html.templateRoot = dir;
+    }
+
+    static func escape(s: String): String {
+        var r = "";
+        var i = 0;
+        while (i < s.length) {
+            val c = s[i];
+            if (c == 38) { r = r + "&amp;"; }       // &
+            else if (c == 60) { r = r + "&lt;"; }   // <
+            else if (c == 62) { r = r + "&gt;"; }   // >
+            else if (c == 34) { r = r + "&quot;"; } // "
+            else if (c == 39) { r = r + "&#39;"; }  // '
+            else { r = r + c; }
+            i += 1;
+        }
+        return r;
+    }
+
+    // 内建 indexOf 无 from；用 substring 模拟
+    static func indexOfFrom(s: String, sub: String, from: Int): Int {
+        if (from >= s.length) { return -1; }
+        if (from <= 0) { return String.valueOf(s).indexOf(sub); }
+        val rest = String.valueOf(s).substring(from, s.length);
+        val j = String.valueOf(rest).indexOf(sub);
+        if (j < 0) { return -1; }
+        return from + j;
+    }
+
+    static func render(template: String, model: Object): String {
+        var layout = "";
+        var bodyTpl = template;
+        if (String.valueOf(template).startsWith("{{!<")) {
+            val end = String.valueOf(template).indexOf("}}");
+            if (end > 4) {
+                layout = String.valueOf(String.valueOf(template).substring(4, end)).trim();
+                var rest = String.valueOf(template).substring(end + 2, template.length);
+                if (String.valueOf(rest).startsWith("\r\n")) {
+                    rest = String.valueOf(rest).substring(2, rest.length);
+                } else if (String.valueOf(rest).startsWith("\n")) {
+                    rest = String.valueOf(rest).substring(1, rest.length);
+                }
+                bodyTpl = rest;
+            }
+        }
+        val rendered = Html.renderInner(bodyTpl, model, model);
+        if (layout.length == 0) { return rendered; }
+        val layTpl = Html.loadPartial(layout);
+        val wrap = new HtmlLayoutModel(model, rendered);
+        return Html.renderInner(layTpl, wrap, wrap);
+    }
+
+    static func renderFile(relPath: String, model: Object): String {
+        val path = Html.joinRoot(relPath);
+        val t = os.readFile(path);
+        if (t == null) {
+            return "<!-- template not found: " + relPath + " -->";
+        }
+        return Html.render(t!!, model);
+    }
+
+    static func joinRoot(rel: String): String {
+        var r = rel;
+        if (String.valueOf(r).startsWith("/") || String.valueOf(r).startsWith("\\")) {
+            r = String.valueOf(r).substring(1, r.length);
+        }
+        return os.Path.join(Html.templateRoot, r);
+    }
+
+    static func loadPartial(name: String): String {
+        var n = name;
+        if (!String.valueOf(n).endsWith(".html") && !String.valueOf(n).endsWith(".hao")) {
+            n = n + ".html";
+        }
+        val path = Html.joinRoot(n);
+        val t = os.readFile(path);
+        if (t == null) {
+            return "<!-- missing partial: " + name + " -->";
+        }
+        return t!!;
+    }
+
+    static func renderInner(template: String, model: Object, root: Object): String {
+        var out = "";
+        var i = 0;
+        val n = template.length;
+        while (i < n) {
+            val open = Html.indexOfFrom(template, "{{", i);
+            if (open < 0) {
+                out = out + String.valueOf(template).substring(i, n);
+                break;
+            }
+            out = out + String.valueOf(template).substring(i, open);
+            // 原始 {{{
+            if (open + 2 < n && String.valueOf(template).charAt(open + 2) == 123) {
+                val close = Html.indexOfFrom(template, "}}}", open + 3);
+                if (close < 0) {
+                    out = out + String.valueOf(template).substring(open, n);
+                    break;
+                }
+                val key = String.valueOf(String.valueOf(template).substring(open + 3, close)).trim();
+                out = out + Html.lookupString(model, root, key, false);
+                i = close + 3;
+                continue;
+            }
+            val close2 = Html.indexOfFrom(template, "}}", open + 2);
+            if (close2 < 0) {
+                out = out + String.valueOf(template).substring(open, n);
+                break;
+            }
+            val tag = String.valueOf(String.valueOf(template).substring(open + 2, close2)).trim();
+            i = close2 + 2;
+            if (tag.length == 0) { continue; }
+            val head = String.valueOf(tag).charAt(0);
+            if (head == 35 || head == 94) { // # or ^
+                val name = String.valueOf(String.valueOf(tag).substring(1, tag.length)).trim();
+                val endTag = "{{/" + name + "}}";
+                val endPos = Html.indexOfFrom(template, endTag, i);
+                if (endPos < 0) {
+                    out = out + "<!-- unclosed section: " + name + " -->";
+                    break;
+                }
+                val inner = String.valueOf(template).substring(i, endPos);
+                i = endPos + endTag.length;
+                val inverted = head == 94;
+                out = out + Html.renderSection(inner, model, root, name, inverted);
+            } else if (head == 62) { // >
+                val pname = String.valueOf(String.valueOf(tag).substring(1, tag.length)).trim();
+                val part = Html.loadPartial(pname);
+                out = out + Html.renderInner(part, model, root);
+            } else if (head == 33) {
+                // 注释 {{! ... }} 忽略
+            } else {
+                out = out + Html.lookupString(model, root, tag, true);
+            }
+        }
+        return out;
+    }
+
+    static func renderSection(inner: String, model: Object, root: Object, name: String, inverted: Bool): String {
+        val v = Html.lookup(model, root, name);
+        if (inverted) {
+            if (Html.isTruthy(v)) { return ""; }
+            return Html.renderInner(inner, model, root);
+        }
+        if (!Html.isTruthy(v)) { return ""; }
+        val obj = v!!;
+        val t = reflect.typeOf(obj);
+        if (t.methodParamCount("size") == 0 && t.methodParamCount("get") == 1
+                && t.methodParamCount("keys") != 0) {
+            // List 迭代
+            var empty: [Long] = [];
+            val sz = t.invoke(obj, "size", empty);
+            var out = "";
+            var i = 0;
+            while (i < sz) {
+                var args: [Long] = [];
+                args += i;
+                val raw = t.invoke(obj, "get", args);
+                if (raw != 0) {
+                    val item = reflect.objOf(raw);
+                    out = out + Html.renderInner(inner, item, root);
+                }
+                i += 1;
+            }
+            return out;
+        }
+        // 真值对象：进入其上下文
+        return Html.renderInner(inner, obj, root);
+    }
+
+    static func isTruthy(v: Object?): Bool {
+        if (v == null) { return false; }
+        val o = v!!;
+        if (o is Boolean) { return (o as Boolean).booleanValue(); }
+        if (o is lang.String) {
+            return (o as lang.String).toString().length > 0;
+        }
+        val t = reflect.typeOf(o);
+        if (t.methodParamCount("size") == 0) {
+            var empty: [Long] = [];
+            val sz = t.invoke(o, "size", empty);
+            return sz > 0;
+        }
+        return true;
+    }
+
+    static func lookupString(model: Object, root: Object, key: String, esc: Bool): String {
+        if (key == ".") {
+            // 当前上下文 toString
+            val s = model.toString();
+            if (esc) { return Html.escape(s); }
+            return s;
+        }
+        val v = Html.lookup(model, root, key);
+        if (v == null) { return ""; }
+        val o = v!!;
+        var s = "";
+        if (o is lang.String) { s = (o as lang.String).toString(); }
+        else if (o is Integer) { s = Integer.toStr((o as Integer).intValue()); }
+        else if (o is lang.Long) { s = Long.toStr((o as lang.Long).longValue()); }
+        else if (o is Boolean) {
+            if ((o as Boolean).booleanValue()) { s = "true"; }
+            else { s = "false"; }
+        } else {
+            // Bean 标量字段已在 lookup 装箱；其它 toString
+            val t = reflect.typeOf(o);
+            // 若是包装失败的原始，尝试 toString
+            s = o.toString();
+        }
+        if (esc) { return Html.escape(s); }
+        return s;
+    }
+
+    static func lookup(model: Object, root: Object, key: String): Object? {
+        if (key == "body" && model is HtmlLayoutModel) {
+            return String.valueOf((model as HtmlLayoutModel).body);
+        }
+        if (key == ".") { return model; }
+        val fromModel = Html.lookupPath(model, key);
+        if (fromModel != null) { return fromModel; }
+        if (!(model is HtmlLayoutModel)) { return null; }
+        return Html.lookupPath((model as HtmlLayoutModel).inner, key);
+    }
+
+    static func lookupPath(ctx: Object, path: String): Object? {
+        if (path.length == 0) { return null; }
+        var cur: Object? = ctx;
+        val parts = text.split(path, ".");
+        var pi = 0;
+        while (pi < parts.length) {
+            if (cur == null) { return null; }
+            val seg = parts[pi];
+            pi += 1;
+            cur = Html.lookupOne(cur!!, seg);
+        }
+        return cur;
+    }
+
+    static func lookupOne(ctx: Object, key: String): Object? {
+        if (ctx is HtmlLayoutModel) {
+            if (key == "body") {
+                return String.valueOf((ctx as HtmlLayoutModel).body);
+            }
+            return Html.lookupOne((ctx as HtmlLayoutModel).inner, key);
+        }
+        // Map：get(key)
+        val t = reflect.typeOf(ctx);
+        if (t.methodParamCount("keys") == 0 && t.methodParamCount("get") == 1) {
+            var args: [Long] = [];
+            args += reflect.ptrOfStr(key);
+            val raw = t.invoke(ctx, "get", args);
+            if (raw == 0) { return null; }
+            return reflect.objOf(raw);
+        }
+        // Bean 字段
+        val ft = Html.findFieldType(t, key);
+        if (ft.length == 0) { return null; }
+        if (ft == "String" || ft == "String?") {
+            val s = t.getField(ctx, key);
+            if (s == null) { return null; }
+            return String.valueOf(s!!);
+        }
+        if (ft == "Int") {
+            val s = t.getField(ctx, key);
+            if (s == null) { return null; }
+            val n = Integer.parse(s!!);
+            if (n == null) { return null; }
+            return Integer.valueOf(n!!);
+        }
+        if (ft == "Bool") {
+            val s = t.getField(ctx, key);
+            if (s == null) { return null; }
+            return Boolean.valueOf(s!! == "true");
+        }
+        if (ft == "Long") {
+            val s = t.getField(ctx, key);
+            if (s == null) { return null; }
+            val n = Long.parse(s!!);
+            if (n == null) { return null; }
+            return lang.Long.valueOf(n!!);
+        }
+        return t.getFieldObject(ctx, key);
+    }
+
+    static func findFieldType(t: reflect.Type, name: String): String {
+        var i = 0;
+        while (i < t.getFieldCount()) {
+            if (t.getFieldName(i) == name) { return t.getFieldType(i); }
+            i += 1;
+        }
+        return "";
+    }
+}
+
+// layout 包装：{{{body}}} + 原 model 字段
+class HtmlLayoutModel {
+    var inner: Object;
+    var body: String;
+    constructor(inner: Object, body: String) {
+        this.inner = inner;
+        this.body = body;
+    }
+}

@@ -5,8 +5,8 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.48.0**（`HAO_REPO` 本地仓 + `HAO_REGISTRY` 源仓，Maven 模型）
-- 测试基线：`test/suite` **954** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.48.0
+- 当前版本：**v0.49.1**（`os.Process` 进程资源 + GC minor/major；Web 监控示例）
+- 测试基线：`test/suite` **979** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.49.1
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
 - **下一批（默认）**：select 真多路 wait / 泛型 channel——见 [`记忆文档.md`](记忆文档.md) 第 **10** 章
 
@@ -57,7 +57,7 @@
 | 10 | 自举 | ⬜ 待开始 |
 
 **已完成的里程碑**（详见 [`docs/项目时间线/`](docs/项目时间线/索引.md)）：
-… → **v0.47.1** 仓目录 → **v0.48.0** `HAO_REPO` 本地仓（基线 **954**）。
+… → **v0.48.0** `HAO_REPO` → **v0.49.0** Web 补全（基线 **972**）。
 
 ---
 
@@ -154,7 +154,7 @@ func main() {
 | `exception` / `assert` / `text` / `math` / `random` | 异常、断言、文本、数学、随机 |
 | `os` | 文件 / Path / 环境 / FileStream |
 | `sync` / `thread` / `channel` | 互斥与原子、线程池、channel + `haoroutine` / `select` |
-| `net` | TCP/UDP + Http/MVC |
+| `net` | TCP/UDP + Http/MVC + Html 模板 + staticFiles |
 | `reflect` / `time` / `regex` / `json` / `gc` | 反射、时间、正则、JSON、GC 统计 |
 | `testing` | `hao test` 用 `T` |
 
@@ -200,7 +200,7 @@ bash script/test.sh --rebuild-all   # 强制全量重编（改编译器/运行�
 powershell -ExecutionPolicy Bypass -File script\win\negcheck.ps1   # 反向：须 28/28 编译拒绝
 ```
 
-套件共 **954** 行 stdout，全部通过。改 stdlib / 语法后务必 `--rebuild-all`（增量不查 stdlib `.hao` mtime）。
+套件共 **972** 行 stdout，全部通过。改 stdlib / 语法后务必 `--rebuild-all`（增量不查 stdlib `.hao` mtime）。
 
 **做新特性的工作流**：写单文件临时验证 → 合并进 `test/suite/` → 归档到 `test/oldcase/`。套件文件与覆盖面见目录 `test/suite/`（不必在 README 维护长表）。
 
@@ -270,7 +270,7 @@ hao build test\hello.hao --target linux-amd64 -o hello
 ├── haolang-example/        **用户向示例库**（hello / 特性 / 多文件 / Web / 项目 / 测试）
 ├── 记忆文档.md             AI 工作规则与设计决策（权威）
 ├── test/
-│   ├── suite/              多文件集成套件（基线 954 行；含 demo/web、corp 多包）
+│   ├── suite/              多文件集成套件（基线 972 行；含 demo/web、corp 多包）
 │   ├── oldcase/            归档旧单文件（net.hao 等可专项冒烟）
 │   └── syntax.hao          语法解析覆盖（只 parse）
 ├── lib/                    外部依赖与工具链（LLVM/ANTLR/sysroot/win CRT）
@@ -334,7 +334,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 - 多文件/包是**整盘编译**（无 `.a`/增量编译）。
 - **无** Int↔Integer 隐式自动装箱（需 `Integer.valueOf`）；`new Int`/`new String` 会当成内建类型失败。
 - 位运算整数族 + 一元 `~`；`lang.Bit` 位模式为 **Long**；**json/regex/FileStream/Http** 已在 v0.28（无流式 JSON Reader/Writer、无 `@JSONField` 全量）。
-- **net MVC + 包扫描**已在 **v0.29～0.32**（`scan`/`scanWhere` 无参自动 new；谓词可定制；多参用 `registerNewArgs`）。
+- **net MVC + 包扫描**已在 **v0.29～0.32**；**v0.49** 补 Html 模板、返回值 JSON coerce、`staticFiles`（仍缺路径变量 `{id}` / 参数绑定 / IoC）。
 - 并发关键字定名 **`haoroutine`**（不叫 goroutine）。
 - Linux **编译器分发包**、darwin 随包 SDK：未支持。
 
@@ -363,7 +363,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | **v0.48.0** `HAO_REPO` / `HAO_REGISTRY`；基线 **954**；反向 28/28 |
+| ✅ 已完成 | **v0.49.1** os.Process + GC minor/major + 08-gc-monitor；反向 28/28 |
 | 🔥 **下一批（默认开干）** | select 真多路 wait / 泛型 channel / 注释清债 |
 | 其后 | 自举（Stage 10） |
 

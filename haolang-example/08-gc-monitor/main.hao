@@ -1,0 +1,31 @@
+// GC / 内存监控 Web：浏览器打开后每 5 秒刷新。
+// 仓库根执行：hao run haolang-example\08-gc-monitor\main.hao
+package main;
+
+import monitor;
+import net;
+import collections;
+
+func main() {
+    val app = new net.HttpApp();
+    val port = 18090;
+    if (!app.listen(port)) {
+        fmt.println($"listen fail on {port}");
+        return;
+    }
+    val n = app.scan("monitor");
+    fmt.println($"GC Monitor routes ≈ {n}");
+    fmt.println($"open: http://127.0.0.1:{port}/");
+    fmt.println("API: GET /api/gc  |  POST /api/gc/collect");
+    fmt.println("Ctrl+C 结束");
+
+    // 预热一点堆分配，便于面板上看到非零变化
+    var junk = new collections.List<Object>();
+    var i = 0;
+    while (i < 200) {
+        junk.add(String.valueOf("warm-" + Integer.toStr(i)));
+        i += 1;
+    }
+
+    app.serve();
+}

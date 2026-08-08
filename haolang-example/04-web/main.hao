@@ -1,10 +1,11 @@
-// MVC 演示：扫描 demo/web（含 api 子包），自测几条 HTTP 后退出。
+// MVC 演示：扫描 demo/web（含 api 子包），自测 JSON/模板/静态文件后退出。
 // 若要常驻服务：把文末自测段换成 app.serve()，Ctrl+C 结束。
 package main;
 
 import demo.web;
 import demo.web.api;
 import net;
+import os;
 import thread;
 
 func main() {
@@ -16,9 +17,14 @@ func main() {
     }
     val n = app.scan("demo/web");
     fmt.println($"routes registered ≈ {n} (expect >= 2)");
-    fmt.println($"try: http://127.0.0.1:{port}/web/home");
 
-    // 后台各接一次请求，主线程用 Http 客户端自测
+    // 静态文件：haolang-example/04-web/static
+    val staticDir = "haolang-example/04-web/static";
+    os.writeFile(os.Path.join(staticDir, "hello.txt"), "static-hello");
+    app.staticFiles("/static", staticDir);
+
+    fmt.println($"try: http://127.0.0.1:{port}/web/home");
+app.serve(); 
     val th1 = new thread.Thread();
     th1.start({ app.serveOnce(); });
     thread.sleep(80);
@@ -39,6 +45,27 @@ func main() {
     val r3 = net.Http.post($"http://127.0.0.1:{port}/web/api/echo", "zz");
     fmt.println($"POST /web/api/echo -> {r3.body}");
     th3.join();
+
+    val th4 = new thread.Thread();
+    th4.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r4 = net.Http.get($"http://127.0.0.1:{port}/web/api/user");
+    fmt.println($"GET /web/api/user -> {r4.body}");
+    th4.join();
+
+    val th5 = new thread.Thread();
+    th5.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r5 = net.Http.get($"http://127.0.0.1:{port}/web/hi");
+    fmt.println($"GET /web/hi -> {r5.body}");
+    th5.join();
+
+    val th6 = new thread.Thread();
+    th6.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r6 = net.Http.get($"http://127.0.0.1:{port}/static/hello.txt");
+    fmt.println($"GET /static/hello.txt -> {r6.body}");
+    th6.join();
 
     app.close();
     fmt.println("web demo done");

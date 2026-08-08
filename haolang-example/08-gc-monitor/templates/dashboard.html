@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HaoLang 运行监视</title>
+<style>
+  :root {
+    --bg0: #0f1419; --bg1: #1a222c; --line: #2c3845;
+    --text: #e7eef5; --muted: #8b9aab; --accent: #3d9cf0; --ok: #3ecf8e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: var(--text);
+    background:
+      radial-gradient(900px 420px at 10% -10%, #1d3a55 0%, transparent 55%),
+      radial-gradient(700px 380px at 100% 0%, #243448 0%, transparent 50%),
+      linear-gradient(180deg, var(--bg0), #121820 100%);
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+  header h1 { margin: 0 0 0.35rem; font-size: clamp(1.5rem, 3vw, 2rem); }
+  header p { margin: 0; color: var(--muted); line-height: 1.5; }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem;
+    margin: 1.1rem 0 1.5rem; color: var(--muted); font-size: 0.92rem;
+  }
+  .meta strong { color: var(--ok); font-weight: 600; }
+  h2.sec {
+    margin: 1.4rem 0 0.7rem; font-size: 1.05rem; font-weight: 650;
+    color: #d5e4f2; border-left: 3px solid var(--accent); padding-left: 0.55rem;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.75rem;
+  }
+  .metric {
+    background: color-mix(in srgb, var(--bg1) 92%, #000);
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 0.9rem 1rem;
+  }
+  .metric .label { color: var(--muted); font-size: 0.78rem; line-height: 1.35; margin-bottom: 0.4rem; }
+  .metric .value {
+    font-variant-numeric: tabular-nums; font-size: 1.28rem; font-weight: 650;
+  }
+  .bar {
+    margin: 0.9rem 0 0.35rem; height: 10px; background: var(--bg1);
+    border: 1px solid var(--line); border-radius: 999px; overflow: hidden;
+  }
+  .bar > i {
+    display: block; height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--accent), #6ec0ff);
+    transition: width 0.4s ease;
+  }
+  .bar-label { color: var(--muted); font-size: 0.82rem; margin-bottom: 0.5rem; }
+  .panel {
+    margin-top: 1.1rem; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--bg1); padding: 1rem 1.1rem;
+  }
+  .panel h3 { margin: 0 0 0.55rem; font-size: 0.95rem; }
+  .panel pre {
+    margin: 0; white-space: pre-wrap; word-break: break-all;
+    color: #c5d4e3; font-size: 0.86rem; line-height: 1.45;
+  }
+  .actions { margin-top: 1.2rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
+  button {
+    border: 1px solid var(--line); background: #243041; color: var(--text);
+    border-radius: 8px; padding: 0.55rem 1rem; cursor: pointer; font: inherit;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #1e4f7a; border-color: #2f6fa8; }
+  .hint { margin-top: 0.9rem; color: var(--muted); font-size: 0.84rem; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>HaoLang 运行监视</h1>
+      <p>{{engine}}</p>
+    </header>
+    <div class="meta">
+      <span>自动刷新：<strong id="countdown">5</strong>s</span>
+      <span>上次更新：<strong id="updated">—</strong></span>
+      <span>运行时长：<strong id="uptimeText">—</strong></span>
+      <span>阈值进度：<strong id="usagePct">{{usagePct}}</strong>%</span>
+    </div>
+
+    <h2 class="sec">内存 / 资源</h2>
+    <div class="grid">
+      <div class="metric">
+        <div class="label">工作集内存<br>进程当前占用的物理内存（对标 WorkingSet）</div>
+        <div class="value" id="workingSetBytes">{{workingSetBytes}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">专用内存<br>程序独占的物理/提交内存，不含共享库（对标 PrivateBytes）</div>
+        <div class="value" id="privateBytes">{{privateBytes}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">GC 托管堆<br>上次 major 后仍存活的用户区字节（对标托管堆）</div>
+        <div class="value" id="liveBytes">{{liveBytes}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">新生代已分配<br>nursery 压力（触发 minor 的累计分配）</div>
+        <div class="value" id="nurseryBytes">{{nurseryBytes}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">GC minor 次数 ≈ Gen0<br>young/nursery 回收（HaoLang 二分代，无 Gen1）</div>
+        <div class="value" id="minorCount">{{minorCount}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">GC major 次数 ≈ Gen2<br>全堆回收（含手动 collect）</div>
+        <div class="value" id="majorCount">{{majorCount}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">句柄数<br>内核对象 HandleCount</div>
+        <div class="value" id="handleCount">{{handleCount}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">堆块数 blockCount<br>当前 GC 块链表长度</div>
+        <div class="value" id="blockCount">{{blockCount}}</div>
+      </div>
+    </div>
+
+    <div class="bar" title="allocatedSince / threshold"><i id="usageBar" style="width: {{usagePct}}%"></i></div>
+    <div class="bar-label">自上次 major 以来已分配 / 自动 major 阈值</div>
+
+    <h2 class="sec">CPU / 线程</h2>
+    <div class="grid">
+      <div class="metric">
+        <div class="label">CPU 使用率<br>相对上次采样，已按逻辑核归一（对标 % Processor Time）</div>
+        <div class="value" id="cpuPercent">—</div>
+      </div>
+      <div class="metric">
+        <div class="label">活跃线程数（OS）<br>本进程 Thread 数（对标 Process.Threads）</div>
+        <div class="value" id="threadCount">{{threadCount}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">GC 注册线程<br>参与 STW 栈扫描的线程（通常 ≤ OS 线程）</div>
+        <div class="value" id="gcThreads">{{gcThreads}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">回收总次数<br>minor + major</div>
+        <div class="value" id="collectCount">{{collectCount}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">finalizerRuns</div>
+        <div class="value" id="finalizerRuns">{{finalizerRuns}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">finalizerSets</div>
+        <div class="value" id="finalizerSets">{{finalizerSets}}</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>summary</h3>
+      <pre id="summary">{{summary}}</pre>
+    </div>
+    <div class="panel">
+      <h3>对标说明</h3>
+      <pre id="note">{{note}}</pre>
+    </div>
+
+    <div class="actions">
+      <button class="primary" id="btnCollect" type="button">手动 major collect</button>
+      <button id="btnRefresh" type="button">立即刷新</button>
+    </div>
+    <p class="hint">GET /api/gc · POST /api/gc/collect · 每 5 秒自动拉取。请在仓库根启动本示例。</p>
+  </div>
+<script>
+(function () {
+  let left = 5;
+  const countdownEl = document.getElementById("countdown");
+  const updatedEl = document.getElementById("updated");
+  const barEl = document.getElementById("usageBar");
+  const pctEl = document.getElementById("usagePct");
+
+  function fmtBytes(n) {
+    const x = Number(n);
+    if (!Number.isFinite(x)) return String(n);
+    if (x < 1024) return x + " B";
+    if (x < 1048576) return (x / 1024).toFixed(1) + " KiB";
+    return (x / 1048576).toFixed(2) + " MiB";
+  }
+  function fmtUptime(ms) {
+    let s = Math.floor(Number(ms) / 1000);
+    if (!Number.isFinite(s) || s < 0) return "—";
+    const d = Math.floor(s / 86400); s %= 86400;
+    const h = Math.floor(s / 3600); s %= 3600;
+    const m = Math.floor(s / 60);
+    if (d > 0) return d + "天" + h + "时" + m + "分";
+    if (h > 0) return h + "时" + m + "分";
+    return m + "分" + (s % 60) + "秒";
+  }
+  function apply(data) {
+    const bytesIds = ["workingSetBytes","privateBytes","liveBytes","nurseryBytes"];
+    bytesIds.forEach(function (id) {
+      document.getElementById(id).textContent = fmtBytes(data[id]);
+    });
+    ["minorCount","majorCount","handleCount","blockCount","threadCount","gcThreads",
+     "collectCount","finalizerRuns","finalizerSets"].forEach(function (id) {
+      document.getElementById(id).textContent = data[id];
+    });
+    const cpuEl = document.getElementById("cpuPercent");
+    if (data.cpuReady) cpuEl.textContent = data.cpuPercent + "%";
+    else cpuEl.textContent = "采样中…";
+    document.getElementById("summary").textContent = data.summary;
+    document.getElementById("note").textContent = data.note;
+    document.getElementById("uptimeText").textContent = fmtUptime(data.uptimeMs);
+    const pct = Number(data.usagePct) || 0;
+    pctEl.textContent = String(pct);
+    barEl.style.width = Math.max(0, Math.min(100, pct)) + "%";
+    updatedEl.textContent = new Date().toLocaleTimeString();
+  }
+  async function refresh() {
+    try {
+      const r = await fetch("/api/gc", { cache: "no-store" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      apply(await r.json());
+    } catch (e) {
+      document.getElementById("summary").textContent = "刷新失败: " + e;
+    }
+  }
+  async function collect() {
+    const btn = document.getElementById("btnCollect");
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/gc/collect", { method: "POST" });
+      const data = await r.json();
+      if (data.after) apply(data.after); else await refresh();
+    } catch (e) {
+      document.getElementById("summary").textContent = "collect 失败: " + e;
+    } finally { btn.disabled = false; }
+  }
+  document.getElementById("btnRefresh").addEventListener("click", function () { left = 5; refresh(); });
+  document.getElementById("btnCollect").addEventListener("click", collect);
+  refresh();
+  setInterval(function () {
+    left -= 1;
+    if (left <= 0) { left = 5; refresh(); }
+    countdownEl.textContent = String(left);
+  }, 1000);
+})();
+</script>
+</body>
+</html>

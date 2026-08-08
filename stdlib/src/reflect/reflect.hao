@@ -63,12 +63,20 @@ class Type {
     func getField(o: Object, name: String): String? {
         return hao_reflect_field_get(this.meta, o, name);
     }
+    // v0.49：引用字段对象指针；标量/String/空 → null（嵌套 Bean / JSON / 模板用）
+    func getFieldObject(o: Object, name: String): Object? {
+        return hao_reflect_field_get_obj(this.meta, o, name);
+    }
     func setField(o: Object, name: String, value: String): Bool {
         return hao_reflect_field_set(this.meta, o, name, value) == 0;
     }
     // 按方法名查形参数量；未找到返回 -1（含父类链）
     func methodParamCount(name: String): Int {
         return hao_reflect_method_param_count(this.meta, name);
+    }
+    // v0.49：方法返回类型名（含父类链）；未找到 → ""
+    func methodReturnType(name: String): String {
+        return hao_reflect_method_return_type(this.meta, name);
     }
 
     // 校验方法存在且 arity 匹配；失败抛 Exception（与合法返回 0 可区分）
@@ -341,7 +349,9 @@ extern func hao_reflect_method_anno_count(m: Long?, mi: Int): Int = "hao_reflect
 extern func hao_reflect_method_anno_name(m: Long?, mi: Int, ai: Int): String = "hao_reflect_method_anno_name";
 extern func hao_reflect_method_anno_value(m: Long?, mi: Int, ai: Int): String = "hao_reflect_method_anno_value";
 extern func hao_reflect_field_get(m: Long?, o: Object, name: String): String? = "hao_reflect_field_get";
+extern func hao_reflect_field_get_obj(m: Long?, o: Object, name: String): Object? = "hao_reflect_field_get_obj";
 extern func hao_reflect_field_set(m: Long?, o: Object, name: String, value: String): Int = "hao_reflect_field_set";
+extern func hao_reflect_method_return_type(m: Long?, name: String): String = "hao_reflect_method_return_type";
 
 extern func hao_reflect_invoke(m: Long?, o: Object, name: String, args: [Long]): Long = "hao_reflect_invoke";
 extern func hao_reflect_invoke_str(m: Long?, o: Object, name: String, args: [Long]): String? = "hao_reflect_invoke_str";

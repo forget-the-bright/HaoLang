@@ -75,6 +75,18 @@ int64_t hao_gc_threshold(void);
 int64_t hao_gc_allocated_since(void);
 int64_t hao_gc_block_count(void);
 int64_t hao_gc_collect_count(void);
+int64_t hao_gc_minor_count(void);
+int64_t hao_gc_major_count(void);
+int64_t hao_gc_nursery_bytes(void);
+int64_t hao_gc_registered_threads(void);
+
+/* 进程资源快照（runtime_proc.c；供 os.Process，对标 .NET Process） */
+int64_t hao_proc_working_set_bytes(void);
+int64_t hao_proc_private_bytes(void);
+int64_t hao_proc_handle_count(void);
+int64_t hao_proc_thread_count(void);
+int32_t hao_proc_cpu_percent(void); /* 相对上次调用；首次 -1；0～100×逻辑核可略超 */
+int64_t hao_proc_uptime_ms(void);
 
 /* 注册/注销当前线程（GC v2 STW）*/
 void gc_register_thread(void);

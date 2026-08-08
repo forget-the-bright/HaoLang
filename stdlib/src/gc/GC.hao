@@ -22,6 +22,10 @@ extern func hao_gc_threshold(): Long = "hao_gc_threshold";
 extern func hao_gc_allocated_since(): Long = "hao_gc_allocated_since";
 extern func hao_gc_block_count(): Long = "hao_gc_block_count";
 extern func hao_gc_collect_count(): Long = "hao_gc_collect_count";
+extern func hao_gc_minor_count(): Long = "hao_gc_minor_count";
+extern func hao_gc_major_count(): Long = "hao_gc_major_count";
+extern func hao_gc_nursery_bytes(): Long = "hao_gc_nursery_bytes";
+extern func hao_gc_registered_threads(): Long = "hao_gc_registered_threads";
 extern func hao_gc_finalizer_runs(): Long = "hao_gc_finalizer_runs";
 extern func hao_gc_finalizer_sets(): Long = "hao_gc_finalizer_sets";
 
@@ -69,6 +73,34 @@ class GC {
         return hao_gc_collect_count();
     }
 
+    // young/nursery 回收次数（minor）。对标 .NET GC.CollectionCount(0) / Gen0，非一一对应。
+    // @return 次数
+    // 复杂度：O(1)
+    static func minorCount(): Long {
+        return hao_gc_minor_count();
+    }
+
+    // 全堆回收次数（major）。对标 .NET GC.CollectionCount(2) / Gen2 量级；HaoLang 无 Gen1。
+    // @return 次数
+    // 复杂度：O(1)
+    static func majorCount(): Long {
+        return hao_gc_major_count();
+    }
+
+    // 当前 nursery 累计分配字节（触发 minor 的压力；非存活堆大小）。
+    // @return 字节
+    // 复杂度：O(1)
+    static func nurseryBytes(): Long {
+        return hao_gc_nursery_bytes();
+    }
+
+    // 已向 GC 注册、参与 STW 栈扫描的线程数（通常 ≤ OS 线程数）。
+    // @return 线程数
+    // 复杂度：O(1)
+    static func registeredThreads(): Long {
+        return hao_gc_registered_threads();
+    }
+
     // finalizer 已执行次数（清扫不可达块后、锁外回调）。
     // @return 次数
     // 复杂度：O(1)
@@ -92,8 +124,10 @@ class GC {
         val since = GC.allocatedSinceGc();
         val blocks = GC.blockCount();
         val collects = GC.collectCount();
+        val minor = GC.minorCount();
+        val major = GC.majorCount();
         val fr = GC.finalizerRuns();
         val fs = GC.finalizerSets();
-        return $"GC[v3] live={live}B threshold={thr}B allocatedSince={since}B blocks={blocks} collects={collects} finalizerRuns={fr} finalizerSets={fs}";
+        return $"GC[v3] live={live}B threshold={thr}B allocatedSince={since}B blocks={blocks} collects={collects} minor={minor} major={major} finalizerRuns={fr} finalizerSets={fs}";
     }
 }

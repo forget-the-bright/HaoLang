@@ -18,6 +18,9 @@
 /stdlib/*.obj
 /stdlib/*.o
 
+# hao run 旁路可执行文件
+*.hao-run.exe
+
 # 编辑器 / OS
 .vs/
 .vscode/

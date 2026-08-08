@@ -1,0 +1,124 @@
+// ============================================================
+//  多文件测试套件 · webext：模板 / JSON coerce / 静态文件（v0.49）
+// ============================================================
+package main;
+
+import collections;
+import net;
+import os;
+import thread;
+
+class WebExtDto {
+    var name: String = "";
+    var age: Int = 0;
+    constructor(name: String, age: Int) {
+        this.name = name;
+        this.age = age;
+    }
+}
+
+class WebExtItem {
+    var title: String = "";
+    constructor(title: String) { this.title = title; }
+}
+
+@Controller
+@RequestMapping(path = "/w49")
+class WebExtController {
+    @GetMapping(path = "/dto")
+    func dto(req: net.HttpRequest): WebExtDto {
+        return new WebExtDto("Neo", 42);
+    }
+
+    @GetMapping(path = "/hello")
+    func hello(req: net.HttpRequest): String {
+        return "hello-str";
+    }
+
+    @GetMapping(path = "/page")
+    func page(req: net.HttpRequest): net.HttpResponse {
+        val model = new WebExtDto("Ada", 1);
+        val body = net.Html.render("<h1>{{name}}</h1>", model);
+        return net.HttpResponse.html(body);
+    }
+}
+
+func webExtTest() {
+    // ---- Html 基础 ----
+    val map = new collections.Map<String, Object>();
+    map.put("name", String.valueOf("Ada"));
+    fmt.println(net.Html.render("Hi {{name}}!", map));           // Hi Ada!
+    fmt.println(net.Html.escape("<a>"));                         // &lt;a&gt;
+
+    val items = new collections.List<Object>();
+    items.add(new WebExtItem("A"));
+    items.add(new WebExtItem("B"));
+    val listModel = new collections.Map<String, Object>();
+    listModel.put("items", items);
+    val sec = net.Html.render("{{#items}}[{{title}}]{{/items}}", listModel);
+    fmt.println(sec);                                            // [A][B]
+
+    // ---- 模板文件 + layout / partial ----
+    val root = "target/test/webext_tpl";
+    os.writeFile(os.Path.join(root, "layout.html"),
+        "<html>{{{body}}}</html>");
+    os.writeFile(os.Path.join(root, "head.html"),
+        "<hdr>{{name}}</hdr>");
+    os.writeFile(os.Path.join(root, "home.html"),
+        "{{!<layout}}\n{{>head}}\n<p>{{age}}</p>");
+    net.Html.setTemplateRoot(root);
+    val page = net.Html.renderFile("home.html", new WebExtDto("Zed", 9));
+    fmt.println(String.valueOf(page).indexOf("<hdr>Zed</hdr>") >= 0); // true
+    fmt.println(String.valueOf(page).indexOf("<p>9</p>") >= 0);       // true
+    fmt.println(String.valueOf(page).startsWith("<html>"));           // true
+
+    // ---- coerce + static ----
+    val app = new net.HttpApp();
+    if (!app.listen(7910)) {
+        fmt.println("webext-listen-fail");
+        return;
+    }
+    app.register(new WebExtController());
+    val staticDir = "target/test/webext_static";
+    os.writeFile(os.Path.join(staticDir, "hi.txt"), "static-ok");
+    app.staticFiles("/assets", staticDir);
+
+    val th1 = new thread.Thread();
+    th1.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r1 = net.Http.get("http://127.0.0.1:7910/w49/dto");
+    fmt.println(r1.status);                                      // 200
+    fmt.println(String.valueOf(r1.body).indexOf("\"name\":\"Neo\"") >= 0); // true
+    th1.join();
+
+    val th2 = new thread.Thread();
+    th2.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r2 = net.Http.get("http://127.0.0.1:7910/w49/hello");
+    fmt.println(r2.body);                                        // hello-str
+    th2.join();
+
+    val th3 = new thread.Thread();
+    th3.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r3 = net.Http.get("http://127.0.0.1:7910/w49/page");
+    fmt.println(String.valueOf(r3.body).indexOf("<h1>Ada</h1>") >= 0); // true
+    th3.join();
+
+    val th4 = new thread.Thread();
+    th4.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r4 = net.Http.get("http://127.0.0.1:7910/assets/hi.txt");
+    fmt.println(r4.body);                                        // static-ok
+    th4.join();
+
+    // 路径穿越应 403
+    val th5 = new thread.Thread();
+    th5.start({ app.serveOnce(); });
+    thread.sleep(80);
+    val r5 = net.Http.get("http://127.0.0.1:7910/assets/../hi.txt");
+    fmt.println(r5.status);                                      // 403
+    th5.join();
+
+    app.close();
+}

@@ -378,6 +378,6 @@ rm -f "$CACHE"/*.ll 2>/dev/null || true
 rm -f target/*.ll target/*.exe 2>/dev/null || true
 
 echo "========================================"
-echo "套件总行数: $total  (基线 954) | 退出码: $code"
+echo "套件总行数: $total  (基线 979) | 退出码: $code"
 [[ $code -eq 0 ]] || exit 1
-# 基线：v0.43～0.47 工具链批保持 954
+# 基线：v0.49.1 进程资源 + GC minor/major → 979

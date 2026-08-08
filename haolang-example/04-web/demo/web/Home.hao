@@ -1,7 +1,13 @@
 // 嵌套包表层控制器：demo.web
+// v0.49：Html 模板渲染
 package demo.web;
 
 import net.*;
+
+class HomeModel {
+    var title: String = "";
+    constructor(title: String) { this.title = title; }
+}
 
 @Controller
 @RequestMapping(path = "/web")
@@ -9,5 +15,11 @@ class HomeController {
     @GetMapping(path = "/home")
     func home(req: HttpRequest): HttpResponse {
         return HttpResponse.of(200, "web-home");
+    }
+
+    @GetMapping(path = "/hi")
+    func hi(req: HttpRequest): HttpResponse {
+        val html = Html.render("<h1>{{title}}</h1>", new HomeModel("HaoLang"));
+        return HttpResponse.html(html);
     }
 }

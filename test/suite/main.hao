@@ -49,4 +49,5 @@ func main() {
     mvcTest();           // v0.29.0：HttpApp MVC 路由/注解/过滤器
     webDemoTest();       // v0.30.0：嵌套包扫描 HttpApp.scan
     pkgScanTest();       // v0.32.0：可扩展包扫描 + corp 多包夹具
+    webExtTest();        // v0.49.0：Html 模板 / JSON coerce / staticFiles
 }

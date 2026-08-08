@@ -1,0 +1,58 @@
+// ============================================================
+//  os.Process —— 本进程资源快照（v0.49.1）
+// ------------------------------------------------------------
+//  对标 .NET System.Diagnostics.Process 常用只读指标：
+//    WorkingSet64 / PrivateMemorySize64 / HandleCount /
+//    Threads.Count / CPU% / 运行时长。
+//  Windows：kernel32 dynload；Linux：/proc/self。
+//  线程安全：各方法独立采样；CPU% 依赖进程内上次调用间隔。
+//  失败语义：无法采样时返回 0（CPU 首次采样返回 -1）。
+//  不是什么：不是跨进程查询；不是性能计数器历史曲线。
+// ============================================================
+package os;
+
+extern func hao_proc_working_set_bytes(): Long = "hao_proc_working_set_bytes";
+extern func hao_proc_private_bytes(): Long = "hao_proc_private_bytes";
+extern func hao_proc_handle_count(): Long = "hao_proc_handle_count";
+extern func hao_proc_thread_count(): Long = "hao_proc_thread_count";
+extern func hao_proc_cpu_percent(): Int = "hao_proc_cpu_percent";
+extern func hao_proc_uptime_ms(): Long = "hao_proc_uptime_ms";
+
+public class Process {
+    // 工作集：进程当前占用的物理内存（含可与其它进程共享的页）。对标 WorkingSet64。
+    // @return 字节；失败 0
+    static func workingSetBytes(): Long {
+        return hao_proc_working_set_bytes();
+    }
+
+    // 专用内存：本进程独占的提交字节（不含共享库映像等）。对标 PrivateMemorySize64。
+    // @return 字节；失败 0
+    static func privateBytes(): Long {
+        return hao_proc_private_bytes();
+    }
+
+    // 内核对象句柄数（文件/线程/事件等）。对标 HandleCount。
+    // @return 个数；失败 0
+    static func handleCount(): Long {
+        return hao_proc_handle_count();
+    }
+
+    // OS 线程数（含运行时/线程池）。对标 Process.Threads.Count。
+    // @return 个数；失败 0
+    static func threadCount(): Long {
+        return hao_proc_thread_count();
+    }
+
+    // 相对上次调用的 CPU 占用百分比（已按逻辑核数归一，约 0～100）。
+    // 首次调用返回 -1（需两次采样）；请隔数百毫秒以上再调。
+    // @return -1 / 0～100
+    static func cpuPercent(): Int {
+        return hao_proc_cpu_percent();
+    }
+
+    // 进程已运行时长（墙钟）。
+    // @return 毫秒
+    static func uptimeMs(): Long {
+        return hao_proc_uptime_ms();
+    }
+}

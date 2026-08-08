@@ -5,6 +5,7 @@ package net;
 
 import text;
 import json;
+import os;
 
 public class HttpResponse {
     var status: Int = 0;
@@ -37,10 +38,74 @@ public class HttpResponse {
         return r;
     }
 
+    // 字符串体 JSON（保留；对象请用 jsonObj）
     static func json(status: Int, body: String): HttpResponse {
         val r = HttpResponse.of(status, body);
         r.contentType = "application/json; charset=utf-8";
         return r;
+    }
+
+    // v0.49：Bean / Map / List / JSON 树 → application/json（与 json(status,String) 按 arity 重载）
+    static func json(value: Object): HttpResponse {
+        return HttpResponse.json(200, value);
+    }
+
+    static func json(status: Int, value: Object): HttpResponse {
+        val r = new HttpResponse();
+        r.status = status;
+        r.contentType = "application/json; charset=utf-8";
+        r.body = json.JSON.toJSONString(value);
+        return r;
+    }
+
+    static func html(body: String): HttpResponse {
+        return HttpResponse.html(200, body);
+    }
+
+    static func html(status: Int, body: String): HttpResponse {
+        val r = HttpResponse.of(status, body);
+        r.contentType = "text/html; charset=utf-8";
+        return r;
+    }
+
+    static func text(body: String): HttpResponse {
+        return HttpResponse.text(200, body);
+    }
+
+    static func text(status: Int, body: String): HttpResponse {
+        val r = HttpResponse.of(status, body);
+        r.contentType = "text/plain; charset=utf-8";
+        return r;
+    }
+
+    // 读本地文件；不存在 → 404
+    static func file(path: String): HttpResponse {
+        val data = os.readFile(path);
+        if (data == null) {
+            return HttpResponse.of(404, "not found");
+        }
+        val r = HttpResponse.of(200, data!!);
+        r.contentType = HttpResponse.mimeOf(path);
+        return r;
+    }
+
+    static func mimeOf(path: String): String {
+        val p = String.valueOf(path).toLowerCase();
+        if (String.valueOf(p).endsWith(".html") || String.valueOf(p).endsWith(".htm")) {
+            return "text/html; charset=utf-8";
+        }
+        if (String.valueOf(p).endsWith(".css")) { return "text/css; charset=utf-8"; }
+        if (String.valueOf(p).endsWith(".js")) { return "application/javascript; charset=utf-8"; }
+        if (String.valueOf(p).endsWith(".json")) { return "application/json; charset=utf-8"; }
+        if (String.valueOf(p).endsWith(".png")) { return "image/png"; }
+        if (String.valueOf(p).endsWith(".jpg") || String.valueOf(p).endsWith(".jpeg")) {
+            return "image/jpeg";
+        }
+        if (String.valueOf(p).endsWith(".gif")) { return "image/gif"; }
+        if (String.valueOf(p).endsWith(".svg")) { return "image/svg+xml"; }
+        if (String.valueOf(p).endsWith(".txt")) { return "text/plain; charset=utf-8"; }
+        if (String.valueOf(p).endsWith(".ico")) { return "image/x-icon"; }
+        return "application/octet-stream";
     }
 }
 
