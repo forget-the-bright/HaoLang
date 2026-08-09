@@ -536,6 +536,8 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
                 trailingIsReturn = true;
         }
         size_t genCount = trailingIsReturn ? stmts.size() - 1 : stmts.size();
+        /* v0.53.3：lambda 入口 safepoint */
+        em_.emit("call void @hao_gc_safepoint()");
         pushSmartCastFrame();
         for (size_t i = 0; i < genCount; ++i) {
             genStatement(stmts[i]);

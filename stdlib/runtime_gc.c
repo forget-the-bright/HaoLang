@@ -86,6 +86,7 @@ static size_t   gc_nursery_gate = GC_NURSERY_THRESHOLD; /* 可被 pacing 放大 
 static volatile int gc_phase = GC_PHASE_IDLE;
 static int64_t      g_concurrent_mark_cycles = 0;
 static int64_t      g_mark_assist_steps = 0;
+static int64_t      g_mark_abort_cycles = 0; /* 终止失败 abort MARK 次数（v0.53.3） */
 static size_t       gc_heap_bytes = 0; /* 用户区合计，alloc/sweep 维护 */
 /* v0.52：marked==gc_mark_epoch 为本轮已标；setup 只 ++epoch，勿扫百万清零 */
 static uint8_t      gc_mark_epoch = 1;
@@ -566,6 +567,7 @@ static void gc_abort_mark_cycle(void) {
     gc_bump_mark_epoch();
     gc_mark_major = 1;
     g_collect_want_major = 1;
+    g_mark_abort_cycles += 1;
     gc_apply_incomplete_pacing();
 }
 
@@ -862,7 +864,10 @@ static void gc_drain_finalizers(void) {
     for (size_t i = 0; i < n; ++i) {
         if (list[i].fn) {
             __atomic_fetch_add(&gc_finalizer_runs, 1, __ATOMIC_RELAXED);
+            /* 回调期间挂根：防并发 STW 与「栈上仍握 user」窗口踩 free */
+            hao_gc_add_root(list[i].user);
             list[i].fn(list[i].user);
+            hao_gc_remove_root(list[i].user);
         }
         free(list[i].block);
     }
@@ -1307,7 +1312,7 @@ void hao_gc_clear_finalizer(void* obj) {
 
 int64_t hao_gc_finalizer_runs(void) { return gc_finalizer_runs; }
 
-/* 写入 gc.GcStats：槽 0 vtable；1..16 与 GC.hao 字段声明序一致 */
+/* 写入 gc.GcStats：槽 0 vtable；1..17 与 GC.hao 字段声明序一致 */
 void hao_gc_stats(void* obj) {
     if (!obj) return;
     int64_t* s = (int64_t*)obj;
@@ -1328,7 +1333,15 @@ void hao_gc_stats(void* obj) {
     s[14] = g_concurrent_mark_cycles;
     s[15] = g_mark_assist_steps;
     s[16] = (int64_t)gc_thread_count;
+    s[17] = g_mark_abort_cycles;
     hao_gc_unlock();
+}
+
+int64_t hao_gc_mark_abort_cycles(void) {
+    gc_lock_coop();
+    int64_t n = g_mark_abort_cycles;
+    hao_gc_unlock();
+    return n;
 }
 
 int64_t hao_gc_live_bytes(void) {

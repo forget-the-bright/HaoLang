@@ -100,6 +100,8 @@ int64_t hao_gc_registered_threads(void);
  * 供 /api/gc 等避免十几次独立加锁。
  */
 void hao_gc_stats(void* obj);
+/* 终止失败 abort MARK 累计次数（v0.53.3+） */
+int64_t hao_gc_mark_abort_cycles(void);
 
 /* 进程资源快照（runtime_proc.c；供 os.Process，对标 .NET Process） */
 int64_t hao_proc_working_set_bytes(void);

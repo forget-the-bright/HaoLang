@@ -29,6 +29,7 @@ class GcSnapshot {
     var stwMarkAllFallbacks: Long = 0; // 已废除全标活，恒 0
     var concurrentMarkCycles: Long = 0; // 并发标记轮次
     var markAssistSteps: Long = 0;   // mark assist 推进量
+    var markAbortCycles: Long = 0;   // 终止失败 abort MARK（v0.53.3）
 
     // ---- CPU / 线程 / 句柄 / 运行时长 ----
     var cpuPercent: Int = 0;         // 0～100；首次采样可能为 0
@@ -41,7 +42,7 @@ class GcSnapshot {
     var usagePct: Int = 0;
     var summary: String = "";
     var note: String = "";
-    var engine: String = "HaoLang GC v3（v0.53.2 原子扩容 shade）+ os.Process";
+    var engine: String = "HaoLang GC v3（v0.53.3 入口 safepoint）+ os.Process";
 
     constructor() {
         this.refresh();
@@ -79,16 +80,17 @@ class GcSnapshot {
         this.stwMarkAllFallbacks = g.stwMarkAllFallbacks;
         this.concurrentMarkCycles = g.concurrentMarkCycles;
         this.markAssistSteps = g.markAssistSteps;
+        this.markAbortCycles = g.markAbortCycles;
         this.gcThreads = g.registeredThreads;
         this.summary = $"GC[v3] live={this.liveBytes}B heap={this.heapBytes}B threshold={this.threshold}B"
             + $" allocatedSince={this.allocatedSinceGc}B blocks={this.blockCount}"
             + $" collects={this.collectCount} minor={this.minorCount} major={this.majorCount}"
             + $" stwIncomplete={this.stwIncomplete} concurrentMark={this.concurrentMarkCycles}"
-            + $" markAssist={this.markAssistSteps}";
+            + $" markAssist={this.markAssistSteps} markAbort={this.markAbortCycles}";
         if (this.note.length == 0) {
             this.note = "对标说明：工作集/专用内存来自 os.Process；"
                 + "heapBytes=当前堆压；liveBytes=上次成功 major 后存活；"
-                + "v0.53 可达性闭环：终止未齐则 abort MARK，不可达对象可被后续轮次回收。";
+                + "v0.53.3：入口 safepoint + markAbortCycles；终止未齐则 abort MARK。";
         }
         var pct: Int = 0;
         if (this.threshold > 0) {

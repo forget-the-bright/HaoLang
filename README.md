@@ -5,8 +5,8 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.53.2**（扩容 shade 原子化；IR↔GC 可达性闭环）
-- 测试基线：`test/suite` **1010** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.53.2
+- 当前版本：**v0.53.3**（入口 safepoint + markAbort；IR↔GC 可达性闭环）
+- 测试基线：`test/suite` **1011** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.53.3
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
 - **下一批（默认）**：Netty NIO / 混合屏障或并发 sweep / select——见 [`记忆文档.md`](记忆文档.md) 第 **10** 章
 
@@ -363,7 +363,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | **v0.53.2** 扩容 shade 原子化 + 可达性闭环；反向 28/28 |
+| ✅ 已完成 | **v0.53.3** 入口 safepoint + markAbort；反向 28/28 |
 | 🔥 **下一批（默认开干）** | Netty NIO poll / 混合屏障或并发 sweep / select |
 | 其后 | 自举（Stage 10） |
 

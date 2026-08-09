@@ -1454,6 +1454,8 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
     }
 
     // ---- 函数体（参数与局部变量同层，故不再新建作用域） ----
+    /* v0.53.3：入口 safepoint，加密协作 STW（循环外长直线路径也能 park） */
+    em_.emit("call void @hao_gc_safepoint()");
     pushSmartCastFrame();
     genBlock(body, /*newScope=*/false);
     popSmartCastFrame();

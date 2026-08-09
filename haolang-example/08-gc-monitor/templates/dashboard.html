@@ -172,6 +172,10 @@
         <div class="label">markAssistSteps<br>分配路径协助标记量（v0.52）</div>
         <div class="value" id="markAssistSteps">{{markAssistSteps}}</div>
       </div>
+      <div class="metric">
+        <div class="label">markAbortCycles<br>终止失败 abort MARK（v0.53.3）</div>
+        <div class="value" id="markAbortCycles">{{markAbortCycles}}</div>
+      </div>
     </div>
 
     <div class="panel">
@@ -221,7 +225,7 @@
     });
     ["minorCount","majorCount","handleCount","blockCount","threadCount","gcThreads",
      "collectCount","finalizerRuns","finalizerSets","stwIncomplete","stwMarkAllFallbacks",
-     "concurrentMarkCycles","markAssistSteps"].forEach(function (id) {
+     "concurrentMarkCycles","markAssistSteps","markAbortCycles"].forEach(function (id) {
       document.getElementById(id).textContent = data[id];
     });
     const cpuEl = document.getElementById("cpuPercent");

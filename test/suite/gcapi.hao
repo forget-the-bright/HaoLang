@@ -48,6 +48,7 @@ func gcApiTest() {
     fmt.println(gc.GC.concurrentMarkCycles() >= 1); // true
     fmt.println(gc.GC.heapBytes() >= 0);           // true
     fmt.println(gc.GC.markAssistSteps() >= 0);     // true
+    fmt.println(gc.GC.markAbortCycles() >= 0);     // true（v0.53.3）
     fmt.println(os.Process.workingSetBytes() > 0); // true
     fmt.println(os.Process.handleCount() > 0); // true
     fmt.println(os.Process.threadCount() >= 1); // true

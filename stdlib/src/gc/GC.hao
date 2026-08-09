@@ -4,7 +4,7 @@ package gc;
 //  gc.GC —— 垃圾回收详情与手动回收（v0.37 · 多线程自动回收）
 // ------------------------------------------------------------
 //  职责：让 .hao 代码查询 GC 运行状态，并显式触发一次 STW major 回收。
-//  能力（runtime v3+ / v0.53.1）：
+//  能力（runtime v3+ / v0.53.3）：
 //    - 精确堆扫描：块头 kind + 对象槽位图 / 数组 is_ptr；叶对象（String/box）不扫。
 //    - 非移动分代：nursery + old；写屏障 = remset + **Dijkstra**（IR/C 均先 shade 再 store）。
 //    - 数组扩容：`memcpy` 后 `hao_gc_shade` 补标（禁黑父白子）；major 清空 remset。
@@ -35,6 +35,7 @@ extern func hao_gc_stw_mark_all_fallbacks(): Long = "hao_gc_stw_mark_all_fallbac
 extern func hao_gc_concurrent_mark_cycles(): Long = "hao_gc_concurrent_mark_cycles";
 extern func hao_gc_heap_bytes(): Long = "hao_gc_heap_bytes";
 extern func hao_gc_mark_assist_steps(): Long = "hao_gc_mark_assist_steps";
+extern func hao_gc_mark_abort_cycles(): Long = "hao_gc_mark_abort_cycles";
 
 // 与 hao_gc_stats 槽位序锁定：槽 0=vtable，下列字段从槽 1 起依次写入。
 public class GcStats {
@@ -54,6 +55,7 @@ public class GcStats {
     var concurrentMarkCycles: Long = 0;
     var markAssistSteps: Long = 0;
     var registeredThreads: Long = 0;
+    var markAbortCycles: Long = 0; /* 终止失败 abort MARK（v0.53.3） */
 }
 
 extern func hao_gc_stats(dst: GcStats): Unit = "hao_gc_stats";
@@ -188,11 +190,18 @@ class GC {
         return hao_gc_concurrent_mark_cycles();
     }
 
+    // 终止 STW 未齐导致 abort MARK 的次数（v0.53.3+；对标「回收压力/握手失败」）。
+    // @return 次数
+    // 复杂度：O(1)
+    static func markAbortCycles(): Long {
+        return hao_gc_mark_abort_cycles();
+    }
+
     // 人类可读摘要，便于 fmt.println 调试。
     // @return 多字段一行文本
     // 复杂度：O(1)（单次 stats）
     static func summary(): String {
         val s = GC.stats();
-        return $"GC[v3] live={s.liveBytes}B heap={s.heapBytes}B threshold={s.threshold}B allocatedSince={s.allocatedSinceGc}B blocks={s.blockCount} collects={s.collectCount} minor={s.minorCount} major={s.majorCount} finalizerRuns={s.finalizerRuns} finalizerSets={s.finalizerSets} stwIncomplete={s.stwIncomplete} concurrentMark={s.concurrentMarkCycles} markAssist={s.markAssistSteps}";
+        return $"GC[v3] live={s.liveBytes}B heap={s.heapBytes}B threshold={s.threshold}B allocatedSince={s.allocatedSinceGc}B blocks={s.blockCount} collects={s.collectCount} minor={s.minorCount} major={s.majorCount} finalizerRuns={s.finalizerRuns} finalizerSets={s.finalizerSets} stwIncomplete={s.stwIncomplete} concurrentMark={s.concurrentMarkCycles} markAssist={s.markAssistSteps} markAbort={s.markAbortCycles}";
     }
 }
