@@ -1295,6 +1295,7 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
         emitGcRootUnwind();
         em_.emit("ret ptr " + obj);
     }
+    em_.flushEntryAllocas();
     em_.emitRaw("}");
 
     std::string def = em_.popFunctionState();
@@ -2104,6 +2105,7 @@ void IRGen::genMethod(HaoLangParser::FuncDeclContext* fn, const ClassInfoPtr& ci
                     mi->returnType, /*isMain=*/false, hasThis, ci->name,
                     fn, "方法 '" + ci->name + "." + mname + "'");
 
+    em_.flushEntryAllocas();
     em_.emitRaw("}");
     currentClass_ = nullptr;
     thisAddr_.clear();
@@ -2133,6 +2135,7 @@ void IRGen::genConstructor(HaoLangParser::ConstructorDeclContext* ctor,
                     Type::makeUnit(), /*isMain=*/false, /*hasThis=*/true, ci->name,
                     ctor, "构造函数 '" + ci->name + "'");
 
+    em_.flushEntryAllocas();
     em_.emitRaw("}");
     currentClass_ = nullptr;
     thisAddr_.clear();
@@ -2204,6 +2207,7 @@ Value IRGen::callGenericMethod(const Value& recv, const ClassInfoPtr& ci,
         if (isLambdaArg(k)) continue;
         Value av = genExpr(call->argList()->arg(k)->expr());
         if (!av.valid()) { currentTypeParams_=savedParams0; currentPkgPrefix_=savedPrefix0; currentSubst_=savedSubst0; return Value(); }
+        rootGcOperand(av);
         args[k] = av;
         if (k < tplParams.size())
             unifyWithArg(tplParams[k], av.type, methodSubst, ctx);
@@ -2226,6 +2230,7 @@ Value IRGen::callGenericMethod(const Value& recv, const ClassInfoPtr& ci,
         Value av = genExpr(call->argList()->arg(k)->expr());
         if (k < tplParams.size()) expectedTypes_.pop_back();
         if (!av.valid()) { currentTypeParams_=savedParams0; currentPkgPrefix_=savedPrefix0; currentSubst_=savedSubst0; return Value(); }
+        rootGcOperand(av);
         args[k] = av;
         if (k < tplParams.size())
             unifyWithArg(tplParams[k], av.type, methodSubst, ctx);
@@ -2393,6 +2398,7 @@ void IRGen::genMethodBodyFromMI(HaoLangParser::FuncDeclContext* fn,
     genFunctionBody(fn->block(), mi.paramNames, mi.paramTypes,
                     mi.returnType, /*isMain=*/false, /*hasThis=*/true, ci->name,
                     fn, "方法 '" + ci->name + "." + mi.name + "'");
+    em_.flushEntryAllocas();
     em_.emitRaw("}");
     currentClass_ = nullptr;
     thisAddr_.clear();
@@ -2700,6 +2706,7 @@ void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
         em_.emit("ret void");
     }
     }
+    em_.flushEntryAllocas();
     em_.emitRaw("}");
     currentClass_ = nullptr;
     thisAddr_.clear();

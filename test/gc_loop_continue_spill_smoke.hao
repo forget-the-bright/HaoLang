@@ -1,0 +1,41 @@
+// v0.55.6：while continue 须清 spill；for recycle 须 null；方法实参跨 safepoint
+package main;
+
+import gc;
+import collections.*;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+    public func take(o: Object): String {
+        return (o as Box).s;
+    }
+}
+
+func main() {
+    var round = 0;
+    while (round < 40) {
+        var junk = new List<Object>();
+        var i = 0;
+        while (i < 500) {
+            junk.add(new Box("c-" + Integer.toStr(i)));
+            i += 1;
+            if (i % 17 == 0) {
+                continue; // 修前：不清 spill 池 → 假活
+            }
+        }
+        // 方法多实参：先算的 GC 值须在 shadow
+        var a = new Box("A");
+        var b = new Box("B");
+        var t = a.take(b);
+        if (t.length == 0) {
+            fmt.println(false);
+            return;
+        }
+        round += 1;
+    }
+    gc.GC.collect();
+    fmt.println(gc.GC.blockCount() < 20000); // true
+    fmt.println(gc.GC.liveBytes() < (2 * 1024 * 1024)); // true
+    fmt.println(gc.GC.markAbortCycles() == 0); // true
+}

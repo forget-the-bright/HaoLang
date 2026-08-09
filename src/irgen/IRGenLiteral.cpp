@@ -48,6 +48,8 @@ Value IRGen::genArrayLiteral(HaoLangParser::ArrayLiteralContext* al) {
                     return Value();
                 }
             }
+            /* 元素/展开源跨后续 genExpr、array_new、写入循环 */
+            rootGcOperand(v);
             elems.push_back({spread, v});
         }
     }
@@ -240,7 +242,7 @@ Value IRGen::genArrayLiteral(HaoLangParser::ArrayLiteralContext* al) {
 
     arr = em_.nextTemp();
     em_.emit(arr + " = load ptr, ptr " + arrSlot);
-    em_.emit("store ptr null, ptr " + arrSlot);
+    /* 勿清 arrSlot：返回 SSA 仍可能跨 safepoint；循环由 spill 池清 */
     return Value(arr, Type::makeArray(elemType));
 }
 
@@ -248,9 +250,13 @@ Value IRGen::genArrayLiteral(HaoLangParser::ArrayLiteralContext* al) {
 Value IRGen::genEmptyArray(const TypePtr& elemType) {
     int64_t esz = elemType ? elemType->arrayElemSize() : 8;
     std::string isPtr = isGcPointerType(elemType) ? "1" : "0";
-    std::string arr = em_.nextTemp();
-    em_.emit(arr + " = call ptr @hao_array_new(i64 0, i64 " +
+    std::string arrRaw = em_.nextTemp();
+    em_.emit(arrRaw + " = call ptr @hao_array_new(i64 0, i64 " +
              std::to_string(esz) + ", i64 " + isPtr + ")");
+    /* 空数组亦可能跨后续 safepoint，进 shadow */
+    std::string slot = emitSpillGcRoot("aempty.arr", arrRaw);
+    std::string arr = em_.nextTemp();
+    em_.emit(arr + " = load ptr, ptr " + slot);
     return Value(arr, Type::makeArray(elemType));
 }
 
@@ -284,18 +290,24 @@ Value IRGen::genSizedArray(const TypePtr& elemType, const Value& len,
     std::string gepTy = elemType->arrayGepType();
     std::string lt = elemType->llvmType();
     std::string isPtr = isGcPointerType(elemType) ? "1" : "0";
-    std::string arrRaw = em_.nextTemp();
-    em_.emit(arrRaw + " = call ptr @hao_array_new(i64 " + len64 + ", i64 " +
-             std::to_string(esz) + ", i64 " + isPtr + ")");
-    std::string arrSlot = emitSpillGcRoot("asize.arr", arrRaw);
-
+    /* fill 须先于 array_new 挂根（分配可 safepoint） */
+    Value fillHeld;
     if (fill) {
         if (!isAssignable(fill->type, elemType)) {
             error(where, "定长数组填充值类型 " + fill->type->toString() +
                          " 不能赋给 " + elemType->toString());
             return Value();
         }
-        Value fv = coerce(*fill, elemType, 0, 0);
+        fillHeld = coerce(*fill, elemType, 0, 0);
+        rootGcOperand(fillHeld);
+    }
+    std::string arrRaw = em_.nextTemp();
+    em_.emit(arrRaw + " = call ptr @hao_array_new(i64 " + len64 + ", i64 " +
+             std::to_string(esz) + ", i64 " + isPtr + ")");
+    std::string arrSlot = emitSpillGcRoot("asize.arr", arrRaw);
+
+    if (fill) {
+        Value fv = fillHeld;
         std::string fillSlot;
         if (isGcPointerType(elemType))
             fillSlot = emitSpillGcRoot("asize.fill", fv.ir);
@@ -339,7 +351,7 @@ Value IRGen::genSizedArray(const TypePtr& elemType, const Value& len,
 
     std::string arr = em_.nextTemp();
     em_.emit(arr + " = load ptr, ptr " + arrSlot);
-    em_.emit("store ptr null, ptr " + arrSlot);
+    /* 勿清 arrSlot：返回 SSA 仍可能跨 safepoint */
     return Value(arr, Type::makeArray(elemType));
 }
 
@@ -577,9 +589,14 @@ Value IRGen::genWhenExpr(HaoLangParser::WhenStmtContext* w) {
 
     std::string out = em_.nextTemp();
     em_.emit(out + " = load " + resultType->llvmType() + ", ptr " + resAddr);
+    Value result(out, resultType);
+    /* 先 spill 结果再清 when.res：否则仅 SSA 跨 safepoint 会假死 */
+    rootGcOperand(result);
+    if (isGcPointerType(resultType) && !resAddr.empty())
+        em_.emit("store ptr null, ptr " + resAddr);
     if (hasSubject && isGcPointerType(subjType) && !subjAddr.empty())
         em_.emit("store ptr null, ptr " + subjAddr);
-    return Value(out, resultType);
+    return result;
 }
 
 // ---------- 字面量 ----------
@@ -736,11 +753,15 @@ Value IRGen::genTemplateString(HaoLangParser::TemplateStringContext* ts) {
         if (first) {
             acc = piece;
             first = false;
+            rootGcOperand(acc);
         } else {
+            rootGcOperand(acc);
+            rootGcOperand(piece);
             std::string reg = em_.nextTemp();
             em_.emit(reg + " = call ptr @hao_str_concat(ptr " + acc.ir +
                      ", ptr " + piece.ir + ")");
             acc = Value(reg, Type::makeString());
+            rootGcOperand(acc);
         }
     }
 

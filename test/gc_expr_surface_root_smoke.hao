@@ -1,0 +1,43 @@
+// v0.55.9：字段赋值 / 数组字面量 / 串接顺序 / 相等比较 — 跨 safepoint 须挂根
+package main;
+
+import gc;
+import collections.*;
+
+class Box {
+    public var s: String = "";
+    public var next: Box? = null;
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var round = 0;
+    while (round < 35) {
+        var keep = new Box("keep-" + Integer.toStr(round));
+        // 字段赋值：recv 跨右值
+        keep.next = new Box("n-" + Integer.toStr(round));
+        // 数组字面量：先算的元素跨 array_new
+        var arr = [new Box("a"), new Box("b"), new Box("c"), keep];
+        // List + push 扩容（runtime 皮带）
+        var lst = new List<Object>();
+        lst.add(arr[0]);
+        lst.add(arr[1]);
+        lst.add(keep);
+        // 串接链式 + 相等（左串跨右）
+        var s = keep.s + "-" + Integer.toStr(lst.size()) + "-x";
+        var eq = (s == ("keep-" + Integer.toStr(round) + "-" + Integer.toStr(lst.size()) + "-x"));
+        if (!eq) {
+            fmt.println(false);
+            return;
+        }
+        var i = 0;
+        while (i < 300) {
+            lst.add(new Box("j-" + Integer.toStr(i)));
+            i += 1;
+        }
+        round += 1;
+    }
+    gc.GC.collect();
+    fmt.println(gc.GC.markAbortCycles() == 0); // true
+    fmt.println(gc.GC.liveBytes() < (6 * 1024 * 1024)); // true
+}

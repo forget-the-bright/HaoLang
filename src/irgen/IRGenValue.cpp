@@ -246,7 +246,12 @@ std::string IRGen::formatCallArg(const TypePtr& paramTy,
                                  antlr4::tree::ParseTree* expr,
                                  Value arg,
                                  bool arrayByRef) {
+    /* 仅当 coerce 产生新 IR（典型：T→T? 的 hao_box_*）才挂根。
+       已由调用方 rootGcOperand 的实参勿再 spill——曾致套件 OOP 段 AV。 */
+    std::string irBefore = arg.ir;
     arg = coerce(arg, paramTy, 0, 0);
+    if (arg.valid() && isGcPointerType(arg.type) && arg.ir != irBefore)
+        rootGcOperand(arg);
     if (paramTy && paramTy->kind == TypeKind::Array && !paramTy->nullable) {
         if (arrayByRef)
             return "ptr " + arrayArgSlot(expr, arg);
@@ -320,7 +325,8 @@ Value IRGen::coerce(const Value& v, const TypePtr& target, size_t line, size_t c
         return coerce(mid, target, line, col);
     }
 
-    // T -> T?：值类型装箱为指针
+    // T -> T?：值类型装箱为指针。调用面由 formatCallArg 挂根；
+    // 此处不 root——?. / ?? 的 phi 前驱里 spill 易与块标签纠缠（套件 AV）。
     if (target->nullable && !v.type->nullable &&
         v.type->kind == target->kind && v.type->sameShape(*target)) {
         if (v.type->kind == TypeKind::Long || v.type->kind == TypeKind::ULong ||
@@ -592,6 +598,24 @@ void IRGen::clearUnwindGcRoot() {
     storeUnwindGcRootPtr("null");
 }
 
+void IRGen::beginBlockGcScope() {
+    blockGcSlots_.push_back({});
+}
+
+void IRGen::endBlockGcScope() {
+    if (blockGcSlots_.empty()) return;
+    if (!blockTerminated_) {
+        for (const auto& addr : blockGcSlots_.back())
+            em_.emit("store ptr null, ptr " + addr);
+    }
+    blockGcSlots_.pop_back();
+}
+
+void IRGen::noteBlockGcSlot(const std::string& slotAddr) {
+    if (slotAddr.empty() || blockGcSlots_.empty()) return;
+    blockGcSlots_.back().push_back(slotAddr);
+}
+
 /* 循环入口预分配槽数：须在循环前（支配整段循环），禁止在 body 内 alloca */
 static constexpr size_t kLoopSpillPoolPrealloc = 48;
 
@@ -649,15 +673,18 @@ void IRGen::pinLoopSpillCheckpoint() {
 void IRGen::recycleLoopSpillSlots() {
     if (loopSpillPools_.empty()) return;
     auto& pool = loopSpillPools_.back();
-    if (!pool.stickyStack.empty()) {
-        pool.next = pool.stickyStack.back();
-        return;
-    }
-    /* 无 pin：回收到本层 while/for 基线，勿动外层槽 */
-    if (!pool.scopeStack.empty())
-        pool.next = pool.scopeStack.back();
-    else
-        pool.next = 0;
+    size_t target = 0;
+    if (!pool.stickyStack.empty())
+        target = pool.stickyStack.back();
+    else if (!pool.scopeStack.empty())
+        target = pool.scopeStack.back();
+    /* 回退游标前须清 null，否则上轮 spill 残留在已 push 的槽里假活 */
+    size_t lim = pool.highWater > pool.next ? pool.highWater : pool.next;
+    if (lim > pool.slots.size()) lim = pool.slots.size();
+    for (size_t i = target; i < lim; ++i)
+        em_.emit("store ptr null, ptr " + pool.slots[i]);
+    pool.next = target;
+    if (pool.highWater > target) pool.highWater = target;
 }
 
 void IRGen::unpinLoopSpillCheckpoint() {
@@ -696,16 +723,15 @@ std::string IRGen::acquireLoopGcSlot(const std::string& nameHint) {
         return addr;
     }
     auto& pool = loopSpillPools_.back();
-    if (pool.next < pool.slots.size()) {
-        std::string addr = pool.slots[pool.next++];
-        if (pool.next > pool.highWater) pool.highWater = pool.next;
-        return addr;
+    if (pool.next >= pool.slots.size()) {
+        /* 扩池：alloca 进 entry（支配），再 root_push 一次并入可复用表 */
+        std::string addr = em_.emitEntryAllocaPtr(nameHint);
+        em_.emit("store ptr null, ptr " + addr);
+        emitGcRootPush(addr);
+        pool.slots.push_back(addr);
     }
-    /* 预分配用尽：退回独立槽（罕见；不入池，避免 body 内 alloca 破坏支配关系被 clear） */
-    std::string addr = em_.nextNamed(nameHint);
-    em_.emit(addr + " = alloca ptr");
-    em_.emit("store ptr null, ptr " + addr);
-    emitGcRootPush(addr);
+    std::string addr = pool.slots[pool.next++];
+    if (pool.next > pool.highWater) pool.highWater = pool.next;
     return addr;
 }
 
@@ -713,13 +739,24 @@ std::string IRGen::emitSpillGcRoot(const std::string& nameHint, const std::strin
     if (!loopSpillPools_.empty()) {
         std::string addr = acquireLoopGcSlot(nameHint);
         em_.emit("store ptr " + ptrIr + ", ptr " + addr);
+        /* 池寿命由 clear/recycle/leave 管；勿 noteBlock——内层块尾会误杀仍在用的池槽 */
         return addr;
     }
-    std::string addr = em_.nextNamed(nameHint);
-    em_.emit(addr + " = alloca ptr");
+    /* alloca 必须进 entry，否则分支内 spill 的 use 不支配（套件 clang 失败） */
+    std::string addr = em_.emitEntryAllocaPtr(nameHint);
     em_.emit("store ptr " + ptrIr + ", ptr " + addr);
     emitGcRootPush(addr);
+    /* 不 noteBlockGcSlot：表达式临时寿命到 return unwind；块尾清易误杀仍被 SSA/后续用的槽 */
     return addr;
+}
+
+void IRGen::rootGcOperand(Value& v) {
+    /* 静态 ClassName.f：recv.ir 为空，勿 spill */
+    if (!v.valid() || v.ir.empty() || !isGcPointerType(v.type)) return;
+    std::string slot = emitSpillGcRoot("op.root", v.ir);
+    std::string p = em_.nextTemp();
+    em_.emit(p + " = load ptr, ptr " + slot);
+    v.ir = p;
 }
 
 void IRGen::emitVarStore(const SymbolPtr& sym, const TypePtr& ty,

@@ -273,7 +273,9 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
     em_.emitLabel(bodyL);
     {
         SymbolTable::Guard g(syms_);
+        beginBlockGcScope();
         for (auto* s : st->block()->statement()) genStatement(s);
+        endBlockGcScope();
     }
     bool bodyFallsThrough = !blockTerminated_;
     if (bodyFallsThrough) em_.emit("br label %" + cleanupL);
@@ -339,7 +341,9 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
             sym->irAddr = ce.bindAddr;
             syms_.declare(sym);
 
+            beginBlockGcScope();
             for (auto* s : ce.node->block()->statement()) genStatement(s);
+            endBlockGcScope();
         }
         catchDepth_--;
         if (!blockTerminated_) {

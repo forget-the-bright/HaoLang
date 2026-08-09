@@ -1254,6 +1254,7 @@ Value IRGen::callGenericFunction(const std::string& tplName,
         if (isLambdaArg(k)) continue;
         Value av = genExpr(al->arg(k)->expr());
         if (!av.valid()) { currentTypeParams_=savedParams0; currentPkgPrefix_=savedPrefix0; currentSubst_=savedSubst0; return Value(); }
+        rootGcOperand(av);
         args[k] = av;
         if (k < tplParams.size())
             unifyWithArg(tplParams[k], av.type, subst, ctx);
@@ -1286,6 +1287,7 @@ Value IRGen::callGenericFunction(const std::string& tplName,
         Value av = genExpr(al->arg(k)->expr());
         if (k < tplParams.size()) expectedTypes_.pop_back();
         if (!av.valid()) { currentTypeParams_=savedParams0; currentPkgPrefix_=savedPrefix0; currentSubst_=savedSubst0; return Value(); }
+        rootGcOperand(av);
         args[k] = av;
         if (k < tplParams.size())
             unifyWithArg(tplParams[k], av.type, subst, ctx);
@@ -1437,14 +1439,24 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
             ps->byRefParam = true;
             emitGcRootPush(argSrc);
         } else if (boxed) {
+            /* GC 形参：先把 .arg 挂进 shadow，再 object_new（分配可 safepoint） */
             em_.emit(addr + " = alloca ptr");
-            int64_t cbm = isGcPointerType(ptype) ? 1 : 0;
-            std::string cell = emitObjectNew(1, cbm);
-            emitHeapStore(cell, argSrc, ptype, cell);
-            em_.emit("store ptr " + cell + ", ptr " + addr);
+            if (isGcPointerType(ptype)) {
+                em_.emit("store ptr " + argSrc + ", ptr " + addr);
+                emitGcRootPush(addr);
+                std::string held = em_.nextTemp();
+                em_.emit(held + " = load ptr, ptr " + addr);
+                std::string cell = emitObjectNew(1, 1);
+                emitHeapStore(cell, held, ptype, cell);
+                em_.emit("store ptr " + cell + ", ptr " + addr);
+            } else {
+                std::string cell = emitObjectNew(1, 0);
+                emitHeapStore(cell, argSrc, ptype, cell);
+                em_.emit("store ptr " + cell + ", ptr " + addr);
+                emitGcRootPush(addr);
+            }
             ps->boxed = true;
             ps->irAddr = addr;
-            emitGcRootPush(addr);
         } else {
             em_.emit(addr + " = alloca " + ptype->llvmType());
             em_.emit("store " + ptype->llvmType() + " " + argSrc +
@@ -1456,11 +1468,13 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
         syms_.declare(ps);
     }
 
-    // ---- 函数体（参数与局部变量同层，故不再新建作用域） ----
+    // ---- 函数体：符号与参数同层；块 GC 作用域使顶层局部在落回出口前可清槽 ----
     /* v0.53.3：入口 safepoint，加密协作 STW（循环外长直线路径也能 park） */
     em_.emit("call void @hao_gc_safepoint()");
     pushSmartCastFrame();
+    beginBlockGcScope();
     genBlock(body, /*newScope=*/false);
+    endBlockGcScope();
     popSmartCastFrame();
 
     // ---- 补全返回 ----
@@ -1482,6 +1496,7 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
     loopHoisted_.clear();
     loopSpillPools_.clear();
     loopSpillDepth_ = 0;
+    blockGcSlots_.clear();
 }
 
 void IRGen::genFunction(HaoLangParser::FuncDeclContext* fn) {
@@ -1600,6 +1615,7 @@ void IRGen::genFunction(HaoLangParser::FuncDeclContext* fn,
                     sym->returnType, isMain, /*hasThis=*/false, "",
                     fn, "函数 '" + name + "'");
 
+    em_.flushEntryAllocas();
     em_.emitRaw("}");
 }
 

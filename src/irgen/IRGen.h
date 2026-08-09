@@ -529,7 +529,7 @@ private:
     void emitVarStore(const SymbolPtr& sym, const TypePtr& ty,
                       const std::string& valIr);
     std::string emitObjectNew(int64_t nfields, int64_t bitmap);
-    // v0.54/v0.55.5：Hao 精确根（shadow；循环局部提升；循环 spill 池）
+    // v0.54/v0.55.7：Hao 精确根（shadow；循环提升/spill 池；块尾清槽）
     void emitGcRootPush(const std::string& slotAddr);
     void emitGcRootUnwind();
     void beginFunctionGcRoots();
@@ -541,6 +541,11 @@ private:
     void clearUnwindGcRoot();
     // 分配 ptr 槽、写入初值并 root_push；循环内走 spill 池（只 push 一次）
     std::string emitSpillGcRoot(const std::string& nameHint, const std::string& ptrIr);
+    /* 块/分支作用域：只 store null，不 root_unwind（曾 unwind 致套件 AV） */
+    std::vector<std::vector<std::string>> blockGcSlots_;
+    void beginBlockGcScope();
+    void endBlockGcScope();
+    void noteBlockGcSlot(const std::string& slotAddr);
     // 循环 spill 池：整段嵌套 while/for 共用一层；acquire 复用槽，禁止每轮 root_push
     struct LoopSpillPool {
         std::vector<std::string> slots;
@@ -558,6 +563,8 @@ private:
     void unpinLoopSpillCheckpoint();
     void clearLoopSpillSlots();
     std::string acquireLoopGcSlot(const std::string& nameHint);
+    /* GC 操作数跨后续 genExpr/safepoint：spill 后 reload 到 v.ir */
+    void rootGcOperand(Value& v);
 
     // 可见性校验：当前上下文能否访问 ownerClass 中具有 vis 的成员。
     // 规则：
@@ -648,6 +655,8 @@ private:
         std::string breakLabel;
         std::string continueLabel;
         int tryDepth = 0;   // 进入循环时的 tryStack_ 大小
+        /* while：continue 前 clear 本层 spill；for：continue 走 step 的 recycle */
+        bool clearSpillOnContinue = true;
     };
     std::vector<LoopContext> loops_;
 

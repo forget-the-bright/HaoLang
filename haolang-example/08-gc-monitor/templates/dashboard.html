@@ -86,7 +86,10 @@
       <span>运行时长：<strong id="uptimeText">—</strong></span>
       <span>阈值进度：<strong id="usagePct">{{usagePct}}</strong>%</span>
     </div>
-
+    <div class="actions">
+      <button class="primary" id="btnCollect" type="button">手动 major collect</button>
+      <button id="btnRefresh" type="button">立即刷新</button>
+    </div>
     <h2 class="sec">内存 / 资源</h2>
     <div class="grid">
       <div class="metric">
@@ -195,10 +198,7 @@
       <pre id="note">{{note}}</pre>
     </div>
 
-    <div class="actions">
-      <button class="primary" id="btnCollect" type="button">手动 major collect</button>
-      <button id="btnRefresh" type="button">立即刷新</button>
-    </div>
+ 
     <p class="hint">GET /api/gc · POST /api/gc/collect · 每 5 秒自动拉取。请在仓库根启动本示例。</p>
   </div>
 <script>

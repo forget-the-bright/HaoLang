@@ -1,0 +1,33 @@
+// v0.55.7：裸块 / if 结束 GC 槽 store null（不 root_unwind）
+package main;
+
+import gc;
+import collections.*;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var round = 0;
+    while (round < 30) {
+        {
+            var junk = new List<Object>();
+            var i = 0;
+            while (i < 800) {
+                junk.add(new Box("b-" + Integer.toStr(i)));
+                i += 1;
+            }
+        } // 块结束：junk 槽置 null → 整表不可达
+        if (round % 2 == 0) {
+            var tmp = new Box("if-" + Integer.toStr(round));
+            tmp = new Box("drop");
+        }
+        round += 1;
+    }
+    gc.GC.collect();
+    fmt.println(gc.GC.blockCount() < 20000); // true
+    fmt.println(gc.GC.liveBytes() < (2 * 1024 * 1024)); // true
+    fmt.println(gc.GC.markAbortCycles() == 0); // true
+}

@@ -1,8 +1,9 @@
-# IR ↔ GC 契约（v0.55.4+ 权威说明）
+# IR ↔ GC 契约（v0.55.10+ 权威说明）
 
 > **读者**：改 IRGen / runtime_gc / 写屏障 / STW 的人。  
 > **地位**：GC 埋点、流程、规则的**唯一详文**；记忆文档 §5.4 只保留摘要并链到本文。  
-> **原则**：GC 只认**可达性**——从根沿指针摸得到 = 存活；摸不到 = 可回收。
+> **原则**：GC 只认**可达性**——从根沿指针摸得到 = 存活；摸不到 = 可回收。  
+> **诚实边界**：主路径按可达性工程化；continue 穿过 finally 时**禁止**先 `clearLoopSpillSlots`（坑债 CE）。concurrent sweep 是停顿排期，**不是**假死借口。
 
 ---
 
@@ -34,7 +35,7 @@ HaoLang **不做** Win `SuspendThread`；**不用** LLVM `gc.statepoint`/stackma
 | R6 终止 | 每一轮 terminate **清空 scanned**；本轮 soft STW **齐 park** 且 worklist 空才可 sweep |
 | R7 abort | 终止失败 → IDLE + 丢 worklist + bump epoch + pacing |
 | R8 批量拷贝 | 须 **同锁原子**（`hao_gc_array_copy_and_shade`） |
-| R9 精确根 | GC 指针局部/参数 alloca：`hao_gc_root_push`；函数出口 `hao_gc_root_unwind(wm)`。**跨 safepoint/调用仍存活的 GC 指针必须在 shadow（或显式根）**——含 when.subj/res、catch 绑定、select、finally 的 unwind GC 槽、`$new`/语言 `new`/aspread·asize、for.seq/iter。**循环内**合成根走 spill 池（循环前预分配+acquire，禁止每轮 `root_push`）；层/轮结束按 `scopeStack` `store null`。`new` 构造窗内勿清 objSlot（防 SSA 假死） |
+| R9 精确根 | GC 指针局部/参数 alloca：`hao_gc_root_push`；函数出口 `hao_gc_root_unwind(wm)`。**跨 safepoint/调用仍存活的 GC 指针必须在 shadow**——含 when/catch/select/unwind/`$new`/new/aspread·asize/空数组、for.seq/iter、**自由函数/pkg.fn/super/泛型/Func 实参与 env**、**方法 recv/实参**、字段赋值 recv、数组字面量元素、字符串 `+`（**先 root 左再求右**）/`??`/`?.`（base+phi）/下标/`==`、模板 acc、haoroutine/lambda/**函数值** env、**`formatCallArg` 因 `hao_box_*` 新产生的指针**（均 `rootGcOperand`）。**循环内**走 spill 池；非循环 spill 的 alloca **进 entry**。`new`/aspread 返回前勿清结果槽；`when.res` 须先 spill 结果再清槽。**禁**：对已挂根实参在 `formatCallArg` 无差别再 spill；**禁** `boxToNullable` 内 root（phi 前驱） |
 
 ---
 
@@ -100,7 +101,29 @@ flowchart TD
 
 **方法 / lambda 结束**：入口 `hao_gc_root_watermark`，return / 隐式 return 时 `hao_gc_root_unwind`（整帧 shadow 回退）。
 
-**普通 `{ }` 块**：符号表有作用域；shadow **不**在块尾提前 unwind（对齐「帧内死局部可拖到 return」）。无限循环里的短生命周期对象靠 **提升 + spill 池**，不是靠「文档写了限制就算了」。
+**普通 `{ }` / if / when / try / select case / 函数·lambda 体（v0.55.7～0.55.8）**：结束时对作用域内 GC 槽 **`store null`**（**禁止**块级 `root_unwind`，曾致套件 AV）。参数槽仍活到 `root_unwind`。无限循环短生命周期靠 **提升 + spill 池 + 块尾清槽**。**continue/break（v0.55.10 CE）**：有 try 时只 `emitUnwind`，**禁止**先 `clearLoopSpillSlots`（会杀 catch 池槽）；while 在 `condL` 入口补清；池槽禁止 `noteBlockGcSlot`。
+
+### 4.3.1 嵌套清槽纪律（设计硬约束）
+
+语法上 while/for/try/if/when/select/`{ }` **任意嵌套、层数不限**。清槽必须按「谁拥有槽、何时槽已死」分层，禁止「非拥有者提前抹掉仍存活的根」。
+
+| 层 | 拥有者 | 何时可 `store null` / clear | 禁止 |
+|----|--------|------------------------------|------|
+| 函数 shadow | `root_push` 水位 | 仅 `root_unwind(wm)`（return / 帧退出） | 块级 `root_unwind` |
+| 块/分支局部 | `noteBlockGcSlot`（**非池** alloca） | `endBlockGcScope`（该 `{ }`/if/when/case 结束） | 把 **spill 池槽** 记入 noteBlock |
+| 循环 spill 池 | `scopeStack` / sticky | **本层** fallthrough/`condL`/`step`/`leave`；内层 clear 不得动外层 base 以下 | 在 `emitUnwind`（穿 finally）**之前** clear/recycle |
+| catch 绑定 | try 设置时 acquire（循环内=池槽） | try **正常** end 清绑定；continue 穿 finally 后由 while `condL` / for `step` 清 | continue/break 入口抢先 clear |
+| select spill | `selSpillSlots` | select **end** 清 | 与池 sticky 混淆时 noteBlock |
+
+**非局部出口（return / break / continue / throw）**：
+
+1. 先写 unwind reason，**按 try 嵌套由内向外**跑 finally（`emitUnwind`）。  
+2. **finally 跑完之前**，不得 clear 仍可能被本层 catch/池槽引用的根。  
+3. 到达真正目标后再清：while → `condL`/`leave`；for → `step` recycle / `leave`；return → `root_unwind`。
+
+**池槽 vs 块槽**：`emitSpillGcRoot` / `acquireLoopGcSlot` 的寿命由池管；`noteBlockGcSlot` 只登记「块拥有的独立 alloca」。混用 = 块尾误杀池 → 假死（CE 同类）。
+
+**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；多层 try×循环的专用 smoke；清槽与 `scopeStack` 的断言式自检。
 
 ### 4.4 分配
 
@@ -120,7 +143,10 @@ flowchart TD
 | reflect String set / `hao_make_args` | `barrier` 槽地址 |
 | sleep / net / fs / os / join / pool join | `os_block_*`（置 `g_in_os_block`，STW 加扫 C 叶） |
 | net/fs/os 持 GC 指针跨 block | os_block 跨度 **`hao_gc_add_root` + `hao_gc_remove_root` 成对**（禁只加不摘） |
-| channel send/try_send | **先 root 再 chan_lock** |
+| `hao_array_push` / `str_concat` / `substring` / `reflect_invoke` | 分配前**直接** `add_root`（**禁止**先 `is_heap_ptr`——其内 safepoint 会假死）；扩容换指针须 remove 旧 + add 新 |
+| channel send/try_send | **先 `hao_gc_add_root_if_heap` 再 chan_lock**（整型载荷勿进根表） |
+| `hao_str_trim` / `to_upper` / `to_lower` / `byte_slice` / `hao_make_args` | 分配前直接 `add_root`（禁 `is_heap_ptr` 前置） |
+| `hao_regex_compile` | pattern 成对挂根 |
 | `hao_sync_lock` | 自旋失败路径 safepoint |
 | finalizer | 回调后仍可达 → 挂回堆，否则 free |
 | mark worker | **持锁外**启动；勿用 `hao_pool`；**不** `gc_register_thread` |
@@ -144,17 +170,19 @@ flowchart TD
 
 ## 7. 与 Go 的对齐 / 有意差异
 
-| 点 | Hao（v0.55.5） | Go 方向 |
+| 点 | Hao（v0.55.10） | Go 方向 |
 |----|--------------|---------|
-| 可达性 + 三色 + 混合屏障 | ✅ | ✅ |
+| 可达性 + 三色 + 混合屏障 | ✅ 主路径 | ✅ |
 | 短 STW 根/终止 | 软 STW + 超时 abort | 更短 |
-| Hao 帧精确根 | ✅ shadow + **循环 spill 池**（when/catch/select/new/for.seq…） | 栈图 |
-| C runtime 帧 | os_block 时有界保守 + 显式根 | 较少混 C |
+| Hao 帧精确根 | ✅ shadow + spill 池 + 块尾 + 调用/串接/`?.`/`??`/装箱 | 栈图 |
+| C runtime 帧 | os_block 有界保守 + 显式根（string/channel/regex/fs/os…） | 较少混 C |
 | mark worker | ✅ 私有线程 | ✅ |
 | 抢占 | 协作 + os_block | 信号更强 |
-| concurrent sweep / span | **排期（停顿优化，非假活借口）** | 有 |
-| LLVM stackmap | **架构不用**（shadow 替代） | N/A |
-| Win SuspendThread | **禁止（架构）** | N/A |
+| continue×finally×spill 池 | ✅ 勿在 unwind 前 clear；condL 补清 | N/A |
+| concurrent sweep / span | **排期（停顿，非可达性借口）** | 有 |
+| compact / 移动式 | **架构不做** | 部分有 |
+| LLVM stackmap | **架构不用**（shadow） | N/A |
+| Win SuspendThread | **禁止** | N/A |
 
 ---
 
@@ -171,7 +199,11 @@ flowchart TD
 9. 循环内合成根是否走 **spill 池**（预分配+acquire）；内层 clear 是否只动本层 `scopeStack`？  
 10. major 路径是否**禁止**把 remset 当根 enqueue？晋升后是否**勿**盲目 `remset_add`（只靠屏障记真实 old→young）？  
 11. while/**for-in** 体内 GC `var` 是否**提升**；`new` 是否保留 objSlot 至调用方根/池清？  
-12. try 正常结束是否清 catch 绑定 + `unwindGcRoot`？
+12. try 正常结束是否清 catch 绑定 + `unwindGcRoot`？  
+13. 自由函数/pkg.fn/super/泛型/Func、串接（先左后右）、字段赋值 recv、数组字面量、下标/`??`/`?.`/`==`、模板、haoroutine/lambda/函数值 env 是否 `rootGcOperand`？  
+14. C 皮带是否**禁止** `is_heap_ptr` 后再 `add_root`？`array_push`/`concat`/`substring`/`trim`/`reflect`/`getenv`/channel/`regex_compile` 是否成对？  
+15. `formatCallArg` 是否只对 **coerce 新 IR** 挂根？`boxToNullable` 是否未在 phi 前 root？  
+16. continue/break 是否**禁止**在穿过 finally 的 `emitUnwind` 之前 `clearLoopSpillSlots`？while `condL` 是否补清？
 
 验收：
 
@@ -191,6 +223,13 @@ hao run test/gc_remset_major_smoke.hao
 hao run test/gc_loop_var_root_smoke.hao
 hao run test/gc_for_var_root_smoke.hao
 hao run test/gc_loop_spill_pool_smoke.hao
+hao run test/gc_loop_continue_spill_smoke.hao
+hao run test/gc_block_scope_root_smoke.hao
+hao run test/gc_call_arg_root_smoke.hao
+hao run test/gc_expr_surface_root_smoke.hao
+hao run test/gc_safe_nav_string_smoke.hao
+hao run test/gc_box_nullable_arg_smoke.hao
+# 压测：for /L %i in (1,1,20) do target\test\cache\suite.exe
 ```
 
 ---

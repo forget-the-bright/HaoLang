@@ -71,7 +71,9 @@ void gc_init(void);
 
 /* 注册/注销一个外部 GC 根（线程闭包 env 等跨线程引用）。*/
 void hao_gc_add_root(void* p);
-/* 是否指向某 GC 块用户区（持 GC 锁查堆链；channel 等只对堆指针挂根） */
+/* 仅当 p 落在某 GC 块用户区时挂根；持锁查堆、**无 safepoint**（channel 整型载荷用） */
+void hao_gc_add_root_if_heap(void* p);
+/* 是否指向某 GC 块用户区（持 GC 锁查堆链；内含 safepoint——禁用于挂根前探测） */
 int8_t hao_gc_is_heap_ptr(void* p);
 /* 已废除全标活（恒 0）；请用 hao_gc_stw_incomplete */
 int64_t hao_gc_stw_mark_all_fallbacks(void);

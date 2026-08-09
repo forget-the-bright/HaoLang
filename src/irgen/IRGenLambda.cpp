@@ -363,6 +363,9 @@ Value IRGen::genLambda(HaoLangParser::LambdaContext* lam) {
         ++slotBm;
     }
     std::string env = emitObjectNew((int64_t)nslots, envBm);
+    std::string envSlot = emitSpillGcRoot("lambda.env", env);
+    env = em_.nextTemp();
+    em_.emit(env + " = load ptr, ptr " + envSlot);
     std::string fp0 = fieldPtr(env, 0);
     em_.emit("store ptr " + mi.implName + ", ptr " + fp0);
 
@@ -520,13 +523,22 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
                 emitGcRootPush(argSrc);
             } else if (boxed) {
                 em_.emit(addr + " = alloca ptr");
-                int64_t cbm = isGcPointerType(mi.paramTypes[i]) ? 1 : 0;
-                std::string cell = emitObjectNew(1, cbm);
-                emitHeapStore(cell, argSrc, mi.paramTypes[i], cell);
-                em_.emit("store ptr " + cell + ", ptr " + addr);
+                if (isGcPointerType(mi.paramTypes[i])) {
+                    em_.emit("store ptr " + argSrc + ", ptr " + addr);
+                    emitGcRootPush(addr);
+                    std::string held = em_.nextTemp();
+                    em_.emit(held + " = load ptr, ptr " + addr);
+                    std::string cell = emitObjectNew(1, 1);
+                    emitHeapStore(cell, held, mi.paramTypes[i], cell);
+                    em_.emit("store ptr " + cell + ", ptr " + addr);
+                } else {
+                    std::string cell = emitObjectNew(1, 0);
+                    emitHeapStore(cell, argSrc, mi.paramTypes[i], cell);
+                    em_.emit("store ptr " + cell + ", ptr " + addr);
+                    emitGcRootPush(addr);
+                }
                 ps->irAddr = addr;
                 ps->boxed = true;
-                emitGcRootPush(addr);
             } else {
                 em_.emit(addr + " = alloca " + mi.paramTypes[i]->llvmType());
                 em_.emit("store " + mi.paramTypes[i]->llvmType() + " " +
@@ -549,10 +561,12 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
         /* v0.53.3：lambda 入口 safepoint */
         em_.emit("call void @hao_gc_safepoint()");
         pushSmartCastFrame();
+        beginBlockGcScope();
         for (size_t i = 0; i < genCount; ++i) {
             genStatement(stmts[i]);
             if (blockTerminated_) break;   // 已 ret/br，后续不可达
         }
+        endBlockGcScope();
 
         if (!blockTerminated_) {
             if (mi.returnType->isUnit()) {
@@ -587,7 +601,9 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     }
     gcRootWm_.clear();
     loopHoisted_.clear();
+    blockGcSlots_.clear();
 
+    em_.flushEntryAllocas();
     em_.emitRaw("}");
     std::string def = em_.popFunctionState();
     em_.addFunctionDef(def);

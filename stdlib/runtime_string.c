@@ -152,10 +152,13 @@ const char* hao_str_cstr(const HaoString* s) {
 
 HaoString* hao_str_byte_slice(HaoString* s, int32_t start, int32_t end) {
     if (!s) return hao_str_from_cstr("");
+    hao_gc_add_root(s);
     if (start < 0) start = 0;
     if (end > s->len) end = s->len;
     if (end < start) end = start;
-    return hao_str_from_bytes(s->data + start, end - start);
+    HaoString* r = hao_str_from_bytes(s->data + start, end - start);
+    hao_gc_remove_root(s);
+    return r;
 }
 
 int32_t hao_str_byte_len(HaoString* s) {
@@ -198,9 +201,17 @@ HaoString* hao_str_concat(HaoString* a, HaoString* b) {
         fprintf(stderr, "panic: string concat length overflow\n");
         abort();
     }
+    /* alloc 可触发 GC：形参直接挂根（禁先 is_heap_ptr，其内 safepoint） */
+    if (a) hao_gc_add_root(a);
+    if (b) hao_gc_add_root(b);
     HaoString* r = hao_str_alloc(la + lb);
+    /* alloc 后可能移动语义不适用；仍从原指针读 data（未压缩移动） */
+    if (a) { da = a->data; la = a->len; if (la < 0) la = 0; }
+    if (b) { db = b->data; lb = b->len; if (lb < 0) lb = 0; }
     memcpy(r->data, da, (size_t)la);
     memcpy(r->data + la, db, (size_t)lb);
+    if (a) hao_gc_remove_root(a);
+    if (b) hao_gc_remove_root(b);
     return r;
 }
 
@@ -271,6 +282,8 @@ int8_t hao_str_is_empty(HaoString* s) {
 /* [start, end) 半开，按码点；越界钳制 */
 HaoString* hao_str_substring(HaoString* s, int32_t start, int32_t end) {
     if (!s) return hao_str_from_cstr("");
+    /* 直接挂根；禁止先 is_heap_ptr（其内 safepoint） */
+    hao_gc_add_root(s);
     int32_t cps = utf8_cp_count(s->data, s->len);
     if (start < 0) start = 0;
     if (end < start) end = start;
@@ -280,7 +293,9 @@ HaoString* hao_str_substring(HaoString* s, int32_t start, int32_t end) {
     int32_t b1 = utf8_byte_of_cp(s->data, s->len, end);
     if (b0 < 0) b0 = 0;
     if (b1 < 0) b1 = s->len;
-    return hao_str_from_bytes(s->data + b0, b1 - b0);
+    HaoString* r = hao_str_from_bytes(s->data + b0, b1 - b0);
+    hao_gc_remove_root(s);
+    return r;
 }
 
 /* 码点下标 from 起搜；对齐 Java String.indexOf(sub, fromIndex) */
@@ -353,6 +368,7 @@ int32_t hao_str_char_at(HaoString* s, int64_t i) {
 
 HaoString* hao_str_trim(HaoString* s) {
     if (!s) return hao_str_from_cstr("");
+    hao_gc_add_root(s);
     int32_t a = 0, b = s->len;
     while (a < b) {
         char c = s->data[a];
@@ -364,28 +380,34 @@ HaoString* hao_str_trim(HaoString* s) {
         if (c != ' ' && c != '\t' && c != '\n' && c != '\r') break;
         b--;
     }
-    return hao_str_from_bytes(s->data + a, b - a);
+    HaoString* r = hao_str_from_bytes(s->data + a, b - a);
+    hao_gc_remove_root(s);
+    return r;
 }
 
 HaoString* hao_str_to_upper(HaoString* s) {
     if (!s) return hao_str_from_cstr("");
+    hao_gc_add_root(s);
     HaoString* r = hao_str_alloc(s->len);
     for (int32_t i = 0; i < s->len; i++) {
         char c = s->data[i];
         if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
         r->data[i] = c;
     }
+    hao_gc_remove_root(s);
     return r;
 }
 
 HaoString* hao_str_to_lower(HaoString* s) {
     if (!s) return hao_str_from_cstr("");
+    hao_gc_add_root(s);
     HaoString* r = hao_str_alloc(s->len);
     for (int32_t i = 0; i < s->len; i++) {
         char c = s->data[i];
         if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
         r->data[i] = c;
     }
+    hao_gc_remove_root(s);
     return r;
 }
 
@@ -487,11 +509,13 @@ void* hao_make_args(int argc, char** argv) {
     if (n < 0) n = 0;
     /* [String]：与 hao_array_new(..., is_ptr=1) 同路径 */
     HaoString** elems = (HaoString**)hao_array_new(n, 8, 1);
+    hao_gc_add_root(elems); /* 填充循环内 from_cstr 可触发 GC */
     for (int i = 0; i < n; ++i) {
         const char* a = (argv && argv[i + 1]) ? argv[i + 1] : "";
         HaoString* s = hao_str_from_cstr(a);
         hao_gc_barrier(&elems[i], s);
         elems[i] = s;
     }
+    hao_gc_remove_root(elems);
     return elems;
 }

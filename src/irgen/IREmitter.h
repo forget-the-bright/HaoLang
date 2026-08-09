@@ -118,15 +118,18 @@ public:
         std::string body;
         unsigned tempCounter, namedCounter, labelCounter;
         std::string currentBlock;
+        std::string entryAllocaBuf;
     };
     void pushFunctionState() {
         saved_.push_back({body_.str(), tempCounter_, namedCounter_,
-                          labelCounter_, currentBlock_});
+                          labelCounter_, currentBlock_, entryAllocaBuf_});
         body_.str("");
         body_.clear();
+        entryAllocaBuf_.clear();
         resetFunctionState();
     }
     std::string popFunctionState() {
+        flushEntryAllocas();
         std::string def = body_.str();
         auto s = saved_.back();
         saved_.pop_back();
@@ -139,7 +142,28 @@ public:
         namedCounter_ = s.namedCounter;
         labelCounter_ = s.labelCounter;
         currentBlock_ = s.currentBlock;
+        entryAllocaBuf_ = s.entryAllocaBuf;
         return def;
+    }
+    /* 循环中扩 spill 池：alloca 插入当前函数 entry，保证支配所有 use */
+    std::string emitEntryAllocaPtr(const std::string& hint) {
+        std::string addr = nextNamed(hint);
+        entryAllocaBuf_ += "  " + addr + " = alloca ptr\n";
+        return addr;
+    }
+    void flushEntryAllocas() {
+        if (entryAllocaBuf_.empty()) return;
+        std::string b = body_.str();
+        auto pos = b.rfind("entry:\n");
+        if (pos != std::string::npos) {
+            pos += 7;
+            b.insert(pos, entryAllocaBuf_);
+            body_.str("");
+            body_.clear();
+            body_ << b;
+            body_.seekp(0, std::ios::end);
+        }
+        entryAllocaBuf_.clear();
     }
     // 登记一个独立的函数定义（lambda impl、函数值包装器），
     // 在 finish() 中输出到主函数体之后。
@@ -159,7 +183,8 @@ public:
     // ------------------------------------------------------------
     //  组装最终 .ll
     // ------------------------------------------------------------
-    std::string finish() const {
+    std::string finish() {
+        flushEntryAllocas();
         std::ostringstream out;
 
         out << "; ============================================\n"
@@ -450,6 +475,7 @@ private:
     unsigned labelCounter_ = 1;
     std::string currentBlock_ = "entry";
     std::string triple_ = "x86_64-pc-windows-msvc";
+    std::string entryAllocaBuf_;
 
     std::map<std::string, std::string> stringPool_;
     std::vector<std::string> globals_;

@@ -289,7 +289,7 @@ void* hao_reflect_set_class_mirror(void* meta, void* obj) {
     void* expected = NULL;
     if (__atomic_compare_exchange_n(&m->classMirror, &expected, obj, 0,
                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-        if (hao_gc_is_heap_ptr(obj)) hao_gc_add_root(obj);
+        hao_gc_add_root(obj); /* Class 镜恒为堆对象；禁 is_heap_ptr 前置 */
         return obj;
     }
     return expected; /* 已有赢家 */
@@ -514,18 +514,37 @@ HaoString* hao_reflect_method_return_type(void* meta, HaoString* mname) {
 
 int64_t hao_reflect_invoke(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
+    /* thunk 可分配：直接挂根（禁先 is_heap_ptr） */
+    if (obj) hao_gc_add_root(obj);
+    if (name) hao_gc_add_root(name);
+    if (argSlots) hao_gc_add_root(argSlots);
     const HaoMethodMeta* mm = find_method(m, hao_str_cstr(name));
-    if (!mm || !mm->invoke)
+    if (!mm || !mm->invoke) {
+        if (argSlots) hao_gc_remove_root(argSlots);
+        if (name) hao_gc_remove_root(name);
+        if (obj) hao_gc_remove_root(obj);
         hao_panic_msg("reflect: method not found");
+    }
     /* 含 0 参：长度必须精确匹配，防 OOB / 多余槽被忽略 */
     int64_t need = mm->paramCount;
     int64_t got = argSlots ? hao_array_len(argSlots) : 0;
-    if (need > 0 && !argSlots)
+    if (need > 0 && !argSlots) {
+        if (name) hao_gc_remove_root(name);
+        if (obj) hao_gc_remove_root(obj);
         hao_panic_msg("reflect: null arg slots");
-    if (got != need)
+    }
+    if (got != need) {
+        if (argSlots) hao_gc_remove_root(argSlots);
+        if (name) hao_gc_remove_root(name);
+        if (obj) hao_gc_remove_root(obj);
         hao_panic_msg("reflect: arity mismatch");
+    }
     HaoInvokeFn fn = (HaoInvokeFn)mm->invoke;
-    return fn((int64_t)(intptr_t)obj, argSlots);
+    int64_t r = fn((int64_t)(intptr_t)obj, argSlots);
+    if (argSlots) hao_gc_remove_root(argSlots);
+    if (name) hao_gc_remove_root(name);
+    if (obj) hao_gc_remove_root(obj);
+    return r;
 }
 HaoString* hao_reflect_invoke_str(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
     return (HaoString*)(intptr_t)hao_reflect_invoke(meta, obj, name, argSlots);

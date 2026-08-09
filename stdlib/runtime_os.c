@@ -97,9 +97,12 @@ int8_t hao_os_exists(HaoString* path) {
 
 HaoString* hao_os_getenv(HaoString* name) {
     if (!name) return NULL;
+    /* str_from_cstr 会分配：name 须挂根（对齐 system/readfile） */
+    hao_gc_add_root(name);
     const char* v = getenv(name->data);
-    if (!v) return NULL;
-    return hao_str_from_cstr(v);
+    HaoString* r = v ? hao_str_from_cstr(v) : NULL;
+    hao_gc_remove_root(name);
+    return r;
 }
 
 int64_t hao_os_system(HaoString* cmd) {

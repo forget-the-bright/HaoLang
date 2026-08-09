@@ -77,6 +77,10 @@ void* hao_array_push(void* arr, int64_t val) {
 
     char* oldbase = (char*)arr - HAO_ARR_HEADER;
     int64_t is_ptr = (*(int64_t*)(oldbase + 0) >> 1) & 1;
+    void* valp = (is_ptr && val) ? (void*)(uintptr_t)val : NULL;
+    /* 禁止先 is_heap_ptr（其内 safepoint）；直接挂根，对齐 fs 皮带 */
+    hao_gc_add_root(arr);
+    if (valp) hao_gc_add_root(valp);
 
     if (len >= cap) {
         uint64_t nc = cap ? (uint64_t)cap * 2ULL : 4ULL;
@@ -84,12 +88,15 @@ void* hao_array_push(void* arr, int64_t val) {
         if (esz <= 0 ||
             nc > (uint64_t)INT64_MAX ||
             nc > (UINT64_MAX - (uint64_t)HAO_ARR_HEADER) / (uint64_t)esz) {
+            if (valp) hao_gc_remove_root(valp);
+            hao_gc_remove_root(arr);
             fputs("panic: 数组扩容过大\n", stderr);
             exit(1);
         }
         int64_t newcap = (int64_t)nc;
         size_t oldBytes = (size_t)HAO_ARR_HEADER + (size_t)cap * (size_t)esz;
         uint64_t meta = is_ptr ? 1ULL : 0ULL;
+        void* old_arr = arr;
         char* newbase = (char*)gc_alloc_ex(
             (size_t)HAO_ARR_HEADER + (size_t)newcap * (size_t)esz,
             GC_KIND_ARRAY, meta);
@@ -98,6 +105,10 @@ void* hao_array_push(void* arr, int64_t val) {
                                     is_ptr && esz == 8 ? 1 : 0);
         arr = newbase + HAO_ARR_HEADER;
         *(int64_t*)((char*)arr - HAO_ARR_CAP_OFF) = newcap;
+        if (old_arr != arr) {
+            hao_gc_remove_root(old_arr);
+            hao_gc_add_root(arr);
+        }
     }
 
     char* slot = (char*)arr + (size_t)len * (size_t)esz;
@@ -114,6 +125,8 @@ void* hao_array_push(void* arr, int64_t val) {
         *(int64_t*)slot = val;
     }
     *(int64_t*)((char*)arr - HAO_ARR_LEN_OFF) = len + 1;
+    if (valp) hao_gc_remove_root(valp);
+    hao_gc_remove_root(arr);
     return arr;
 }
 

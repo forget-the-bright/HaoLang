@@ -23,12 +23,20 @@ TypePtr IRGen::peekVarDeclType(HaoLangParser::VarDeclContext* vd) {
 
 void IRGen::hoistVarDeclsInLoopBody(HaoLangParser::StatementContext* body) {
     if (!body) return;
-    std::function<void(antlr4::tree::ParseTree*)> walk =
-        [&](antlr4::tree::ParseTree* n) {
+    /* blockDepth：0=循环体自身；>=1 的嵌套 { } 不提升（交给块尾清槽） */
+    std::function<void(antlr4::tree::ParseTree*, int)> walk =
+        [&](antlr4::tree::ParseTree* n, int blockDepth) {
             if (!n) return;
-            /* 闭包另有函数帧，勿把其局部提升到外层 while */
+            /* 闭包另有函数帧；嵌套 while/for 自管提升 */
             if (dynamic_cast<HaoLangParser::LambdaContext*>(n)) return;
+            if (dynamic_cast<HaoLangParser::WhileStmtContext*>(n)) return;
+            if (dynamic_cast<HaoLangParser::ForStmtContext*>(n)) return;
             if (auto* st = dynamic_cast<HaoLangParser::StatementContext*>(n)) {
+                if (st->whileStmt() || st->forStmt()) return;
+                /* if/when/try/select 分支自管块作用域，勿提升进去 */
+                if (st->ifStmt() || st->whenStmt() || st->tryStmt() ||
+                    st->selectStmt())
+                    return;
                 if (auto* vd = st->varDecl()) {
                     if (loopHoisted_.count(vd)) return;
                     std::string name = vd->IDENT()->getText();
@@ -56,10 +64,16 @@ void IRGen::hoistVarDeclsInLoopBody(HaoLangParser::StatementContext* body) {
                     loopHoisted_[vd] = std::move(h);
                     return;
                 }
+                if (auto* blk = st->block()) {
+                    if (blockDepth >= 1) return; /* 嵌套裸块：不提升 */
+                    for (auto* s : blk->statement()) walk(s, blockDepth + 1);
+                    return;
+                }
+                return; /* 其它语句：不深挖 */
             }
-            for (auto* c : n->children) walk(c);
+            for (auto* c : n->children) walk(c, blockDepth);
         };
-    walk(body);
+    walk(body, 0);
 }
 
 void IRGen::clearHoistedGcSince(
@@ -75,7 +89,9 @@ void IRGen::genBlock(HaoLangParser::BlockContext* blk, bool newScope) {
     if (!blk) return;
     if (newScope) {
         SymbolTable::Guard g(syms_);
+        beginBlockGcScope();
         for (auto* st : blk->statement()) genStatement(st);
+        endBlockGcScope();
     } else {
         for (auto* st : blk->statement()) genStatement(st);
     }
@@ -99,9 +115,12 @@ void IRGen::genStatement(HaoLangParser::StatementContext* st) {
 
     // ---------- break / continue ----------
     //  在带 finally 的 try 内时，不能直接跳走，必须先穿过 finally。
+    //  禁止在 emitUnwind 之前 clearLoopSpillSlots：会杀掉本层 try 的 catch
+    //  池槽，finally/后续迭代假死 → 套件 AV（对 0.55.5 回归，坑债 CE）。
     if (st->breakStmt()) {
         if (loops_.empty()) { error(st, "break 只能出现在循环内部"); return; }
         if (!tryStack_.empty()) { emitUnwind(2); return; }
+        /* 无 try：end 标签 leaveLoopSpillScope 负责清槽 */
         em_.emit("br label %" + loops_.back().breakLabel);
         blockTerminated_ = true;
         return;
@@ -109,6 +128,11 @@ void IRGen::genStatement(HaoLangParser::StatementContext* st) {
     if (st->continueStmt()) {
         if (loops_.empty()) { error(st, "continue 只能出现在循环内部"); return; }
         if (!tryStack_.empty()) { emitUnwind(3); return; }
+        /* 无 try：while 清槽；for 走 step 前 recycle（step 上还会再 recycle） */
+        if (loops_.back().clearSpillOnContinue)
+            clearLoopSpillSlots();
+        else
+            recycleLoopSpillSlots();
         em_.emit("br label %" + loops_.back().continueLabel);
         blockTerminated_ = true;
         return;
@@ -132,6 +156,7 @@ void IRGen::genHaoroutine(HaoLangParser::HaoroutineStmtContext* st) {
     Value env = genLambda(lam);
     expectedTypes_.pop_back();
     if (!env.valid()) return;
+    rootGcOperand(env); /* env 跨 thread_start（内含 alloc/safepoint） */
     // 必须接住返回值：裸 call i64 仍占用 SSA 编号，否则后续 %N 冲突
     std::string h = em_.nextTemp();
     em_.emit(h + " = call i64 @hao_thread_start(ptr " + env.ir + ")");
@@ -217,6 +242,7 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
     }
 
     // 预求值各 case 的 channel / send 载荷（在循环外，避免重复副作用）
+    std::vector<std::string> selSpillSlots;
     for (auto& ci : infos) {
         if (ci.isDefault) continue;
         Value ch = genExpr(ci.chExpr);
@@ -244,6 +270,7 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         em_.emit(hLoaded + " = load ptr, ptr " + fp);
         // 句柄盒跨 select 循环 safepoint：spill 进 shadow
         std::string hSlotAddr = emitSpillGcRoot("sel.h", hLoaded);
+        selSpillSlots.push_back(hSlotAddr);
         ci.hPtr = em_.nextTemp();
         em_.emit(ci.hPtr + " = load ptr, ptr " + hSlotAddr);
 
@@ -261,6 +288,7 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
                 if (!ensureNonNullOperand(arg, ci.sendArg, "sendStr")) return;
                 // String 跨循环 safepoint：先 spill 再 ptrtoint
                 std::string strSlot = emitSpillGcRoot("sel.sstr", arg.ir);
+                selSpillSlots.push_back(strSlot);
                 std::string sp = em_.nextTemp();
                 em_.emit(sp + " = load ptr, ptr " + strSlot);
                 ci.sendBits = em_.nextTemp();
@@ -409,6 +437,7 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         em_.emitLabel(ci.bodyLabel);
         blockTerminated_ = false;
         SymbolTable::Guard g(syms_);
+        beginBlockGcScope();
         if (!ci.isDefault && ci.isRecv) {
             std::string bits = em_.nextTemp();
             em_.emit(bits + " = load i64, ptr " + ci.outAlloca);
@@ -432,8 +461,11 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
                 em_.emit(p + " = inttoptr i64 " + bits + " to ptr");
                 em_.emit("store ptr " + p + ", ptr " + addr);
             }
-            if (isGcPointerType(ci.bindType) && !poolBind)
+            if (isGcPointerType(ci.bindType) && !poolBind) {
                 emitGcRootPush(addr);
+                noteBlockGcSlot(addr);
+            }
+            /* poolBind：池槽勿 noteBlock */
             auto sym = std::make_shared<Symbol>();
             sym->kind = SymbolKind::Variable;
             sym->name = ci.bindName;
@@ -444,11 +476,14 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
             syms_.declare(sym);
         }
         for (auto* s : ci.body) genStatement(s);
+        endBlockGcScope();
         if (!blockTerminated_) em_.emit("br label %" + endL);
     }
 
     em_.emitLabel(endL);
     blockTerminated_ = false;
+    for (const auto& slot : selSpillSlots)
+        em_.emit("store ptr null, ptr " + slot);
 }
 
 void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
@@ -543,6 +578,7 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
             em_.emit("store " + type->llvmType() + " " + init.ir + ", ptr " + addr);
         else
             em_.emit("store ptr null, ptr " + addr);
+        /* 池槽勿 noteBlockGcSlot：块尾 null 会误杀 spill 池（与 continue 清槽同类） */
         auto sym = std::make_shared<Symbol>();
         sym->kind = SymbolKind::Variable;
         sym->name = name;
@@ -567,13 +603,16 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
             emitHeapStore(cell, init.ir, type, cell);
         em_.emit("store ptr " + cell + ", ptr " + addr);
         emitGcRootPush(addr);
+        noteBlockGcSlot(addr);
     } else {
         em_.emit(addr + " = alloca " + type->llvmType());
         if (hasInit) {
             em_.emit("store " + type->llvmType() + " " + init.ir + ", ptr " + addr);
         }
-        if (isGcPointerType(type))
+        if (isGcPointerType(type)) {
             emitGcRootPush(addr);
+            noteBlockGcSlot(addr);
+        }
     }
 
     auto sym = std::make_shared<Symbol>();
@@ -621,7 +660,12 @@ void IRGen::genIf(HaoLangParser::IfStmtContext* st) {
     blockTerminated_ = false;
     pushSmartCastFrame();
     if (narrowed && fact.isNotNull) addSmartCast(fact.name, narrowed);
-    genStatement(st->statement(0));
+    {
+        SymbolTable::Guard gThen(syms_);
+        beginBlockGcScope();
+        genStatement(st->statement(0));
+        endBlockGcScope();
+    }
     bool thenTerm = blockTerminated_;
     popSmartCastFrame();
     if (!thenTerm) em_.emit("br label %" + endL);
@@ -635,7 +679,12 @@ void IRGen::genIf(HaoLangParser::IfStmtContext* st) {
         // if (x == null) ... else { x 非空 }
         if (narrowed && !fact.isNotNull) addSmartCast(fact.name, narrowed);
         // if (x != null) ... else { 无收窄 }
-        genStatement(st->statement(1));
+        {
+            SymbolTable::Guard gElse(syms_);
+            beginBlockGcScope();
+            genStatement(st->statement(1));
+            endBlockGcScope();
+        }
         elseTerm = blockTerminated_;
         popSmartCastFrame();
         if (!elseTerm) em_.emit("br label %" + endL);
@@ -670,6 +719,8 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
     // ---- 条件（每轮 safepoint，供多线程 STW 握手）----
     em_.emitLabel(condL);
     blockTerminated_ = false;
+    /* continue 穿过 finally 会跳过 body 尾 clear；在此补清本层 spill */
+    clearLoopSpillSlots();
     em_.emit("call void @hao_gc_safepoint()");
     Value cond = genExpr(st->expr());
     if (!cond.valid()) {
@@ -701,6 +752,7 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
     lc.breakLabel = endL;
     lc.continueLabel = condL;
     lc.tryDepth = static_cast<int>(tryStack_.size());
+    lc.clearSpillOnContinue = true;
     loops_.push_back(lc);
     NullCheckFact wfact = analyzeNullCheck(st->expr());
     pushSmartCastFrame();
@@ -803,11 +855,13 @@ void IRGen::genFor(HaoLangParser::ForStmtContext* st) {
         const MethodInfo* mi = ci ? ci->findMethod("toArray") : nullptr;
         if (mi && mi->returnType && mi->returnType->kind == TypeKind::Array &&
             !mi->isAbstract && canAccessMember(mi->visibility, mi->ownerClass)) {
-            // 有虚表槽位则动态分派，否则静态调用（对齐 applyMethodCall 类方法分支）
-            std::string argStr = "ptr " + seq.ir;
+            /* toArray 内可能 safepoint：序列先进 shadow */
+            Value seqRoot = seq;
+            rootGcOperand(seqRoot);
+            std::string argStr = "ptr " + seqRoot.ir;
             if (mi->vtableSlot >= 0 && ci->hasVTable) {
                 std::string vtp = em_.nextTemp();
-                em_.emit(vtp + " = getelementptr ptr, ptr " + seq.ir + ", i64 0");
+                em_.emit(vtp + " = getelementptr ptr, ptr " + seqRoot.ir + ", i64 0");
                 std::string vt = em_.nextTemp();
                 em_.emit(vt + " = load ptr, ptr " + vtp);
                 std::string mp = em_.nextTemp();
@@ -925,6 +979,7 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
         flc.breakLabel = endL;
         flc.continueLabel = stepL;
         flc.tryDepth = static_cast<int>(tryStack_.size());
+        flc.clearSpillOnContinue = false; /* step 上 recycle */
         loops_.push_back(flc);
         genStatement(st->statement());
         loops_.pop_back();
@@ -996,7 +1051,10 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
         return reg;
     };
 
-    std::string iter = dispatch(seq.ir, itf, im, "ptr");
+    /* iterator() 内可能 safepoint：序列先进 shadow */
+    Value seqRoot = seq;
+    rootGcOperand(seqRoot);
+    std::string iter = dispatch(seqRoot.ir, itf, im, "ptr");
 
     enterLoopSpillScope();
     std::string iterAddr = emitSpillGcRoot("for.it", iter);
@@ -1059,6 +1117,7 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
         flc.breakLabel = endL;
         flc.continueLabel = stepL;
         flc.tryDepth = static_cast<int>(tryStack_.size());
+        flc.clearSpillOnContinue = false;
         loops_.push_back(flc);
         genStatement(st->statement());
         loops_.pop_back();
@@ -1239,8 +1298,10 @@ void IRGen::genWhenStmt(HaoLangParser::WhenStmtContext* st) {
         // ---- 分支体 ----
         em_.emitLabel(bodyL);
         blockTerminated_ = false;
+        beginBlockGcScope();
         if (auto* blk = br->block()) genBlock(blk);
         else if (auto* ex = br->expr()) genExpr(ex);
+        endBlockGcScope();
         if (!blockTerminated_) em_.emit("br label %" + endL);
 
         em_.emitLabel(nextL);

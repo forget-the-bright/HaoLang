@@ -1,0 +1,40 @@
+// v0.55.10：?. / ?? phi 根 + String.trim/toUpper 皮带（经 lang.String）
+package main;
+
+import gc;
+import collections.*;
+
+class Box {
+    public var s: String = "";
+    public var next: Box? = null;
+    public constructor(s: String) { this.s = s; }
+    public func tag(): String { return this.s; }
+}
+
+func main() {
+    var round = 0;
+    while (round < 40) {
+        var keep: Box? = new Box("  keep-" + Integer.toStr(round) + "  ");
+        // ?. 链：base/phi 跨后续 alloc
+        var t = keep?.tag();
+        var n = keep?.next?.s;
+        var raw = t ?? "x";
+        // trim 返回语言 String，再装箱才能 toUpperCase
+        var s = String.valueOf(String.valueOf(raw).trim()).toUpperCase();
+        var junk = new List<Object>();
+        var i = 0;
+        while (i < 400) {
+            junk.add(new Box(s + "-" + Integer.toStr(i)));
+            i += 1;
+        }
+        // ??：右侧赢时结果继续用
+        var alt: Box? = null;
+        var pick = alt ?? keep;
+        var _ = pick!!.s.length;
+        var __ = n;
+        round += 1;
+    }
+    gc.GC.collect();
+    fmt.println(gc.GC.markAbortCycles() == 0); // true
+    fmt.println(gc.GC.liveBytes() < (8 * 1024 * 1024)); // true
+}

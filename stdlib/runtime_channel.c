@@ -98,14 +98,14 @@ static void chan_wake_all(HaoChan* c) {
 #endif
 }
 
-/* 仅堆指针挂根；整型位型（sendInt）不得污染根表 */
+/* 仅堆指针挂根；整型位型（sendInt）不得污染根表。禁 is_heap_ptr（内含 safepoint） */
 static void chan_root(int64_t bits) {
     void* p = (void*)(uintptr_t)bits;
-    if (p && hao_gc_is_heap_ptr(p)) hao_gc_add_root(p);
+    if (p) hao_gc_add_root_if_heap(p);
 }
 static void chan_unroot(int64_t bits) {
     void* p = (void*)(uintptr_t)bits;
-    if (p && hao_gc_is_heap_ptr(p)) hao_gc_remove_root(p);
+    if (p) hao_gc_remove_root(p); /* 未挂过则无操作 */
 }
 
 static int chan_push_buf(HaoChan* c, int64_t v) {

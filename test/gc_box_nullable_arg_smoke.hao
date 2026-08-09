@@ -1,0 +1,27 @@
+// v0.55.10：多实参 T→T? 装箱后须进 shadow（formatCallArg/coerce）
+package main;
+
+import gc;
+import collections.*;
+
+func sink(a: Int?, b: Int?, c: Int?) {
+    var _ = (a ?? 0) + (b ?? 0) + (c ?? 0);
+}
+
+func main() {
+    var round = 0;
+    while (round < 50) {
+        // 三个字面量各自 hao_box；后一个 box 可 safepoint 杀掉前一个
+        sink(round, round + 1, round + 2);
+        var junk = new List<Object>();
+        var i = 0;
+        while (i < 300) {
+            junk.add(Integer.valueOf(i));
+            i += 1;
+        }
+        round += 1;
+    }
+    gc.GC.collect();
+    fmt.println(gc.GC.markAbortCycles() == 0); // true
+    fmt.println(gc.GC.liveBytes() < (4 * 1024 * 1024)); // true
+}

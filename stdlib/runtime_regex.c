@@ -448,10 +448,15 @@ int8_t hao_regex_compile(int64_t* unit, HaoString* pattern) {
     if (!unit || !pattern) return 0;
     /* 对齐 channel：同一句柄盒禁止 remake（须先 free/close） */
     if (re_load(unit)) return 0;
+    hao_gc_add_root(pattern); /* set_finalizer 持锁窗口；禁 is_heap_ptr 前置 */
     HaoReProg* prog = re_compile_str(pattern->data, pattern->len);
-    if (!prog) return 0;
+    if (!prog) {
+        hao_gc_remove_root(pattern);
+        return 0;
+    }
     re_store(unit, prog);
     hao_gc_set_finalizer(unit, hao_regex_unit_finalize);
+    hao_gc_remove_root(pattern);
     return 1;
 }
 

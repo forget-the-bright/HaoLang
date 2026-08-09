@@ -1,0 +1,40 @@
+// v0.55.8：自由函数/多实参/字符串拼接/下标 — GC 实参须跨 safepoint 挂根
+package main;
+
+import gc;
+import collections.*;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func sink(a: Object, b: Object, c: Object) {
+    // 空体：压力在调用方求值实参期间
+}
+
+func main() {
+    var round = 0;
+    while (round < 40) {
+        var keep = new Box("keep-" + Integer.toStr(round));
+        // 多实参：先算的堆对象仅 SSA 时，后续 new 可触发 GC
+        sink(new Box("a-" + Integer.toStr(round)),
+             new Box("b-" + Integer.toStr(round)),
+             new Box("c-" + Integer.toStr(round)));
+        var arr = new List<Object>();
+        arr.add(keep);
+        arr.add(new Box("x"));
+        // 下标 + 拼接：base/左串跨右值
+        var s = keep.s + "-" + Integer.toStr(arr.size());
+        var _ = s.length;
+        var i = 0;
+        while (i < 200) {
+            arr.add(new Box("j-" + Integer.toStr(i)));
+            i += 1;
+        }
+        round += 1;
+    }
+    gc.GC.collect();
+    fmt.println(gc.GC.markAbortCycles() == 0); // true
+    fmt.println(gc.GC.liveBytes() < (4 * 1024 * 1024)); // true
+}

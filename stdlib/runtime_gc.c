@@ -1615,6 +1615,20 @@ void hao_gc_add_root(void* p) {
     hao_gc_unlock();
 }
 
+void hao_gc_add_root_if_heap(void* p) {
+    /* 与 add_root 同锁路径，但先 gc_find_block；禁止走 is_heap_ptr（其内 safepoint） */
+    if (!p) return;
+    hao_gc_lock();
+    if (!gc_find_block(p)) { hao_gc_unlock(); return; }
+    if (gc_root_count >= gc_root_cap) {
+        gc_root_cap = gc_root_cap ? gc_root_cap * 2 : 16;
+        gc_roots = (void**)realloc(gc_roots, gc_root_cap * sizeof(void*));
+        if (!gc_roots) { fputs("panic: GC 根数组分配失败\n", stderr); exit(1); }
+    }
+    gc_roots[gc_root_count++] = p;
+    hao_gc_unlock();
+}
+
 void hao_gc_add_root_slot(void* slot) {
     hao_gc_lock();
     if (!slot) { hao_gc_unlock(); return; }

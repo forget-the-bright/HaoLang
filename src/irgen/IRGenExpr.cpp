@@ -93,6 +93,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                           " 直接赋值下标，请使用 '!!'");
                 return Value();
             }
+            rootGcOperand(arr); /* 数组跨下标/右值求值 */
             TypePtr elemType = arr.type->elem ? arr.type->elem : Type::makeInt();
 
             Value idx = genExpr(io->expr());
@@ -385,6 +386,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                     return Value();
                 }
 
+                rootGcOperand(recv); /* 实例跨右值求值 */
                 // 空数组字面量 [] 按字段类型生成（[] 默认是 [Int]，赋给
                 // [String] 字段会类型不匹配，这里按目标元素类型生成）
                 Value rhs;
@@ -710,6 +712,9 @@ Value IRGen::genNullCoalesce(HaoLangParser::NullCoalesceExprContext* e) {
             return acc;
         }
 
+        /* 左值跨右侧求值（safepoint）须挂根；phi 用 spill 后的 ir */
+        rootGcOperand(acc);
+
         std::string rhsL   = em_.nextLabel("coalesce.rhs");
         std::string mergeL = em_.nextLabel("coalesce.merge");
 
@@ -721,6 +726,7 @@ Value IRGen::genNullCoalesce(HaoLangParser::NullCoalesceExprContext* e) {
         em_.emitLabel(rhsL);
         Value rhs = genOr(ors[i]);
         if (!rhs.valid()) return Value();
+        rootGcOperand(rhs);
 
         // 确定结果类型：取左侧去掉可空后的底层类型；
         // 若左侧是纯 null 字面量，则取右侧类型。
@@ -815,6 +821,7 @@ Value IRGen::genNullCoalesce(HaoLangParser::NullCoalesceExprContext* e) {
             acc = Value(unboxed, resultType);
         } else {
             acc = Value(phi, resultType);
+            rootGcOperand(acc); /* phi 后重新挂根，供下一轮 ?? / 调用 */
         }
     }
     return acc;
@@ -1028,6 +1035,7 @@ Value IRGen::genEquality(HaoLangParser::EqualityExprContext* e) {
     if (!lhs.valid()) return Value();
 
     for (size_t i = 1; i < rels.size(); ++i) {
+        rootGcOperand(lhs); /* String/对象左值跨右求值 */
         Value rhs = genRelational(rels[i]);
         if (!rhs.valid()) return Value();
 
@@ -1467,6 +1475,8 @@ Value IRGen::genAdditive(HaoLangParser::AdditiveExprContext* e) {
     if (!lhs.valid()) return Value();
 
     for (size_t i = 1; i < muls.size(); ++i) {
+        /* 左值必须先于右操作数挂根（右求值可 safepoint） */
+        rootGcOperand(lhs);
         Value rhs = genMultiplicative(muls[i]);
         if (!rhs.valid()) return Value();
 
@@ -1479,12 +1489,19 @@ Value IRGen::genAdditive(HaoLangParser::AdditiveExprContext* e) {
                 !ensureNonNullOperand(rhs, e, "+"))
                 return Value();
             Value ls = toStringValue(lhs);
-            Value rs = toStringValue(rhs);
-            if (!ls.valid() || !rs.valid()) {
+            if (!ls.valid()) {
                 error(e, "无法将 " + lhs.type->toString() + " 与 " +
                          rhs.type->toString() + " 用 '+' 连接");
                 return Value();
             }
+            rootGcOperand(ls);
+            Value rs = toStringValue(rhs);
+            if (!rs.valid()) {
+                error(e, "无法将 " + lhs.type->toString() + " 与 " +
+                         rhs.type->toString() + " 用 '+' 连接");
+                return Value();
+            }
+            rootGcOperand(rs);
             std::string reg = em_.nextTemp();
             em_.emit(reg + " = call ptr @hao_str_concat(ptr " + ls.ir + ", ptr " + rs.ir + ")");
             lhs = Value(reg, Type::makeString());
@@ -1737,12 +1754,17 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
                 return Value();
             }
             std::string wname = ensureMethodWrapper(ci, *mmi);
+            Value baseR = base;
+            rootGcOperand(baseR); /* this 跨 env 分配 */
             // slot0=fnptr 非 GC；slot1=this
             std::string env = emitObjectNew(2, 2);
+            std::string envSlot = emitSpillGcRoot("mwrap.env", env);
+            env = em_.nextTemp();
+            em_.emit(env + " = load ptr, ptr " + envSlot);
             std::string fp0 = fieldPtr(env, 0);
             em_.emit("store ptr " + wname + ", ptr " + fp0);
             std::string fp1 = fieldPtr(env, 1);
-            emitHeapStore(fp1, base.ir, base.type, env);
+            emitHeapStore(fp1, baseR.ir, baseR.type, env);
             return Value(env, Type::makeFunc(mmi->paramTypes, mmi->returnType));
         }
         if (!ci->findStaticMethods(field).empty()) {
@@ -1770,8 +1792,10 @@ Value IRGen::applyIndex(const Value& base, HaoLangParser::IndexOpContext* io,
                    " 直接使用下标，请使用 '!!'");
         return Value();
     }
+    Value baseR = base;
+    rootGcOperand(baseR);
     // String[i] → Char（码点下标）
-    if (base.type->kind == TypeKind::String) {
+    if (baseR.type->kind == TypeKind::String) {
         Value idx = genExpr(io->expr());
         if (!idx.valid()) return Value();
         if (!idx.type->isInteger()) {
@@ -1782,16 +1806,16 @@ Value IRGen::applyIndex(const Value& base, HaoLangParser::IndexOpContext* io,
         // 与数组下标一致：保留 i64，避免 Long 经 Int 截断后静默错位
         std::string idx64 = indexAsI64(idx);
         std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call i32 @hao_str_char_at(ptr " + base.ir +
+        em_.emit(reg + " = call i32 @hao_str_char_at(ptr " + baseR.ir +
                  ", i64 " + idx64 + ")");
         return Value(reg, Type::makeChar());
     }
 
-    if (base.type->kind != TypeKind::Array) {
-        error(ctx, "只能对数组或字符串使用索引访问，实际为 " + base.type->toString());
+    if (baseR.type->kind != TypeKind::Array) {
+        error(ctx, "只能对数组或字符串使用索引访问，实际为 " + baseR.type->toString());
         return Value();
     }
-    TypePtr elemType = base.type->elem ? base.type->elem : Type::makeInt();
+    TypePtr elemType = baseR.type->elem ? baseR.type->elem : Type::makeInt();
 
     Value idx = genExpr(io->expr());
     if (!idx.valid()) return Value();
@@ -1801,7 +1825,7 @@ Value IRGen::applyIndex(const Value& base, HaoLangParser::IndexOpContext* io,
     }
     if (!ensureNonNullOperand(idx, io->expr(), "数组下标")) return Value();
 
-    std::string ptr = arrayElemPtr(base, idx);
+    std::string ptr = arrayElemPtr(baseR, idx);
     std::string reg = em_.nextTemp();
     em_.emit(reg + " = load " + elemType->llvmType() + ", ptr " + ptr);
     return Value(reg, elemType);
@@ -1817,16 +1841,20 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                    " 直接调用方法 '" + method + "'，请使用 '?.' 或 '!!'");
         return Value();
     }
+    /* recv 跨后续实参求值 / safepoint 须在 shadow */
+    Value recvR = recv;
+    rootGcOperand(recvR);
+
     // ===== 数组内建方法 =====
-    if (recv.type->kind == TypeKind::Array) {
+    if (recvR.type->kind == TypeKind::Array) {
         if (method == "pop") {
             if (call->argList()) {
                 error(ctx, "数组的 pop() 方法不接受参数");
                 return Value();
             }
-            TypePtr elemType = recv.type->elem ? recv.type->elem : Type::makeInt();
+            TypePtr elemType = recvR.type->elem ? recvR.type->elem : Type::makeInt();
             std::string raw = em_.nextTemp();
-            em_.emit(raw + " = call i64 @hao_array_pop(ptr " + recv.ir + ")");
+            em_.emit(raw + " = call i64 @hao_array_pop(ptr " + recvR.ir + ")");
             std::string reg = em_.unboxFromI64(raw, elemType);
             return Value(reg, elemType);
         }
@@ -1835,11 +1863,11 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
     }
 
     // ===== 接口方法：经虚表动态分派 =====
-    if (recv.type->kind == TypeKind::Interface) {
+    if (recvR.type->kind == TypeKind::Interface) {
         // 泛型接口按实例名解析（Iterable<Int> -> Iterable$Int，槽位继承模板）
-        std::string iname = recv.type->typeArgs.empty()
-            ? recv.type->className
-            : recv.type->monoName();
+        std::string iname = recvR.type->typeArgs.empty()
+            ? recvR.type->className
+            : recvR.type->monoName();
         auto ii = lookupInterface(iname);
         if (!ii) {
             error(ctx, "未定义的接口 '" + iname + "'");
@@ -1861,6 +1889,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                 Value av = genExpr(aex);
                 if (k < im->paramTypes.size()) expectedTypes_.pop_back();
                 if (!av.valid()) return Value();
+                rootGcOperand(av);
                 args.push_back(av);
                 argExprs.push_back(aex);
             }
@@ -1873,7 +1902,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
 
         // 取虚表指针（对象槽位 0），再按槽位取函数指针
         std::string vtp = em_.nextTemp();
-        em_.emit(vtp + " = getelementptr ptr, ptr " + recv.ir + ", i64 0");
+        em_.emit(vtp + " = getelementptr ptr, ptr " + recvR.ir + ", i64 0");
         std::string vt = em_.nextTemp();
         em_.emit(vt + " = load ptr, ptr " + vtp);
         std::string mp = em_.nextTemp();
@@ -1882,7 +1911,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
         std::string fp = em_.nextTemp();
         em_.emit(fp + " = load ptr, ptr " + mp);
 
-        std::string argStr = "ptr " + recv.ir;
+        std::string argStr = "ptr " + recvR.ir;
         std::string sigTypes = "ptr";
         for (size_t i = 0; i < args.size(); ++i) {
             if (!isAssignable(args[i].type, im->paramTypes[i])) {
@@ -1908,13 +1937,13 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
     }
 
     // ===== 类方法 =====
-    if (recv.type->kind != TypeKind::Class) {
-        error(ctx, recv.type->toString() + " 类型没有方法 '" + method + "'");
+    if (recvR.type->kind != TypeKind::Class) {
+        error(ctx, recvR.type->toString() + " 类型没有方法 '" + method + "'");
         return Value();
     }
-    auto ci = classOfType(recv.type);
+    auto ci = classOfType(recvR.type);
     if (!ci) {
-        error(ctx, "未定义的类 '" + recv.type->toString() + "'");
+        error(ctx, "未定义的类 '" + recvR.type->toString() + "'");
         return Value();
     }
     if (ci->isGenericTemplate()) {
@@ -1932,6 +1961,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                 for (auto* a : al->arg()) {
                     Value av = genExpr(a->expr());
                     if (!av.valid()) return Value();
+                    rootGcOperand(av);
                     args.push_back(av);
                     argExprs.push_back(a->expr());
                 }
@@ -1977,6 +2007,9 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
             emitStaticEnsureInit(ci);
             std::string fenv = em_.nextTemp();
             em_.emit(fenv + " = load ptr, ptr @" + ci->name + "." + sff->name);
+            Value fenvV(fenv, sff->type);
+            rootGcOperand(fenvV); /* Func env 跨实参求值 */
+            fenv = fenvV.ir;
             TypePtr fnRet = sff->type->elem ? sff->type->elem : Type::makeUnit();
             const auto& fnParams = sff->type->params;
             std::vector<Value> args;
@@ -1985,6 +2018,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                 for (auto* a : al->arg()) {
                     Value av = genExpr(a->expr());
                     if (!av.valid()) return Value();
+                    rootGcOperand(av);
                     args.push_back(av);
                     argExprs.push_back(a->expr());
                 }
@@ -2031,11 +2065,11 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
         std::string tplName = ci->instanceOf.empty() ? ci->name : ci->instanceOf;
         auto gmit = genericMethods_.find(tplName + "." + method);
         if (gmit != genericMethods_.end())
-            return callGenericMethod(recv, ci, gmit->second, call, ctx);
+            return callGenericMethod(recvR, ci, gmit->second, call, ctx);
         // Func/Action 字段：obj.fn(args) 等价于取字段再间接调用
         if (const FieldInfo* ffi = ci->findField(method)) {
             if (ffi->type->kind == TypeKind::Func) {
-                if (recv.ir.empty()) {
+                if (recvR.ir.empty()) {
                     error(ctx, "静态上下文不能调用实例字段 '" + method + "'");
                     return Value();
                 }
@@ -2044,9 +2078,12 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                                " 字段 '" + ffi->ownerClass + "." + method + "'");
                     return Value();
                 }
-                std::string ffp = fieldPtr(recv.ir, ffi->slot);
+                std::string ffp = fieldPtr(recvR.ir, ffi->slot);
                 std::string fenv = em_.nextTemp();
                 em_.emit(fenv + " = load ptr, ptr " + ffp);
+                Value fenvV(fenv, ffi->type);
+                rootGcOperand(fenvV); /* Func env 跨实参求值 */
+                fenv = fenvV.ir;
                 TypePtr fnRet = ffi->type->elem ? ffi->type->elem : Type::makeUnit();
                 const auto& fnParams = ffi->type->params;
                 std::vector<Value> args;
@@ -2055,6 +2092,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                     for (auto* a : al->arg()) {
                         Value av = genExpr(a->expr());
                         if (!av.valid()) return Value();
+                        rootGcOperand(av);
                         args.push_back(av);
                         argExprs.push_back(a->expr());
                     }
@@ -2110,6 +2148,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                 Value av = genExpr(aex);
                 if (k < mi->paramTypes.size()) expectedTypes_.pop_back();
                 if (!av.valid()) return Value();
+                rootGcOperand(av);
                 args.push_back(av);
                 argExprs.push_back(aex);
             }
@@ -2119,6 +2158,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
             for (auto* a : al->arg()) {
                 Value av = genExpr(a->expr());
                 if (!av.valid()) return Value();
+                rootGcOperand(av);
                 args.push_back(av);
                 argExprs.push_back(a->expr());
             }
@@ -2127,7 +2167,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
     }
 
     // 类名（recv.ir 为空）调用实例方法非法
-    if (recv.ir.empty()) {
+    if (recvR.ir.empty()) {
         error(ctx, "静态上下文不能调用实例方法 '" + method +
                    "'（请改用静态方法或持有实例对象调用）");
         return Value();
@@ -2151,7 +2191,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
         return Value();
     }
 
-    std::string argStr = "ptr " + recv.ir;
+    std::string argStr = "ptr " + recvR.ir;
     std::string sigTypes = "ptr";
     for (size_t i = 0; i < args.size(); ++i) {
         if (!isAssignable(args[i].type, mi->paramTypes[i])) {
@@ -2170,7 +2210,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
     //  否则父类型引用会调到父类实现。super.m() 由专门分支处理。
     if (mi->vtableSlot >= 0 && ci->hasVTable) {
         std::string vtp = em_.nextTemp();
-        em_.emit(vtp + " = getelementptr ptr, ptr " + recv.ir + ", i64 0");
+        em_.emit(vtp + " = getelementptr ptr, ptr " + recvR.ir + ", i64 0");
         std::string vt = em_.nextTemp();
         em_.emit(vt + " = load ptr, ptr " + vtp);
         std::string mp = em_.nextTemp();
@@ -2245,6 +2285,7 @@ Value IRGen::applyNotNullAssert(const Value& base, antlr4::ParserRuleContext* ct
 }
 
 // 把值类型值装箱为可空指针；引用类型仅标记可空。
+// 调用方在跨 safepoint 前须 rootGcOperand（formatCallArg / ?.phi 后）。
 Value IRGen::boxToNullable(const Value& v) {
     if (!v.type) return v;
     // 已是可空（含 Int?/Bool? 等已装箱 ptr）：勿二次 hao_box_*（会把 ptr 当 i32）
@@ -2317,25 +2358,29 @@ Value IRGen::boxToNullable(const Value& v) {
 // 因此空分支与非空分支都产生 ptr，phi 统一为 ptr。
 Value IRGen::applySafeMemberAccess(const Value& base, const std::string& field,
                                    antlr4::ParserRuleContext* ctx) {
-    if (!base.type->nullable) {
+    Value baseR = base;
+    rootGcOperand(baseR); /* base 跨 ensureInit / 装箱 */
+    if (!baseR.type->nullable) {
         // 非空接收者用 ?. 等价于普通 .，但仍把结果标记为可空并装箱，
         // 使链式调用的类型一致（a?.b?.c 在 a 非空时同样成立）。
-        Value m = applyMemberAccess(base, field, ctx);
+        Value m = applyMemberAccess(baseR, field, ctx);
         if (!m.valid()) return m;
-        return boxToNullable(m);
+        Value out = boxToNullable(m);
+        rootGcOperand(out);
+        return out;
     }
 
     std::string nonNullL = em_.nextLabel("smem.nn");
     std::string nullL    = em_.nextLabel("smem.null");
     std::string contL    = em_.nextLabel("smem.cont");
-    std::string isNull = genNotNullCheck(base);
+    std::string isNull = genNotNullCheck(baseR);
     em_.emit("br i1 " + isNull + ", label %" + nonNullL + ", label %" + nullL);
 
     // 非空分支：取成员并装箱
     em_.emitLabel(nonNullL);
-    auto nonNullType = std::make_shared<Type>(*base.type);
+    auto nonNullType = std::make_shared<Type>(*baseR.type);
     nonNullType->nullable = false;
-    Value nonNullBase(base.ir, nonNullType);
+    Value nonNullBase(baseR.ir, nonNullType);
     Value member = applyMemberAccess(nonNullBase, field, ctx);
     if (!member.valid()) return Value();
     Value boxed = boxToNullable(member);
@@ -2353,30 +2398,33 @@ Value IRGen::applySafeMemberAccess(const Value& base, const std::string& field,
     std::string phi = em_.nextTemp();
     em_.emit(phi + " = phi ptr [ " + boxed.ir + ", %" + nnBlock +
              " ], [ null, %" + nullBlock + " ]");
-    return Value(phi, resultType);
+    Value out(phi, resultType);
+    rootGcOperand(out); /* phi 结果跨后续调用 */
+    return out;
 }
 
 // base?.method(args) —— 安全调用：base 为空时跳过调用，结果为 null/0。
 Value IRGen::applySafeMethodCall(const Value& base, const std::string& method,
                                  HaoLangParser::CallOpContext* call,
                                  antlr4::ParserRuleContext* ctx) {
-    if (!base.type->nullable) {
-        return applyMethodCall(base, method, call, ctx);
+    Value baseR = base;
+    rootGcOperand(baseR);
+    if (!baseR.type->nullable) {
+        return applyMethodCall(baseR, method, call, ctx);
     }
 
     std::string nonNullL = em_.nextLabel("scall.nn");
     std::string nullL    = em_.nextLabel("scall.null");
     std::string contL    = em_.nextLabel("scall.cont");
-    std::string isNull = genNotNullCheck(base);
+    std::string isNull = genNotNullCheck(baseR);
     em_.emit("br i1 " + isNull + ", label %" + nonNullL + ", label %" + nullL);
 
     em_.emitLabel(nonNullL);
-    auto nonNullType = std::make_shared<Type>(*base.type);
+    auto nonNullType = std::make_shared<Type>(*baseR.type);
     nonNullType->nullable = false;
-    Value nonNullBase(base.ir, nonNullType);
+    Value nonNullBase(baseR.ir, nonNullType);
     Value result = applyMethodCall(nonNullBase, method, call, ctx);
     if (!result.valid()) return Value();
-    std::string nnBlock = em_.currentBlock();
 
     // Unit 返回类型：空分支也是无值，合并后仍为 Unit（不可空）
     if (result.type->isUnit()) {
@@ -2387,10 +2435,12 @@ Value IRGen::applySafeMethodCall(const Value& base, const std::string& method,
         return Value("", Type::makeUnit());
     }
 
-    // 值类型结果装箱为可空 ptr，使两分支都产生 ptr
+    // 值类型结果装箱为可空 ptr，使两分支都产生 ptr（须在记录 nnBlock 之后，
+    // 因 box/spill 会继续往当前块写指令）
     Value boxed = boxToNullable(result);
     auto resultType = std::make_shared<Type>(*result.type);
     resultType->nullable = true;
+    std::string nnBlock = em_.currentBlock();
     if (!blockTerminated_) em_.emit("br label %" + contL);
 
     em_.emitLabel(nullL);
@@ -2401,7 +2451,9 @@ Value IRGen::applySafeMethodCall(const Value& base, const std::string& method,
     std::string phi = em_.nextTemp();
     em_.emit(phi + " = phi ptr [ " + boxed.ir + ", %" + nnBlock +
              " ], [ null, %" + nullBlock + " ]");
-    return Value(phi, resultType);
+    Value out(phi, resultType);
+    rootGcOperand(out);
+    return out;
 }
 
 // ---------- 后缀链驱动 ----------
@@ -2454,6 +2506,7 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                             for (size_t k = 0; k < nargs; ++k) {
                                 Value av = genExpr(al->arg(k)->expr());
                                 if (!av.valid()) return Value();
+                                rootGcOperand(av);
                                 args.push_back(av);
                             }
                             auto chosen = selectOverload(oc, args, e, alias + "." + member);
@@ -2482,6 +2535,7 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                             for (size_t k = 0; k < nargs; ++k) {
                                 Value av = genExpr(al->arg(k)->expr());
                                 if (!av.valid()) return Value();
+                                rootGcOperand(av);
                                 args.push_back(av);
                             }
                             auto inst = instantiateFunction(sym->name, args, e);
@@ -2518,6 +2572,7 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                             Value av = genExpr(al->arg(k)->expr());
                             if (k < sym->paramTypes.size()) expectedTypes_.pop_back();
                             if (!av.valid()) return Value();
+                            rootGcOperand(av);
                             args.push_back(av);
                         }
                         if (args.size() != sym->paramTypes.size()) {
@@ -2591,6 +2646,7 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                 for (auto* a : al->arg()) {
                     Value av = genExpr(a->expr());
                     if (!av.valid()) return Value();
+                    rootGcOperand(av);
                     args.push_back(av);
                     argExprs.push_back(a->expr());
                 }
@@ -2662,6 +2718,7 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
             for (auto* a : al->arg()) {
                 Value av = genExpr(a->expr());
                 if (!av.valid()) return Value();
+                rootGcOperand(av);
                 args.push_back(av);
                 argExprs.push_back(a->expr());
             }
@@ -2790,6 +2847,9 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
             }
 
             // 求值实参（每个实参压入对应形参类型作为期望类型）
+            /* Func 值跨实参求值须先挂根 */
+            if (cur.valid() && cur.type && cur.type->kind == TypeKind::Func)
+                rootGcOperand(cur);
             std::vector<Value> args;
             std::vector<antlr4::tree::ParseTree*> argExprs;
             args.reserve(nargs);
@@ -2799,6 +2859,7 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                 Value av = genExpr(aex);
                 if (k < paramHints.size()) expectedTypes_.pop_back();
                 if (!av.valid()) return Value();
+                rootGcOperand(av);
                 args.push_back(av);
                 argExprs.push_back(aex);
             }
@@ -2957,7 +3018,10 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
                 return Value();
             }
             std::string wname = ensureFuncWrapper(sym);
-            std::string env = emitObjectNew(1, 0); // 仅 fnptr
+            std::string envRaw = emitObjectNew(1, 0); // 仅 fnptr
+            std::string envSlot = emitSpillGcRoot("fnval.env", envRaw);
+            std::string env = em_.nextTemp();
+            em_.emit(env + " = load ptr, ptr " + envSlot);
             std::string sp = fieldPtr(env, 0);
             em_.emit("store ptr " + wname + ", ptr " + sp);
             return Value(env, Type::makeFunc(sym->paramTypes, sym->returnType));
