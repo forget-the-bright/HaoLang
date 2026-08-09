@@ -41,7 +41,7 @@ class GcSnapshot {
     var usagePct: Int = 0;
     var summary: String = "";
     var note: String = "";
-    var engine: String = "HaoLang GC v3（v0.53.1 IR↔GC shade）+ os.Process";
+    var engine: String = "HaoLang GC v3（v0.53.2 原子扩容 shade）+ os.Process";
 
     constructor() {
         this.refresh();

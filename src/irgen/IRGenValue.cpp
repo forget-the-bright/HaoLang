@@ -542,6 +542,14 @@ void IRGen::emitHeapStore(const std::string& addr, const std::string& valIr,
     em_.emit("store " + lt + " " + valIr + ", ptr " + addr);
 }
 
+void IRGen::emitGlobalGcStore(const std::string& gptr, const std::string& valIr,
+                              const TypePtr& ty) {
+    std::string lt = ty ? ty->llvmType() : "ptr";
+    if (isGcPointerType(ty))
+        em_.emit("call void @hao_gc_shade(ptr " + valIr + ")");
+    em_.emit("store " + lt + " " + valIr + ", ptr " + gptr);
+}
+
 void IRGen::emitVarStore(const SymbolPtr& sym, const TypePtr& ty,
                          const std::string& valIr) {
     std::string addr = varValuePtr(sym);

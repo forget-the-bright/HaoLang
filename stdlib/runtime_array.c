@@ -93,20 +93,11 @@ void* hao_array_push(void* arr, int64_t val) {
         char* newbase = (char*)gc_alloc_ex(
             (size_t)HAO_ARR_HEADER + (size_t)newcap * (size_t)esz,
             GC_KIND_ARRAY, meta);
-        memcpy(newbase, oldbase, oldBytes);
-        *(int64_t*)(newbase + 0) = is_ptr ? 2 : 0;
+        /* v0.53.2：memcpy+shade 原子（持 GC 锁、中间无 safepoint） */
+        hao_gc_array_copy_and_shade(newbase, oldbase, oldBytes, len,
+                                    is_ptr && esz == 8 ? 1 : 0);
         arr = newbase + HAO_ARR_HEADER;
         *(int64_t*)((char*)arr - HAO_ARR_CAP_OFF) = newcap;
-        /*
-         * MARK 期新数组黑分配且未入队扫描；memcpy 拷入的指针须补 shade，
-         * 否则黑父+白子 → 漏标或 UAF（List 扩容热点）。
-         */
-        if (is_ptr && esz == 8) {
-            uintptr_t* elems = (uintptr_t*)arr;
-            for (int64_t i = 0; i < len; ++i) {
-                if (elems[i]) hao_gc_shade((void*)elems[i]);
-            }
-        }
     }
 
     char* slot = (char*)arr + (size_t)len * (size_t)esz;

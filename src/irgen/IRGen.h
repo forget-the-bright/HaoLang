@@ -521,6 +521,9 @@ private:
     // 堆 store + 可选写屏障（barrierBase 为空则只 store）
     void emitHeapStore(const std::string& addr, const std::string& valIr,
                        const TypePtr& ty, const std::string& barrierBase);
+    // 静态/全局 GC 指针：先 shade 再 store（根槽终止会重扫，shade 对齐堆契约）
+    void emitGlobalGcStore(const std::string& gptr, const std::string& valIr,
+                           const TypePtr& ty);
     // 变量写回：boxed 走堆屏障，否则写栈/全局槽
     void emitVarStore(const SymbolPtr& sym, const TypePtr& ty,
                       const std::string& valIr);

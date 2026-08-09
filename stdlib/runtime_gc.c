@@ -976,6 +976,30 @@ void hao_gc_shade(void* p) {
     hao_gc_unlock();
 }
 
+void hao_gc_array_copy_and_shade(char* newbase, const char* oldbase, size_t nbytes,
+                                 int64_t len, int is_ptr) {
+    if (!newbase || !oldbase) return;
+    hao_gc_lock();
+    while (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
+        hao_gc_unlock();
+        hao_gc_safepoint();
+        hao_gc_lock();
+    }
+    memcpy(newbase, oldbase, nbytes);
+    *(int64_t*)(newbase + 0) = is_ptr ? 2 : 0;
+    /* 持锁补 shade：与 memcpy 之间无 safepoint，黑数组子指针不会被漏扫 */
+    if (is_ptr && len > 0 &&
+        __atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_MARK) {
+        uintptr_t* elems = (uintptr_t*)(newbase + HAO_ARR_HEADER);
+        for (int64_t i = 0; i < len; ++i) {
+            if (!elems[i]) continue;
+            GCBlock* b = gc_find_block((void*)elems[i]);
+            if (b) gc_enqueue(b);
+        }
+    }
+    hao_gc_unlock();
+}
+
 #if defined(__x86_64__) || defined(_M_X64)
 __attribute__((naked))
 static void gc_collect_trampoline(void) {

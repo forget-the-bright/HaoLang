@@ -2653,8 +2653,7 @@ void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
             return;
         }
         dv = coerce(dv, f.type, 0, 0);
-        em_.emit("store " + f.type->llvmType() + " " + dv.ir +
-                 ", ptr @" + ci->name + "." + f.name);
+        emitGlobalGcStore("@" + ci->name + "." + f.name, dv.ir, f.type);
     }
 
     // 显式静态构造器体

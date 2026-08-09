@@ -247,8 +247,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                             return Value();
                         }
                         rhs = coerce(rhs, sfi->type, 0, 0);
-                        em_.emit("store " + sfi->type->llvmType() + " " + rhs.ir +
-                                 ", ptr " + gptr);
+                        emitGlobalGcStore(gptr, rhs.ir, sfi->type);
                         return rhs;
                     }
 
@@ -270,7 +269,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                         std::string reg = em_.nextTemp();
                         em_.emit(reg + " = call ptr @hao_str_concat(ptr " + cur +
                                  ", ptr " + rs.ir + ")");
-                        em_.emit("store ptr " + reg + ", ptr " + gptr);
+                        emitGlobalGcStore(gptr, reg, Type::makeString());
                         return Value(reg, Type::makeString());
                     }
                     if (sfi->type->kind == TypeKind::Array && op == "+=") {
@@ -287,7 +286,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                         std::string reg = em_.nextTemp();
                         em_.emit(reg + " = call ptr @hao_array_push(ptr " + cur +
                                  ", i64 " + val64 + ")");
-                        em_.emit("store ptr " + reg + ", ptr " + gptr);
+                        emitGlobalGcStore(gptr, reg, sfi->type);
                         return Value(reg, sfi->type);
                     }
                     if (!sfi->type->isNumeric() &&

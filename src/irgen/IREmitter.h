@@ -248,6 +248,7 @@ public:
             "declare i64  @hao_array_pop(ptr)",
             "declare ptr  @hao_object_new(i64, i64)",
             "declare void @hao_gc_barrier(ptr, ptr)",
+            "declare void @hao_gc_shade(ptr)",
             "declare void @hao_gc_add_root_slot(ptr)",
             "declare void @hao_gc_safepoint()",
             "declare i64  @hao_thread_start(ptr)",

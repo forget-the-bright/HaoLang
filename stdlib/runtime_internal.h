@@ -40,8 +40,14 @@ void* gc_alloc(size_t n);
 
 /* 分代写屏障：dst 可为堆对象任意内指针；old→young 时记入记忆集。 */
 void hao_gc_barrier(void* dst, void* new_val);
-/* MARK 期 shade 指针（供 array 扩容 memcpy 后补标；非 MARK 为 no-op）。 */
+/* MARK 期 shade 指针（供单指针补标；非 MARK 为 no-op）。 */
 void hao_gc_shade(void* p);
+/*
+ * 数组扩容：在同一把 GC 锁内 memcpy + 补 shade（中间无 safepoint）。
+ * 禁止「先 memcpy 再可打断的逐元素 shade」——否则黑父未扫子会被 sweep。
+ */
+void hao_gc_array_copy_and_shade(char* newbase, const char* oldbase, size_t nbytes,
+                                 int64_t len, int is_ptr);
 
 /* 协作式 safepoint：STW 请求时溅射 GPR 并 park。勿持 GC 锁调用。 */
 void hao_gc_safepoint(void);
