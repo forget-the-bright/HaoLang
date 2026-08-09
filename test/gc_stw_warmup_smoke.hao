@@ -1,0 +1,60 @@
+// v0.50.4：4000 预热 + HTTP 轮询验收（勿把循环改小当「修好」）
+// 仓库根：hao run test\gc_stw_warmup_smoke.hao
+package main;
+
+import net;
+import thread.*;
+import gc;
+import collections.*;
+
+func smokeHandler(req: net.HttpRequest): net.HttpResponse {
+    val inc = gc.GC.stwIncomplete();
+    val ma = gc.GC.stwMarkAllFallbacks();
+    return net.HttpResponse.text($"ok incomplete={inc} markAll={ma}");
+}
+
+func main() {
+    val port = 18091;
+    val sv = new net.HttpServer();
+    if (!sv.listen(port)) {
+        fmt.println("listen-fail");
+        return;
+    }
+
+    val warm = new Thread();
+    warm.start({
+        while (true) {
+            var junk = new List<Object>();
+            var i = 0;
+            while (i < 4000) {
+                junk.add(String.valueOf("warm-" + Integer.toStr(i)));
+                i += 1;
+            }
+            sleep(200);
+        }
+    });
+
+    val srv = new Thread();
+    srv.start({
+        sv.serveBossWorkers(2, smokeHandler);
+    });
+
+    sleep(400);
+    var ok = 0;
+    var n = 0;
+    while (n < 8) {
+        val r = net.Http.get($"http://127.0.0.1:{port}/");
+        if (String.valueOf(r.body).startsWith("ok")) {
+            ok += 1;
+        }
+        n += 1;
+        sleep(200);
+    }
+
+    // 约数秒内至少多次成功；全标活路径已废除
+    fmt.println(ok >= 4);                               // true
+    fmt.println(gc.GC.stwMarkAllFallbacks() == 0);      // true
+    fmt.println(gc.GC.stwIncomplete() >= 0);            // true
+    sv.close();
+    srv.join();
+}

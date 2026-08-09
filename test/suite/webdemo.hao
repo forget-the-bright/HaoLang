@@ -16,7 +16,7 @@ func webDemoTest() {
     var i = 0;
     while (i < reflect.typeCount()) {
         val t = reflect.typeAt(i);
-        if (t.hasAnnotationEnding("Controller") && t.inPackage("demo/web")) {
+        if (t.isAnnotationPresent(net.Controller.Class) && t.inPackage("demo/web")) {
             if (t.packagePath() == "demo/web") { foundWeb = true; }
             if (t.packagePath() == "demo/web/api") { foundApi = true; }
         }

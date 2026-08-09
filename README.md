@@ -5,10 +5,10 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.49.2**（lambda 不误捕类型名；对标 Java/C#）
-- 测试基线：`test/suite` **981** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.49.2
+- 当前版本：**v0.53.1**（IR↔GC 契约：数组扩容 shade；可达性闭环 + abort MARK）
+- 测试基线：`test/suite` **1010** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.53.1
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
-- **下一批（默认）**：select 真多路 wait / 泛型 channel——见 [`记忆文档.md`](记忆文档.md) 第 **10** 章
+- **下一批（默认）**：Netty NIO / 混合屏障或并发 sweep / select——见 [`记忆文档.md`](记忆文档.md) 第 **10** 章
 
 ---
 
@@ -321,7 +321,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 ## 十一、已知限制
 
 
-- GC 是 **v3 + 协作 STW（v0.37）**：堆精确扫描 + 分代 + 写屏障；栈仍保守；多线程下阈值亦可自动回收。用户程序默认 `-O2`。
+- GC 是 **v3 + 并发标记（v0.52）**：色纪元 + Dijkstra 屏障 + 软根 STW + mark assist；未齐 park 不放弃 MARK；清扫仍短停顿。用户程序默认 `-O2`。
 - 已有真正 **`Byte`（0～255）**、**`Char`（Unicode 码点 i32）** 与紧凑数组；String = `ptr`→`HaoString{len,cap,data[]}`，`.length`/`s[i]` 按码点。
 - **泛型接口已实现（v0.18.0）**：`Iterable<T>`/`Iterator<T>`；`toArray()` 仍作兜底。
 - **反射**：类型自省 + 字段读写 + 注解（含 value 等参数）+ **方法 invoke**（含 `invokeFloat`）已有；运行时动态定义类/成员需 VM，后续。
@@ -363,8 +363,8 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | **v0.49.2** lambda 类型名不捕获；**v0.49.1** os.Process + GC；反向 28/28 |
-| 🔥 **下一批（默认开干）** | select 真多路 wait / 泛型 channel / 注释清债 |
+| ✅ 已完成 | **v0.53.1** IR↔GC 数组 shade + 可达性闭环；反向 28/28 |
+| 🔥 **下一批（默认开干）** | Netty NIO poll / 混合屏障或并发 sweep / select |
 | 其后 | 自举（Stage 10） |
 
 实现步骤见 [`记忆文档.md` 第 10 章](记忆文档.md)；历史见 [`docs/项目时间线/`](docs/项目时间线/索引.md)。

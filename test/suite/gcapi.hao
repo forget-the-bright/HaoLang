@@ -41,6 +41,13 @@ func gcApiTest() {
     fmt.println(gc.GC.minorCount() >= 0);      // true
     fmt.println(gc.GC.majorCount() >= 1);      // true（刚手动 major）
     fmt.println(gc.GC.registeredThreads() >= 1); // true
+    // v0.50.4：STW incomplete 可查；全标活已废除
+    fmt.println(gc.GC.stwIncomplete() >= 0);   // true
+    fmt.println(gc.GC.stwMarkAllFallbacks() == 0); // true
+    // v0.51/0.52：并发标记至少一轮；堆字节可读
+    fmt.println(gc.GC.concurrentMarkCycles() >= 1); // true
+    fmt.println(gc.GC.heapBytes() >= 0);           // true
+    fmt.println(gc.GC.markAssistSteps() >= 0);     // true
     fmt.println(os.Process.workingSetBytes() > 0); // true
     fmt.println(os.Process.handleCount() > 0); // true
     fmt.println(os.Process.threadCount() >= 1); // true

@@ -219,6 +219,10 @@ private:
     void genStaticConstructor(const ClassInfoPtr& ci);
     // 代码生成前预置 hasStaticInit（避免「函数声明在类之前」时漏 ensureInit）
     void markStaticInitFlags();
+    // v0.50.2：为每个有虚表的类合成 static Class: reflect.Class（对标 Java 类字面量 /
+    // Object 类型身份 API；每类型一份常量，经 ensureInit 填单例）
+    void ensureClassStaticField(const ClassInfoPtr& ci);
+    void synthesizeClassStaticFields();
     // 在静态成员访问 / new 前发射惰性初始化调用（仅当 hasStaticInit）
     void emitStaticEnsureInit(const ClassInfoPtr& ci);
 
@@ -733,7 +737,15 @@ private:
 
     // 为函数重载生成安全的 IR 符号名后缀（基础类型/类/泛型/数组/函数类型
     // 均可；'$' 与字母数字对 IR 符号名合法，避免 clang 的重复定义报错）。
-    static std::string overloadSuffix(const TypePtr& t);
+        // Instance method IR name (same mangling as static overloads)
+    static std::string instanceMethodIRName(const std::string& classIRName,
+                                           const std::string& methodName,
+                                           const std::vector<TypePtr>& params,
+                                           bool needsSuffix) {
+        return staticMethodIRName(classIRName, methodName, params, needsSuffix);
+    }
+
+static std::string overloadSuffix(const TypePtr& t);
 
     // 由 import 路径算内部前缀：main 为 ""，否则 '/' 或 '.' 换 '$' 后加 '$'
     // （demo/web、demo.web → demo$web$）

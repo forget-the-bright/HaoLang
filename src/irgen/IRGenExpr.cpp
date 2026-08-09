@@ -1213,6 +1213,8 @@ Value IRGen::genEquality(HaoLangParser::EqualityExprContext* e) {
             return Value();
         }
 
+        // v0.50.1：reflect.Class 为每类型单例，== 走下方普通引用指针比较
+
         // 数值比较：先提升再分配比较结果寄存器（coerce 可能占 temp）
         if (lhs.type->isNumeric() && rhs.type->isNumeric()) {
             if (!ensureNonNullOperand(lhs, e, op) ||
@@ -1693,6 +1695,7 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
             return Value();
         }
         // 静态字段：ClassName.X / obj.X —— 类级全局变量，忽略实例指针 base.ir
+        // （含编译器合成的 static Class，对标 Java 类字面量 / 类型身份）
         if (const FieldInfo* sfi = ci->findStaticField(field)) {
             if (!canAccessMember(sfi->visibility, sfi->ownerClass)) {
                 error(ctx, std::string("不能访问 ") + visName(sfi->visibility) +
@@ -2019,8 +2022,11 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
             return Value(reg, fnRet);
         }
     }
-    const MethodInfo* mi = ci->findMethod(method);
-    if (!mi) {
+    // Instance overload: arity + assignable types (mirror static)
+    auto instCands = ci->findMethods(method);
+    const MethodInfo* mi = nullptr;
+    if (instCands.empty()) {
+
         // 泛型方法（v0.9.0）：方法级类型参数在调用时从实参推断，
         // 如 List<Int>.map<R>(f) 的 R。
         std::string tplName = ci->instanceOf.empty() ? ci->name : ci->instanceOf;
@@ -2091,6 +2097,36 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
         error(ctx, "类 '" + ci->name + "' 没有方法 '" + method + "'");
         return Value();
     }
+
+    std::vector<Value> args;
+    std::vector<antlr4::tree::ParseTree*> argExprs;
+    if (instCands.size() == 1) {
+        // Single candidate: push expectedTypes so lambdas infer (e.g. ()->Unit)
+        mi = instCands[0];
+        if (auto* al = call->argList())
+            for (size_t k = 0; k < al->arg().size(); ++k) {
+                if (k < mi->paramTypes.size())
+                    expectedTypes_.push_back(mi->paramTypes[k]);
+                auto* aex = al->arg(k)->expr();
+                Value av = genExpr(aex);
+                if (k < mi->paramTypes.size()) expectedTypes_.pop_back();
+                if (!av.valid()) return Value();
+                args.push_back(av);
+                argExprs.push_back(aex);
+            }
+    } else {
+        // Overload: evaluate without expected, then select
+        if (auto* al = call->argList())
+            for (auto* a : al->arg()) {
+                Value av = genExpr(a->expr());
+                if (!av.valid()) return Value();
+                args.push_back(av);
+                argExprs.push_back(a->expr());
+            }
+        mi = selectStaticOverload(instCands, args, ctx, ci->name + "." + method);
+        if (!mi) return Value();
+    }
+
     // 类名（recv.ir 为空）调用实例方法非法
     if (recv.ir.empty()) {
         error(ctx, "静态上下文不能调用实例方法 '" + method +
@@ -2103,19 +2139,6 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
         return Value();
     }
 
-    std::vector<Value> args;
-    std::vector<antlr4::tree::ParseTree*> argExprs;
-    if (auto* al = call->argList())
-        for (size_t k = 0; k < al->arg().size(); ++k) {
-            if (k < mi->paramTypes.size())
-                expectedTypes_.push_back(mi->paramTypes[k]);
-            auto* aex = al->arg(k)->expr();
-            Value av = genExpr(aex);
-            if (k < mi->paramTypes.size()) expectedTypes_.pop_back();
-            if (!av.valid()) return Value();
-            args.push_back(av);
-            argExprs.push_back(aex);
-        }
     if (args.size() != mi->paramTypes.size()) {
         error(ctx, "方法 '" + ci->name + "." + method + "' 需要 " +
                    std::to_string(mi->paramTypes.size()) + " 个参数，实际提供 " +

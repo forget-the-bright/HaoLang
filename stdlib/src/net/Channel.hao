@@ -1,0 +1,131 @@
+// ============================================================
+//  net.Channel / Pipeline —— 对标 Netty ChannelPipeline 子集（v0.50.3）
+// ------------------------------------------------------------
+//  - Channel：一条连接（Socket + 入站 ByteBuf）
+//  - ChannelPipeline：有序入站处理器；channelRead 返回下一消息（null 中止）
+//  - EventLoopGroup：worker 线程池（OIO boss/worker；NIO poll 另批）
+//  入站消息在 serve 循环中先解码为 HttpRequest，再 fireChannelRead。
+// ============================================================
+package net;
+
+import thread;
+
+public class ChannelHandlerContext {
+    var channel: Channel?;
+    var pipeline: ChannelPipeline?;
+    var index: Int;
+
+    constructor() {
+        this.channel = null;
+        this.pipeline = null;
+        this.index = 0;
+    }
+
+    func fireChannelRead(msg: Object): Object? {
+        if (this.pipeline == null) { return msg; }
+        return this.pipeline!!.invokeFrom(this.index + 1, msg);
+    }
+
+    func writeAndFlush(resp: HttpResponse, keepAlive: Bool) {
+        if (this.channel == null) { return; }
+        HttpServer.writeResponse(this.channel!!.sock, resp, keepAlive);
+    }
+}
+
+// 入站 handler：返回值交给下一环；null 表示中止本轮
+public class ChannelHandler {
+    func channelRead(ctx: ChannelHandlerContext, msg: Object): Object? {
+        return ctx.fireChannelRead(msg);
+    }
+}
+
+public class ChannelPipeline {
+    var handlers: [ChannelHandler];
+    var channel: Channel?;
+
+    constructor() {
+        this.handlers = [];
+        this.channel = null;
+    }
+
+    func addLast(h: ChannelHandler): ChannelPipeline {
+        this.handlers += h;
+        return this;
+    }
+
+    func invokeFrom(start: Int, msg: Object): Object? {
+        var cur: Object? = msg;
+        var i = start;
+        while (i < this.handlers.length) {
+            if (cur == null) { return null; }
+            val ctx = new ChannelHandlerContext();
+            ctx.channel = this.channel;
+            ctx.pipeline = this;
+            ctx.index = i;
+            cur = this.handlers[i].channelRead(ctx, cur!!);
+            i += 1;
+        }
+        return cur;
+    }
+
+    func fireChannelRead(msg: Object): Object? {
+        return this.invokeFrom(0, msg);
+    }
+}
+
+public class Channel {
+    var sock: Socket;
+    var inbound: ByteBuf;
+    var pipeline: ChannelPipeline;
+
+    constructor(sock: Socket) {
+        this.sock = sock;
+        this.inbound = new ByteBuf();
+        this.pipeline = new ChannelPipeline();
+        this.pipeline.channel = this;
+    }
+
+    func close() {
+        this.sock.close();
+        this.inbound.clear();
+    }
+}
+
+// 业务适配：HttpRequest → HttpResponse
+public class HttpBusinessHandler extends ChannelHandler {
+    var fn: (HttpRequest) -> HttpResponse;
+
+    constructor(fn: (HttpRequest) -> HttpResponse) {
+        this.fn = fn;
+    }
+
+    override func channelRead(ctx: ChannelHandlerContext, msg: Object): Object? {
+        if (!(msg is HttpRequest)) { return null; }
+        return this.fn(msg as HttpRequest);
+    }
+}
+
+// Netty EventLoopGroup 的 OIO 形态：固定线程池（accept 在 boss，处理在 worker）
+public class EventLoopGroup {
+    var pool: thread.ThreadPool?;
+    var n: Int;
+
+    constructor(threads: Int) {
+        var t = threads;
+        if (t < 1) { t = 1; }
+        this.n = t;
+        this.pool = thread.newPool(t);
+    }
+
+    func submit(run: () -> Unit): Bool {
+        if (this.pool == null) { return false; }
+        return this.pool!!.submit(run);
+    }
+
+    func shutdown() {
+        if (this.pool != null) {
+            this.pool!!.shutdown();
+            this.pool = null;
+        }
+    }
+}

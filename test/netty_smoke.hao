@@ -1,0 +1,51 @@
+import net;
+import thread;
+
+func pingHandler(req: net.HttpRequest): net.HttpResponse {
+    if (req.path == "/ping") {
+        return net.HttpResponse.text("pong");
+    }
+    return net.HttpResponse.of(404, "no");
+}
+
+func main() {
+    // ByteBuf 单元：粘包拆两条
+    val b = new net.ByteBuf();
+    b.writeBytes("GET /a HTTP/1.1\r\nHost: x\r\n\r\nGET /b HTTP/1.1\r\nHost: x\r\n\r\n");
+    val n1 = net.Http.completeMessageLen(b.readableSlice(), false, false);
+    fmt.println(n1 > 0); // true
+    val m1 = b.readBytes(n1);
+    b.discardReadBytes();
+    fmt.println(net.HttpServer.parseRequest(m1).path); // /a
+    val n2 = net.Http.completeMessageLen(b.readableSlice(), false, false);
+    fmt.println(n2 > 0); // true
+    val m2 = b.readBytes(n2);
+    fmt.println(net.HttpServer.parseRequest(m2).path); // /b
+
+    val sv = new net.HttpServer();
+    if (!sv.listen(7910)) {
+        fmt.println("listen-fail");
+        return;
+    }
+    val th = new thread.Thread();
+    th.start({ sv.serveOnce(pingHandler); });
+    thread.sleep(80);
+    val sock = new net.Socket();
+    if (!sock.connect("127.0.0.1", 7910)) {
+        fmt.println("connect-fail");
+        sv.close();
+        th.join();
+        return;
+    }
+    sock.setTimeout(5000);
+    sock.send("GET /ping HTTP/1.1\r\nHost: x\r\n\r\nGET /ping HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    val buf = new net.ByteBuf();
+    val r1 = net.Http.readOneMessage(sock, buf, false);
+    fmt.println(net.Http.parseResponse(r1).body); // pong
+    val r2 = net.Http.readOneMessage(sock, buf, false);
+    fmt.println(net.Http.parseResponse(r2).body); // pong
+    sock.close();
+    th.join();
+    sv.close();
+    fmt.println("ok");
+}

@@ -595,6 +595,8 @@ std::string IRGen::generate(const std::vector<SourceUnit>& units) {
     // v0.18.0 起拆分为：先分配槽位（模板/非泛型接口 + 类虚方法）→ 实例化泛型接口
     // （复制模板槽位）→ 生成代码 → 全部泛型类实例就绪后填表 → 发射 vtable。
     assignVtableSlots();
+    // 虚表就绪后为每类型合成 static Class（须在 markStaticInitFlags / 代码生成前）
+    synthesizeClassStaticFields();
     instantiateAllGenericInterfaces();
     // 第 1 遍 typeids：为当前（非泛型）类生成，供 genUnitTopLevel 的 is/as
     // 编译期检查使用（原管线 emitTypeIdLists 在代码生成之前）。
@@ -675,6 +677,13 @@ void IRGen::genUnitTopLevel(const SourceUnit& u) {
             auto ci = lookupClass(currentPkgPrefix_ + cls->IDENT()->getText());
             if (ci && ci->isGenericTemplate()) continue;
             genClass(cls);
+        } else if (auto* ad = decl->annotationDecl()) {
+            // @interface：无方法体，但须发射合成 static Class + ensureInit
+            auto ci = lookupClass(currentPkgPrefix_ + ad->IDENT()->getText());
+            if (ci && ci->isAnnotation) {
+                emitStaticFieldGlobals(ci);
+                genStaticConstructor(ci);
+            }
         } else if (decl->interfaceDecl()) {
             // 接口本身不产生代码，只贡献虚表布局
         } else if (auto* ed = decl->enumDecl()) {
@@ -985,7 +994,35 @@ std::vector<AnnotationUse> IRGen::resolveAnnotationUses(
     for (auto* au : uses) {
         if (!au) continue;
         AnnotationUse a;
-        a.name = currentPkgPrefix_ + au->qualifiedName()->getText();
+        // v0.50：解析到真实注解 ClassInfo（供 meta 令牌）
+        bool iface = false;
+        std::string internal = resolveTypeQualifiedName(au->qualifiedName(), &iface);
+        // import net; 后写 @GetMapping：类型解析只扫通配导入；注解额外扫
+        // 各包导出中的 @interface（与历史「裸名注解」用法兼容）
+        if (internal.empty() && au->qualifiedName()->IDENT().size() == 1) {
+            std::string shortName = au->qualifiedName()->IDENT()[0]->getText();
+            std::string hit;
+            for (const auto& im : currentImports_) {
+                auto pit = pkgExports_.find(im.importPath);
+                if (pit == pkgExports_.end()) continue;
+                auto eit = pit->second.find(shortName);
+                if (eit == pit->second.end()) continue;
+                auto cit = classes_.find(eit->second);
+                if (cit == classes_.end() || !cit->second->isAnnotation) continue;
+                if (!hit.empty() && hit != eit->second) {
+                    error(au, "注解 '" + shortName + "' 有歧义");
+                    hit.clear();
+                    break;
+                }
+                hit = eit->second;
+            }
+            if (!hit.empty()) internal = hit;
+        }
+        if (internal.empty()) {
+            internal = currentPkgPrefix_ + au->qualifiedName()->getText();
+        }
+        a.name = internal;
+        a.className = classes_.count(internal) ? internal : "";
         if (auto* al = au->annotationArgs()) {
             for (auto* arg : al->annotationArg()) {
                 if (arg->IDENT()) {

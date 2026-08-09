@@ -49,7 +49,7 @@ func v19ReflectTest() {
     val p = new V19Person();
     val t = reflect.typeOf(p);
     fmt.println(t.name());                        // V19Person
-    fmt.println(t.getSuperclass());               // object$Object
+    fmt.println(t.getSuperclassName());           // object$Object
     fmt.println(t.getAnnotationCount());          // 1
     fmt.println((t.getField(p, "name") ?? "null")); // bob
     fmt.println((t.getField(p, "age") ?? "null")); // 30

@@ -39,16 +39,6 @@ public class Html {
         return r;
     }
 
-    // 内建 indexOf 无 from；用 substring 模拟
-    static func indexOfFrom(s: String, sub: String, from: Int): Int {
-        if (from >= s.length) { return -1; }
-        if (from <= 0) { return String.valueOf(s).indexOf(sub); }
-        val rest = String.valueOf(s).substring(from, s.length);
-        val j = String.valueOf(rest).indexOf(sub);
-        if (j < 0) { return -1; }
-        return from + j;
-    }
-
     static func render(template: String, model: Object): String {
         var layout = "";
         var bodyTpl = template;
@@ -107,7 +97,7 @@ public class Html {
         var i = 0;
         val n = template.length;
         while (i < n) {
-            val open = Html.indexOfFrom(template, "{{", i);
+            val open = String.valueOf(template).indexOf("{{", i);
             if (open < 0) {
                 out = out + String.valueOf(template).substring(i, n);
                 break;
@@ -115,7 +105,7 @@ public class Html {
             out = out + String.valueOf(template).substring(i, open);
             // 原始 {{{
             if (open + 2 < n && String.valueOf(template).charAt(open + 2) == 123) {
-                val close = Html.indexOfFrom(template, "}}}", open + 3);
+                val close = String.valueOf(template).indexOf("}}}", open + 3);
                 if (close < 0) {
                     out = out + String.valueOf(template).substring(open, n);
                     break;
@@ -125,7 +115,7 @@ public class Html {
                 i = close + 3;
                 continue;
             }
-            val close2 = Html.indexOfFrom(template, "}}", open + 2);
+            val close2 = String.valueOf(template).indexOf("}}", open + 2);
             if (close2 < 0) {
                 out = out + String.valueOf(template).substring(open, n);
                 break;
@@ -137,7 +127,7 @@ public class Html {
             if (head == 35 || head == 94) { // # or ^
                 val name = String.valueOf(String.valueOf(tag).substring(1, tag.length)).trim();
                 val endTag = "{{/" + name + "}}";
-                val endPos = Html.indexOfFrom(template, endTag, i);
+                val endPos = String.valueOf(template).indexOf(endTag, i);
                 if (endPos < 0) {
                     out = out + "<!-- unclosed section: " + name + " -->";
                     break;
@@ -305,7 +295,7 @@ public class Html {
         return t.getFieldObject(ctx, key);
     }
 
-    static func findFieldType(t: reflect.Type, name: String): String {
+    static func findFieldType(t: reflect.Class, name: String): String {
         var i = 0;
         while (i < t.getFieldCount()) {
             if (t.getFieldName(i) == name) { return t.getFieldType(i); }

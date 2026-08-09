@@ -1,5 +1,9 @@
 // HaoLang 标准库 —— net 网络库
 // socket 句柄存于 Long?（8 字节 GC 块，对标指针宽 SOCKET/fd）。
+//
+// 读契约（对齐 Go net.Conn / Java InputStream，v0.49.4）：
+//   recv: n>0 → 数据；n==0 → ""（EOF）；n<0 → null（超时/错误）
+//   send: 写满循环（对标完整写）；失败 -1
 package net;
 
 public class Socket {
@@ -7,7 +11,29 @@ public class Socket {
     public constructor() { this.fd = 0; }
     public func connect(host: String, port: Int): Bool { return _connect(this.fd, host, port); }
     public func send(data: String): Int { return _send(this.fd, data); }
+
+    // 一次 OS recv。"" = EOF；null = 超时/错误。
     public func recv(maxLen: Int): String? { return _recv(this.fd, maxLen); }
+
+    // 对标 Go io.ReadFull / Java readNBytes：凑满 n 字节，否则 null。
+    public func recvExact(n: Int): String? {
+        if (n < 0) { return null; }
+        if (n == 0) { return ""; }
+        var out = "";
+        while (_netByteLen(out) < n) {
+            val need = n - _netByteLen(out);
+            var want = need;
+            if (want > 65536) { want = 65536; }
+            val chunk = this.recv(want);
+            if (chunk == null) { return null; }
+            if (_netByteLen(chunk!!) == 0) { return null; }
+            out = out + chunk!!;
+        }
+        return out;
+    }
+
+    public func setReadTimeout(ms: Int): Bool { return _setRecvTimeout(this.fd, ms); }
+    public func setWriteTimeout(ms: Int): Bool { return _setSendTimeout(this.fd, ms); }
     public func setTimeout(ms: Int): Bool { return _setTimeout(this.fd, ms); }
     public func close(): Unit { _close(this.fd); }
 }
@@ -19,7 +45,19 @@ public class ServerSocket {
     public func listenBacklog(port: Int, backlog: Int): Bool {
         return _listenBacklog(this.fd, port, backlog);
     }
+
+    // 出参形式（v0.50 起实例方法可按参数重载）
     public func accept(client: Socket): Bool { return _accept(this.fd, client.fd); }
+
+    // 对标 Go Accept / Java accept：失败 null
+    public func accept(): Socket? {
+        val client = new Socket();
+        if (!this.accept(client)) { return null; }
+        return client;
+    }
+
+    public func setReadTimeout(ms: Int): Bool { return _setRecvTimeout(this.fd, ms); }
+    public func setWriteTimeout(ms: Int): Bool { return _setSendTimeout(this.fd, ms); }
     public func setTimeout(ms: Int): Bool { return _setTimeout(this.fd, ms); }
     public func close(): Unit { _close(this.fd); }
 }
@@ -43,8 +81,11 @@ extern func _close(p: Long?): Unit = "hao_net_close";
 extern func _listen(p: Long?, port: Int): Bool = "hao_net_listen";
 extern func _listenBacklog(p: Long?, port: Int, backlog: Int): Bool = "hao_net_listen_backlog";
 extern func _setTimeout(p: Long?, ms: Int): Bool = "hao_net_set_timeout";
+extern func _setRecvTimeout(p: Long?, ms: Int): Bool = "hao_net_set_recv_timeout";
+extern func _setSendTimeout(p: Long?, ms: Int): Bool = "hao_net_set_send_timeout";
 extern func _accept(s: Long?, c: Long?): Bool = "hao_net_accept";
 extern func _udp_open(p: Long?): Bool = "hao_net_udp_open";
 extern func _udp_bind(p: Long?, port: Int): Bool = "hao_net_udp_bind";
 extern func _udp_sendto(p: Long?, host: String, port: Int, data: String): Int = "hao_net_udp_sendto";
 extern func _udp_recvfrom(p: Long?, max: Int): String? = "hao_net_udp_recvfrom";
+extern func _netByteLen(s: String): Int = "hao_str_byte_len";

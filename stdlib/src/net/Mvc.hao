@@ -12,6 +12,7 @@ import collections;
 import os;
 import reflect;
 import text;
+import thread;
 
 // ---- 路由注解（对标 Spring MVC；参数运行时可读）----
 @interface Controller {
@@ -184,48 +185,42 @@ public class HttpApp {
         this.routes.put(HttpApp.routeKey(method, path), b);
     }
 
-    // ---- 注解控制层：扫描实例方法上的映射注解 ----
+    // ---- 注解控制层：扫描实例方法上的映射注解（v0.50：Class 令牌）----
     func register(ctrl: Object) {
         val t = reflect.typeOf(ctrl);
         var base = "";
-        var ai = 0;
-        while (ai < t.getAnnotationCount()) {
-            val an = t.getAnnotationName(ai);
-            val av = t.getAnnotationValue(ai);
-            if (HttpApp.annoEnds(an, "RequestMapping") || HttpApp.annoEnds(an, "Controller")) {
-                val p = HttpApp.annoPath(av);
-                if (p.length > 0) { base = p; }
-            }
-            ai += 1;
+        val cv = t.getAnnotationValueFor(Controller.Class);
+        if (cv != null) {
+            val p = HttpApp.annoPath(cv!!);
+            if (p.length > 0) { base = p; }
+        }
+        val rv = t.getAnnotationValueFor(RequestMapping.Class);
+        if (rv != null) {
+            val p = HttpApp.annoPath(rv!!);
+            if (p.length > 0) { base = p; }
         }
         var mi = 0;
         while (mi < t.getMethodCount()) {
             val mname = t.getMethodName(mi);
             var httpMethod = "";
             var path = "";
-            var aj = 0;
-            val ac = t.getMethodAnnotationCount(mi);
-            while (aj < ac) {
-                val an = t.getMethodAnnotationName(mi, aj);
-                val av = t.getMethodAnnotationValue(mi, aj);
-                if (HttpApp.annoEnds(an, "GetMapping")) {
-                    httpMethod = "GET";
-                    path = HttpApp.annoPath(av);
-                } else if (HttpApp.annoEnds(an, "PostMapping")) {
-                    httpMethod = "POST";
-                    path = HttpApp.annoPath(av);
-                } else if (HttpApp.annoEnds(an, "PutMapping")) {
-                    httpMethod = "PUT";
-                    path = HttpApp.annoPath(av);
-                } else if (HttpApp.annoEnds(an, "DeleteMapping")) {
-                    httpMethod = "DELETE";
-                    path = HttpApp.annoPath(av);
-                } else if (HttpApp.annoEnds(an, "RequestMapping")) {
-                    httpMethod = HttpApp.annoMethod(av);
-                    if (httpMethod.length == 0) { httpMethod = "GET"; }
-                    path = HttpApp.annoPath(av);
-                }
-                aj += 1;
+            if (t.isMethodAnnotationPresent(mi, GetMapping.Class)) {
+                httpMethod = "GET";
+                path = HttpApp.annoPath(t.getMethodAnnotationValueFor(mi, GetMapping.Class) ?? "");
+            } else if (t.isMethodAnnotationPresent(mi, PostMapping.Class)) {
+                httpMethod = "POST";
+                path = HttpApp.annoPath(t.getMethodAnnotationValueFor(mi, PostMapping.Class) ?? "");
+            } else if (t.isMethodAnnotationPresent(mi, PutMapping.Class)) {
+                httpMethod = "PUT";
+                path = HttpApp.annoPath(t.getMethodAnnotationValueFor(mi, PutMapping.Class) ?? "");
+            } else if (t.isMethodAnnotationPresent(mi, DeleteMapping.Class)) {
+                httpMethod = "DELETE";
+                path = HttpApp.annoPath(t.getMethodAnnotationValueFor(mi, DeleteMapping.Class) ?? "");
+            } else if (t.isMethodAnnotationPresent(mi, RequestMapping.Class)) {
+                val av = t.getMethodAnnotationValueFor(mi, RequestMapping.Class) ?? "";
+                httpMethod = HttpApp.annoMethod(av);
+                if (httpMethod.length == 0) { httpMethod = "GET"; }
+                path = HttpApp.annoPath(av);
             }
             if (httpMethod.length > 0) {
                 val full = HttpApp.joinPath(base, path);
@@ -246,14 +241,14 @@ public class HttpApp {
     //   3) 可扩展条件用 scanWhere / reflect.findTypes（谓词自定）。
     func scan(packagePath: String): Int {
         return this.scanWhere(packagePath, { t ->
-            t.hasAnnotationEnding("Controller")
+            t.isAnnotationPresent(Controller.Class)
         });
     }
 
     // v0.32：自定义谓词包扫描（嵌套子包）。谓词为 true 且 canNewInstance 才 register。
-    // 例：scanWhere("corp/web", { t -> t.hasAnnotationEnding("Controller") })
+    // 例：scanWhere("corp/web", { t -> t.isAnnotationPresent(Controller.Class) })
     //     scanWhere("corp/service", { t -> t.implementsEnding("Plugin") })
-    func scanWhere(packagePath: String, pred: Func<reflect.Type, Bool>): Int {
+    func scanWhere(packagePath: String, pred: Func<reflect.Class, Bool>): Int {
         var n = 0;
         val types = reflect.findTypesNested(packagePath, pred);
         var i = 0;
@@ -272,7 +267,7 @@ public class HttpApp {
     }
 
     // 精确包（不含嵌套子包）+ 谓词
-    func scanWhereExact(packagePath: String, pred: Func<reflect.Type, Bool>): Int {
+    func scanWhereExact(packagePath: String, pred: Func<reflect.Class, Bool>): Int {
         var n = 0;
         val types = reflect.findTypesExact(packagePath, pred);
         var i = 0;
@@ -302,7 +297,7 @@ public class HttpApp {
     }
 
     // v0.31：按类型表无参实例化并 register（失败返回 false）
-    func registerNew(t: reflect.Type): Bool {
+    func registerNew(t: reflect.Class): Bool {
         if (!t.canNewInstance()) { return false; }
         val o = t.newInstance();
         if (o == null) { return false; }
@@ -311,7 +306,7 @@ public class HttpApp {
     }
 
     // v0.31：多参构造槽 + register（依赖注入：调用方准备 [Long] 槽）
-    func registerNewArgs(t: reflect.Type, args: [Long]): Bool {
+    func registerNewArgs(t: reflect.Class, args: [Long]): Bool {
         if (!t.hasFactory()) { return false; }
         if (t.ctorParamCount() != args.length) { return false; }
         val o = t.newInstanceArgs(args);
@@ -472,16 +467,39 @@ public class HttpApp {
         return HttpApp.coerceResult(retType, raw);
     }
 
+    // v0.50 keep-alive；v0.50.3 ByteBuf 粘包 + Pipeline
     func serveOnce(): Bool {
-        val client = new Socket();
-        if (!this.server.accept(client)) { return false; }
-        client.setTimeout(5000);
-        val raw = Http.readMessage(client, false);
-        val req = HttpServer.parseRequest(raw);
-        val resp = this.dispatch(req);
-        HttpServer.writeResponse(client, resp);
-        client.close();
-        return true;
+        val client = this.server.accept();
+        if (client == null) { return false; }
+        return this.serveConnection(client!!);
+    }
+
+    func serveConnection(client: Socket): Bool {
+        val ch = new Channel(client);
+        ch.pipeline.addLast(new HttpAppDispatchHandler(this));
+        return this.serveChannel(ch);
+    }
+
+    func serveChannel(ch: Channel): Bool {
+        ch.sock.setTimeout(5000);
+        var handled = false;
+        while (true) {
+            val raw = Http.readOneMessage(ch.sock, ch.inbound, false);
+            if (raw.length == 0) { break; }
+            val req = HttpServer.parseRequest(raw);
+            var keep = true;
+            val conn = req.getHeader("Connection");
+            if (conn != null && String.valueOf(conn!!).toLowerCase() == "close") {
+                keep = false;
+            }
+            val out = ch.pipeline.fireChannelRead(req);
+            if (out == null || !(out is HttpResponse)) { break; }
+            HttpServer.writeResponse(ch.sock, out as HttpResponse, keep);
+            handled = true;
+            if (!keep) { break; }
+        }
+        ch.close();
+        return handled;
     }
 
     // 循环 accept；调用 close() 或外部停机后结束
@@ -489,10 +507,58 @@ public class HttpApp {
         this.running = true;
         while (this.running) {
             if (!this.serveOnce()) {
-                // accept 失败：短暂继续（对端关闭 listen 时跳出）
                 if (!this.running) { break; }
             }
         }
+    }
+
+    // 多线程抢 accept（旧模型）；新代码请用 serveBossWorkers
+    func serveParallel(workers: Int) {
+        this.running = true;
+        var n = workers;
+        if (n < 1) { n = 1; }
+        var i = 1;
+        while (i < n) {
+            val app = this;
+            val th = new thread.Thread();
+            th.start({
+                while (app.running) {
+                    if (!app.serveOnce()) {
+                        if (!app.running) { break; }
+                    }
+                }
+            });
+            i += 1;
+        }
+        while (this.running) {
+            if (!this.serveOnce()) {
+                if (!this.running) { break; }
+            }
+        }
+    }
+
+    // v0.50.3：Netty OIO —— boss 只 accept，EventLoopGroup worker 处理连接
+    func serveBossWorkers(workers: Int) {
+        this.running = true;
+        var n = workers;
+        if (n < 1) { n = 1; }
+        val group = new EventLoopGroup(n);
+        while (this.running) {
+            val client = this.server.accept();
+            if (client == null) {
+                if (!this.running) { break; }
+                continue;
+            }
+            val c = client!!;
+            val app = this;
+            val ok = group.submit({
+                app.serveConnection(c);
+            });
+            if (!ok) {
+                this.serveConnection(c);
+            }
+        }
+        group.shutdown();
     }
 
     static func routeKey(method: String, path: String): String {
@@ -513,13 +579,6 @@ public class HttpApp {
         if (path.length == 0) { return b; }
         if (String.valueOf(path).startsWith("/")) { return b + path; }
         return b + "/" + path;
-    }
-
-    static func annoEnds(name: String, shortName: String): Bool {
-        if (name == shortName) { return true; }
-        // 限定名可能是 net.GetMapping（点）或 demo$web$GetMapping（包前缀 $）
-        if (String.valueOf(name).endsWith("." + shortName)) { return true; }
-        return String.valueOf(name).endsWith("$" + shortName);
     }
 
     static func annoPath(v: String): String {
@@ -553,5 +612,20 @@ public class HttpApp {
         var e = s;
         while (e < v.length && String.valueOf(v).charAt(e) != 59) { e += 1; }
         return String.valueOf(v).substring(s, e);
+    }
+}
+
+// Pipeline 末环：把 HttpRequest 交给 HttpApp.dispatch（须在 HttpApp 之后定义）
+public class HttpAppDispatchHandler extends ChannelHandler {
+    var app: HttpApp?;
+
+    constructor(app: HttpApp) {
+        this.app = app;
+    }
+
+    override func channelRead(ctx: ChannelHandlerContext, msg: Object): Object? {
+        if (this.app == null) { return null; }
+        if (!(msg is HttpRequest)) { return null; }
+        return this.app!!.dispatch(msg as HttpRequest);
     }
 }

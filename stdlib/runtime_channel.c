@@ -57,18 +57,22 @@ static void chan_unlock(HaoChan* c) {
 #endif
 }
 static void chan_wait_send(HaoChan* c) {
+    hao_gc_os_block_arm();
 #ifdef _WIN32
     hao_win_cond_wait(c->cv_send, c->mtx);
 #else
     pthread_cond_wait(&c->cv_send, &c->mtx);
 #endif
+    hao_gc_os_block_disarm();
 }
 static void chan_wait_recv(HaoChan* c) {
+    hao_gc_os_block_arm();
 #ifdef _WIN32
     hao_win_cond_wait(c->cv_recv, c->mtx);
 #else
     pthread_cond_wait(&c->cv_recv, &c->mtx);
 #endif
+    hao_gc_os_block_disarm();
 }
 static void chan_wake_send(HaoChan* c) {
 #ifdef _WIN32

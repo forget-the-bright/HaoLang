@@ -124,4 +124,66 @@ func ioHttpTest() {
     net.Http.setMaxBytes(999999999);
     fmt.println(net.Http.maxBytes() == net.Http.ABSOLUTE_MAX_BYTES);    // true
     net.Http.setMaxBytes(oldLim);
+
+    // v0.50：同一 TCP 连接 keep-alive 连发两请求
+    val sv3 = new net.HttpServer();
+    if (!sv3.listen(7905)) {
+        fmt.println("listen-fail3");
+        return;
+    }
+    val t5 = new thread.Thread();
+    t5.start({ sv3.serveOnce(suiteHttpHandler); });
+    thread.sleep(80);
+    val sock = new net.Socket();
+    fmt.println(sock.connect("127.0.0.1", 7905));                       // true
+    sock.setTimeout(5000);
+    sock.send("GET /ping HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    val raw1 = net.Http.readMessage(sock, false);
+    fmt.println(net.Http.parseResponse(raw1).body);                     // pong
+    sock.send("GET /ping HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    val raw2 = net.Http.readMessage(sock, false);
+    fmt.println(net.Http.parseResponse(raw2).body);                     // pong
+    sock.close();
+    t5.join();
+    sv3.close();
+
+    // v0.50.3：粘包 —— 一次 send 两个请求，服务端须回两个响应
+    val sv4 = new net.HttpServer();
+    if (!sv4.listen(7906)) {
+        fmt.println("listen-fail4");
+        return;
+    }
+    val t6 = new thread.Thread();
+    t6.start({ sv4.serveOnce(suiteHttpHandler); });
+    thread.sleep(80);
+    val sock2 = new net.Socket();
+    fmt.println(sock2.connect("127.0.0.1", 7906));                      // true
+    sock2.setTimeout(5000);
+    sock2.send("GET /ping HTTP/1.1\r\nHost: x\r\n\r\nGET /ping HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    val pipeBuf = new net.ByteBuf();
+    val pr1 = net.Http.readOneMessage(sock2, pipeBuf, false);
+    fmt.println(net.Http.parseResponse(pr1).body);                      // pong
+    val pr2 = net.Http.readOneMessage(sock2, pipeBuf, false);
+    fmt.println(net.Http.parseResponse(pr2).body);                      // pong
+    sock2.close();
+    t6.join();
+    sv4.close();
+
+    // v0.50.3：boss/worker — 并发两客户端
+    val sv5 = new net.HttpServer();
+    if (!sv5.listen(7907)) {
+        fmt.println("listen-fail5");
+        return;
+    }
+    val t7 = new thread.Thread();
+    t7.start({
+        sv5.serveBossWorkers(2, suiteHttpHandler);
+    });
+    thread.sleep(100);
+    val g1 = net.Http.get("http://127.0.0.1:7907/ping");
+    val g2 = net.Http.get("http://127.0.0.1:7907/ping");
+    fmt.println(g1.body);                                               // pong
+    fmt.println(g2.body);                                               // pong
+    sv5.close();
+    t7.join();
 }

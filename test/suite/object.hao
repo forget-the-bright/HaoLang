@@ -41,4 +41,9 @@ func objectTest() {
     // 5. hashCode：内容相等对象哈希一致
     val p2 = new ObjPerson("alice");
     fmt.println(p1.hashCode() == p2.hashCode());   // true
+
+    // 6. v0.50.1：TypeName.Class / getClass 单例身份
+    fmt.println(ObjPerson.Class == p1.getClass()); // true
+    fmt.println(ObjPerson.Class == ObjPerson.Class); // true
+    fmt.println(ObjPerson.Class.getName().length > 0); // true
 }

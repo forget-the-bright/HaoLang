@@ -1,0 +1,12 @@
+package main;
+
+class Calc {
+    func add(a: Int): Int { return a + 1; }
+    func add(a: Int, b: Int): Int { return a + b; }
+}
+
+func main() {
+    val c = new Calc();
+    fmt.println(c.add(10));       // 11
+    fmt.println(c.add(10, 20));   // 30
+}

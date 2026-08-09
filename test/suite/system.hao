@@ -66,4 +66,39 @@ func systemTest() {
     val r = u.recvFrom(100);
     fmt.println("UDP 收到: " + (r ?? "(null)"));
     u.close();
+
+    // ---------- net 读契约（v0.49.4，对齐 Go/Java）----------
+    // recvExact + accept() + EOF=""
+    val sv2 = new net.ServerSocket();
+    if (!sv2.listen(7892)) { fmt.println("listen2 fail"); return; }
+    val c2 = new net.Socket();
+    if (!c2.connect("127.0.0.1", 7892)) { fmt.println("connect2 fail"); return; }
+    c2.send("ABCDEFGH");
+    val s2 = sv2.accept();
+    if (s2 == null) { fmt.println("accept() null"); return; }
+    val sc = s2!!;
+    val exact = sc.recvExact(8);
+    fmt.println(exact ?? "(null)");              // ABCDEFGH
+    c2.close();
+    val eof = sc.recv(16);
+    if (eof == null) { fmt.println("eof-null"); }
+    else if (eof!!.length == 0) { fmt.println("eof-empty"); }
+    else { fmt.println(eof!!); }
+    sc.close();
+    sv2.close();
+
+    // setReadTimeout：无数据时 recv → null（超时）
+    val sv3 = new net.ServerSocket();
+    if (!sv3.listen(7893)) { fmt.println("listen3 fail"); return; }
+    val c3 = new net.Socket();
+    if (!c3.connect("127.0.0.1", 7893)) { fmt.println("connect3 fail"); return; }
+    val s3 = sv3.accept();
+    if (s3 == null) { fmt.println("accept3 null"); return; }
+    val sc3 = s3!!;
+    sc3.setReadTimeout(100);
+    val timed = sc3.recv(16);
+    fmt.println(timed == null);                  // true
+    c3.close();
+    sc3.close();
+    sv3.close();
 }

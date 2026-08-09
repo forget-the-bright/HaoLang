@@ -201,12 +201,12 @@ class JSON {
     }
 
     // 是否 Map 形态（有无参 keys）
-    static func looksLikeMap(t: reflect.Type): Bool {
+    static func looksLikeMap(t: reflect.Class): Bool {
         return t.methodParamCount("keys") == 0;
     }
 
     // 是否 List 形态（size+get，无 keys）
-    static func looksLikeList(t: reflect.Type): Bool {
+    static func looksLikeList(t: reflect.Class): Bool {
         if (t.methodParamCount("keys") == 0) { return false; }
         return t.methodParamCount("size") == 0 && t.methodParamCount("get") == 1;
     }
@@ -263,7 +263,7 @@ class JSON {
         return JSON.stringifyBean(value, t, features, indent, next, depth + 1);
     }
 
-    static func stringifyMap(value: Object, t: reflect.Type, features: Int, indent: Int, stack: [Long], depth: Int): String {
+    static func stringifyMap(value: Object, t: reflect.Class, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
         var emptyArgs: [Long] = [];
         val keysPtr = t.invoke(value, "keys", emptyArgs);
@@ -293,7 +293,7 @@ class JSON {
         return r + "}";
     }
 
-    static func stringifyList(value: Object, t: reflect.Type, features: Int, indent: Int, stack: [Long], depth: Int): String {
+    static func stringifyList(value: Object, t: reflect.Class, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
         var emptyArgs: [Long] = [];
         val sz = t.invoke(value, "size", emptyArgs);
@@ -316,7 +316,7 @@ class JSON {
         return r + "]";
     }
 
-    static func stringifyBean(value: Object, t: reflect.Type, features: Int, indent: Int, stack: [Long], depth: Int): String {
+    static func stringifyBean(value: Object, t: reflect.Class, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
         var r = "{";
         var first = true;

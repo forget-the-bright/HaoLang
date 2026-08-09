@@ -24,7 +24,8 @@ enum class SymbolKind {
 // 注解使用（v0.19.0）：@Name(args) 标记在类/方法/字段上。
 // args 是编译期常量求值后的键值对（键空表示单值注解，如 @Deprecated）。
 struct AnnotationUse {
-    std::string name;                              // 注解类型名（含包前缀）
+    std::string name;                              // 注解类型内部名（pkg$Anno，供调试/兼容）
+    std::string className;                         // 注解 ClassInfo 名；空则无 meta
     std::vector<std::pair<std::string, std::string>> args;  // {键, 值字符串}
 };
 
@@ -254,6 +255,28 @@ struct ClassInfo {
         for (const auto& m : methods) if (m.name == n) return &m;
         return nullptr;
     }
+    const MethodInfo* findMethod(const std::string& n,
+                                 const std::vector<TypePtr>& params) const {
+        for (const auto& m : methods) {
+            if (m.name != n || m.paramTypes.size() != params.size()) continue;
+            bool ok = true;
+            for (size_t i = 0; i < params.size(); ++i) {
+                if (!m.paramTypes[i] || !params[i] ||
+                    !m.paramTypes[i]->equals(*params[i])) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) return &m;
+        }
+        return nullptr;
+    }
+    std::vector<const MethodInfo*> findMethods(const std::string& n) const {
+        std::vector<const MethodInfo*> out;
+        for (const auto& m : methods)
+            if (m.name == n) out.push_back(&m);
+        return out;
+    }
     const FieldInfo* findStaticField(const std::string& n) const {
         for (const auto& f : staticFields) if (f.name == n) return &f;
         return nullptr;
@@ -294,6 +317,23 @@ struct ClassInfo {
     const MethodInfo* findOwnMethod(const std::string& n) const {
         for (const auto& m : methods)
             if (m.name == n && m.ownerClass == name) return &m;
+        return nullptr;
+    }
+    const MethodInfo* findOwnMethod(const std::string& n,
+                                    const std::vector<TypePtr>& params) const {
+        for (const auto& m : methods) {
+            if (m.name != n || m.ownerClass != name) continue;
+            if (m.paramTypes.size() != params.size()) continue;
+            bool ok = true;
+            for (size_t i = 0; i < params.size(); ++i) {
+                if (!m.paramTypes[i] || !params[i] ||
+                    !m.paramTypes[i]->equals(*params[i])) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) return &m;
+        }
         return nullptr;
     }
 

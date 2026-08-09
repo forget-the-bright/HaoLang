@@ -29,6 +29,8 @@
  * ============================================================ */
 void hao_thread_sleep_ms(int32_t ms) {
     if (ms <= 0) return;
+    /* Leave STW set while blocked in OS sleep (Win has no SuspendThread). */
+    hao_gc_os_block_enter();
 #ifdef _WIN32
     hao_win_sleep_ms((uint32_t)ms);
 #else
@@ -37,10 +39,12 @@ void hao_thread_sleep_ms(int32_t ms) {
     req.tv_nsec = (ms % 1000) * 1000000L;
     nanosleep(&req, NULL);
 #endif
+    hao_gc_os_block_leave();
 }
 
 void hao_thread_sleep_ns(int64_t ns) {
     if (ns <= 0) return;
+    hao_gc_os_block_enter();
 #ifdef _WIN32
     hao_win_sleep_ms((uint32_t)(ns / 1000000));
 #else
@@ -49,6 +53,7 @@ void hao_thread_sleep_ns(int64_t ns) {
     req.tv_nsec = ns % 1000000000L;
     nanosleep(&req, NULL);
 #endif
+    hao_gc_os_block_leave();
 }
 
 /* ============================================================
@@ -176,19 +181,27 @@ static void* pool_worker(void* arg) {
         int shutdown = 0;
 #ifdef _WIN32
         hao_win_crit_enter(p->mtx);
-        while (!p->head && !p->shutdown)
+        while (!p->head && !p->shutdown) {
+            /* cond_wait 会放池锁；arm 使空闲 worker 对 STW 可见 */
+            hao_gc_os_block_arm();
             hao_win_cond_wait(p->cv, p->mtx);
+            hao_gc_os_block_disarm();
+        }
         if (p->head) { t = p->head; p->head = t->next; if (!p->head) p->tail = NULL; }
         shutdown = p->shutdown;
         hao_win_crit_leave(p->mtx);
 #else
         pthread_mutex_lock(&p->mtx);
-        while (!p->head && !p->shutdown)
+        while (!p->head && !p->shutdown) {
+            hao_gc_os_block_arm();
             pthread_cond_wait(&p->cv, &p->mtx);
+            hao_gc_os_block_disarm();
+        }
         if (p->head) { t = p->head; p->head = t->next; if (!p->head) p->tail = NULL; }
         shutdown = p->shutdown;
         pthread_mutex_unlock(&p->mtx);
 #endif
+        hao_gc_safepoint();
         if (!t) { if (shutdown) break; else continue; }
         void* env = t->env;
         free(t);

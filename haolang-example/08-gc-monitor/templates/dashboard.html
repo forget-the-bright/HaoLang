@@ -98,7 +98,11 @@
         <div class="value" id="privateBytes">{{privateBytes}}</div>
       </div>
       <div class="metric">
-        <div class="label">GC 托管堆<br>上次 major 后仍存活的用户区字节（对标托管堆）</div>
+        <div class="label">当前堆 heapBytes<br>alloc/sweep 维护的用户区合计（看堆压）</div>
+        <div class="value" id="heapBytes">{{heapBytes}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">上次 major 存活 liveBytes<br>成功 major 后才更新（可能为 0）</div>
         <div class="value" id="liveBytes">{{liveBytes}}</div>
       </div>
       <div class="metric">
@@ -152,6 +156,22 @@
         <div class="label">finalizerSets</div>
         <div class="value" id="finalizerSets">{{finalizerSets}}</div>
       </div>
+      <div class="metric">
+        <div class="label">STW incomplete<br>未齐 park、本轮跳过 sweep（v0.50.4；非全标活）</div>
+        <div class="value" id="stwIncomplete">{{stwIncomplete}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">stwMarkAllFallbacks<br>已废除全标活，应恒为 0</div>
+        <div class="value" id="stwMarkAllFallbacks">{{stwMarkAllFallbacks}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">concurrentMarkCycles<br>并发标记轮次</div>
+        <div class="value" id="concurrentMarkCycles">{{concurrentMarkCycles}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">markAssistSteps<br>分配路径协助标记量（v0.52）</div>
+        <div class="value" id="markAssistSteps">{{markAssistSteps}}</div>
+      </div>
     </div>
 
     <div class="panel">
@@ -195,12 +215,13 @@
     return m + "分" + (s % 60) + "秒";
   }
   function apply(data) {
-    const bytesIds = ["workingSetBytes","privateBytes","liveBytes","nurseryBytes"];
+    const bytesIds = ["workingSetBytes","privateBytes","heapBytes","liveBytes","nurseryBytes"];
     bytesIds.forEach(function (id) {
       document.getElementById(id).textContent = fmtBytes(data[id]);
     });
     ["minorCount","majorCount","handleCount","blockCount","threadCount","gcThreads",
-     "collectCount","finalizerRuns","finalizerSets"].forEach(function (id) {
+     "collectCount","finalizerRuns","finalizerSets","stwIncomplete","stwMarkAllFallbacks",
+     "concurrentMarkCycles","markAssistSteps"].forEach(function (id) {
       document.getElementById(id).textContent = data[id];
     });
     const cpuEl = document.getElementById("cpuPercent");

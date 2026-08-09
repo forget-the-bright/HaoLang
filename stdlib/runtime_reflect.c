@@ -22,10 +22,11 @@ typedef struct {
     const char* visibility;
 } HaoFieldMeta;
 
-/* 注解元数据（v0.29：name + 编码后的参数串） */
+/* 注解元数据（v0.29：name + 编码后的参数串；v0.50：+ 注解类型 meta） */
 typedef struct {
     const char* name;
     const char* value; /* 单值="/path"；多值 "path=/x;method=GET" */
+    void* classMeta;   /* @Anno.meta，供 Class 令牌比对 */
 } HaoAnnoMeta;
 
 /* 方法元数据 */
@@ -59,6 +60,8 @@ typedef struct {
     void* factory;        /* v0.31：ptr (*)(void* argslots)，0～N 参；不可实例化则为 NULL */
     int64_t ctorParamCount;
     const char* const* ctorParamTypes;
+    int64_t isAnnotation; /* v0.50：@interface 注解类型 */
+    void* classMirror;    /* v0.50.1：reflect.Class 单例（可变；meta 为 global） */
 } HaoClassMeta;
 
 typedef void* (*HaoFactoryFn)(void*);
@@ -210,6 +213,86 @@ HaoString* hao_reflect_method_anno_value(void* meta, int32_t mi, int32_t ai) {
     if (ai < 0 || ai >= mm->annoCount || !mm->annos)
         return hao_str_from_cstr("");
     return hao_str_from_cstr(mm->annos[ai].value ? mm->annos[ai].value : "");
+}
+
+void* hao_reflect_anno_class(void* meta, int32_t i) {
+    const HaoClassMeta* m = (const HaoClassMeta*)meta;
+    if (!m || i < 0 || i >= m->annoCount || !m->annos) return NULL;
+    return m->annos[i].classMeta;
+}
+
+void* hao_reflect_method_anno_class(void* meta, int32_t mi, int32_t ai) {
+    const HaoClassMeta* m = (const HaoClassMeta*)meta;
+    if (!m || mi < 0 || mi >= m->methodCount) return NULL;
+    const HaoMethodMeta* mm = &m->methods[mi];
+    if (ai < 0 || ai >= mm->annoCount || !mm->annos) return NULL;
+    return mm->annos[ai].classMeta;
+}
+
+static const HaoClassMeta* find_meta_by_name(const char* name) {
+    if (!name || !name[0]) return NULL;
+    for (const HaoClassMeta** m = g_metas; m && *m; ++m)
+        if ((*m)->name && strcmp((*m)->name, name) == 0) return *m;
+    return NULL;
+}
+
+/* Java Class.isAssignableFrom(other)：other 可否赋给 this（other 是 this 的子类型） */
+int32_t hao_reflect_is_assignable(void* a, void* b) {
+    const HaoClassMeta* A = (const HaoClassMeta*)a;
+    const HaoClassMeta* B = (const HaoClassMeta*)b;
+    if (!A || !B) return 0;
+    for (const HaoClassMeta* cur = B; cur; ) {
+        if (cur == A) return 1;
+        if (!cur->superName || !cur->superName[0]) break;
+        cur = find_meta_by_name(cur->superName);
+    }
+    /* 接口：若 A 名出现在 B 的接口表中 */
+    for (const HaoClassMeta* cur = B; cur; ) {
+        for (int64_t i = 0; i < cur->ifaceCount; ++i) {
+            if (cur->ifaces && cur->ifaces[i] && A->name &&
+                strcmp(cur->ifaces[i], A->name) == 0)
+                return 1;
+        }
+        if (!cur->superName || !cur->superName[0]) break;
+        cur = find_meta_by_name(cur->superName);
+    }
+    return 0;
+}
+
+int32_t hao_reflect_is_interface(void* meta) {
+    (void)meta;
+    /* 接口目前不进 hao_all_metas；Class 令牌仅覆盖 class/annotation/enum */
+    return 0;
+}
+
+int32_t hao_reflect_is_annotation(void* meta) {
+    const HaoClassMeta* m = (const HaoClassMeta*)meta;
+    return (m && m->isAnnotation) ? 1 : 0;
+}
+
+int32_t hao_reflect_meta_hash(void* meta) {
+    uintptr_t p = (uintptr_t)meta;
+    return (int32_t)(p ^ (p >> 32));
+}
+
+/* v0.50.1：每类型一个 reflect.Class 单例（存于 meta.classMirror） */
+void* hao_reflect_class_mirror(void* meta) {
+    if (!meta) return NULL;
+    HaoClassMeta* m = (HaoClassMeta*)meta;
+    return __atomic_load_n(&m->classMirror, __ATOMIC_ACQUIRE);
+}
+
+/* 首次写入赢；失败则返回已有单例。成功时挂 GC 根。 */
+void* hao_reflect_set_class_mirror(void* meta, void* obj) {
+    if (!meta || !obj) return obj;
+    HaoClassMeta* m = (HaoClassMeta*)meta;
+    void* expected = NULL;
+    if (__atomic_compare_exchange_n(&m->classMirror, &expected, obj, 0,
+                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        if (hao_gc_is_heap_ptr(obj)) hao_gc_add_root(obj);
+        return obj;
+    }
+    return expected; /* 已有赢家 */
 }
 
 /* ---- 字段值读写（字符串化）---- */
@@ -376,8 +459,9 @@ int32_t hao_reflect_field_set(void* meta, void* obj, HaoString* fname,
         *(int32_t*)base = hao_unbox_i32(box);
     } else if (t && strcmp(t, "String") == 0) {
         HaoString* ns = hao_str_from_cstr(v);
-        *(HaoString**)base = ns;
+        /* 先 shade 再 publish（对齐 IR / Dijkstra） */
         hao_gc_barrier(obj, ns);
+        *(HaoString**)base = ns;
     } else {
         return 1;
     }

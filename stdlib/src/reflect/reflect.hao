@@ -4,14 +4,30 @@ package reflect;
 
 import exception;
 
-class Type {
+class Class {
     var meta: Long?;
 
     func name(): String {
         return hao_reflect_name(this.meta);
     }
-    func getSuperclass(): String {
+    // Java-aligned
+    func getName(): String { return this.name(); }
+    override func equals(o: Object): Bool {
+        if (!(o is Class)) { return false; }
+        val c = o as Class;
+        return this.meta == c.meta;
+    }
+    override func hashCode(): Int {
+        return hao_reflect_meta_hash(this.meta);
+    }
+    override func toString(): String { return this.getName(); }
+    func getSuperclassName(): String {
         return hao_reflect_super(this.meta);
+    }
+    func getSuperclass(): Class? {
+        val n = hao_reflect_super(this.meta);
+        if (n.length == 0) { return null; }
+        return classForName(n); // 经 classOfMeta，与 TypeName.Class 同单例
     }
     func isAbstract(): Bool {
         return hao_reflect_is_abstract(this.meta) != 0;
@@ -184,18 +200,69 @@ class Type {
         return String.valueOf(this.name()).startsWith(want);
     }
 
-    func hasAnnotationEnding(shortName: String): Bool {
-        if (this.meta == null) { return false; }
+    // Java: isAnnotationPresent(Anno.class) — Class 单例 / meta 身份 (v0.50.1)
+    func isAnnotationPresent(annoClass: Class): Bool {
+        val wantN = annoClass.meta;
+        if (wantN == null) { return false; }
+        val want = wantN!!;
+        val n = this.getAnnotationCount();
         var i = 0;
-        while (i < this.getAnnotationCount()) {
-            val an = this.getAnnotationName(i);
-            if (an == shortName) { return true; }
-            if (String.valueOf(an).endsWith("." + shortName)) { return true; }
-            if (String.valueOf(an).endsWith("$" + shortName)) { return true; }
+        while (i < n) {
+            val am = hao_reflect_anno_class(this.meta, i);
+            if (am != null && am!! == want) { return true; }
             i += 1;
         }
         return false;
     }
+    func getAnnotationValueFor(annoClass: Class): String? {
+        val wantN = annoClass.meta;
+        if (wantN == null) { return null; }
+        val want = wantN!!;
+        val n = this.getAnnotationCount();
+        var i = 0;
+        while (i < n) {
+            val am = hao_reflect_anno_class(this.meta, i);
+            if (am != null && am!! == want) { return this.getAnnotationValue(i); }
+            i += 1;
+        }
+        return null;
+    }
+    func isMethodAnnotationPresent(mi: Int, annoClass: Class): Bool {
+        val wantN = annoClass.meta;
+        if (wantN == null) { return false; }
+        val want = wantN!!;
+        val n = this.getMethodAnnotationCount(mi);
+        var i = 0;
+        while (i < n) {
+            val am = hao_reflect_method_anno_class(this.meta, mi, i);
+            if (am != null && am!! == want) { return true; }
+            i += 1;
+        }
+        return false;
+    }
+    func getMethodAnnotationValueFor(mi: Int, annoClass: Class): String? {
+        val wantN = annoClass.meta;
+        if (wantN == null) { return null; }
+        val want = wantN!!;
+        val n = this.getMethodAnnotationCount(mi);
+        var i = 0;
+        while (i < n) {
+            val am = hao_reflect_method_anno_class(this.meta, mi, i);
+            if (am != null && am!! == want) { return this.getMethodAnnotationValue(mi, i); }
+            i += 1;
+        }
+        return null;
+    }
+    func isAssignableFrom(other: Class): Bool {
+        return hao_reflect_is_assignable(this.meta, other.meta) != 0;
+    }
+    func isInterface(): Bool {
+        return hao_reflect_is_interface(this.meta) != 0;
+    }
+    func isAnnotation(): Bool {
+        return hao_reflect_is_annotation(this.meta) != 0;
+    }
+
 
     // v0.32：接口名后缀匹配（同注解：短名 / . / $）
     func implementsEnding(shortName: String): Bool {
@@ -230,10 +297,41 @@ class Type {
     }
 }
 
-func typeOf(o: Object): Type {
-    val t = new Type();
-    t.meta = hao_reflect_getclass(o);
-    return t;
+// v0.50.1：每类型一个 Class 单例（对齐 Java Class 对象身份）。
+// 正规入口：TypeName.Class / getClass / typeOf / typeAt / classForName。
+// 勿手搓 new Class() 当令牌。
+// 注意：meta 的 Long? 存的是裸 meta 指针（非 hao_box_i64）；勿对 m 做
+// `if (m != null)` 智能转换，否则会按装箱 Long unbox 而崩溃。
+func classOfMeta(m: Long?): Class {
+    val existing = hao_reflect_class_mirror(m);
+    if (existing != null) {
+        return existing!! as Class;
+    }
+    val t = new Class();
+    t.meta = m;
+    // m==null 时 set 直接返回 t 且不缓存
+    val canon = hao_reflect_set_class_mirror(m, t);
+    return canon as Class;
+}
+
+func classForName(name: String): Class? {
+    val n = hao_reflect_type_count();
+    var i = 0;
+    while (i < n) {
+        val t = typeAt(i);
+        if (t.getName() == name) { return t; }
+        // also accept short suffix match for nested lookup
+        if (String.valueOf(t.getName()).endsWith("." + name)) { return t; }
+        if (String.valueOf(t.getName()).endsWith("$" + name)) { return t; }
+        i += 1;
+    }
+    return null;
+}
+
+func forName(name: String): Class? { return classForName(name); }
+
+func typeOf(o: Object): Class {
+    return classOfMeta(hao_reflect_getclass(o));
 }
 
 // v0.30：遍历本进程链接进的全部类元数据（含嵌套包）
@@ -241,10 +339,8 @@ func typeCount(): Int {
     return hao_reflect_type_count();
 }
 
-func typeAt(i: Int): Type {
-    val t = new Type();
-    t.meta = hao_reflect_type_at(i);
-    return t;
+func typeAt(i: Int): Class {
+    return classOfMeta(hao_reflect_type_at(i));
 }
 
 // 把用户路径规范成 IR 包前缀，如 demo/web → demo$web$
@@ -295,8 +391,8 @@ func normalizePackagePath(path: String): String {
 // v0.32：可扩展包扫描——按包路径 + 调用方谓词筛选类型表。
 // nested=true：含嵌套子包（demo/web 含 demo/web/api）；false：仅精确包。
 // 隐患：未 import 的包不会进二进制，扫不到；谓词勿假定所有类可 new。
-func findTypes(packagePath: String, nested: Bool, pred: Func<Type, Bool>): [Type] {
-    var out: [Type] = [];
+func findTypes(packagePath: String, nested: Bool, pred: Func<Class, Bool>): [Class] {
+    var out: [Class] = [];
     var i = 0;
     val total = typeCount();
     while (i < total) {
@@ -313,12 +409,12 @@ func findTypes(packagePath: String, nested: Bool, pred: Func<Type, Bool>): [Type
 }
 
 // 便捷：嵌套扫描（最常见）
-func findTypesNested(packagePath: String, pred: Func<Type, Bool>): [Type] {
+func findTypesNested(packagePath: String, pred: Func<Class, Bool>): [Class] {
     return findTypes(packagePath, true, pred);
 }
 
 // 便捷：精确包
-func findTypesExact(packagePath: String, pred: Func<Type, Bool>): [Type] {
+func findTypesExact(packagePath: String, pred: Func<Class, Bool>): [Class] {
     return findTypes(packagePath, false, pred);
 }
 
@@ -368,3 +464,12 @@ extern func dblBits(d: Double): Long = "hao_reflect_dbl_bits";
 extern func bitsDbl(i: Long): Double = "hao_reflect_bits_dbl";
 extern func fltBits(f: Float): Long = "hao_reflect_flt_bits";
 extern func bitsFlt(i: Long): Float = "hao_reflect_bits_flt";
+
+extern func hao_reflect_anno_class(m: Long?, i: Int): Long? = "hao_reflect_anno_class";
+extern func hao_reflect_method_anno_class(m: Long?, mi: Int, ai: Int): Long? = "hao_reflect_method_anno_class";
+extern func hao_reflect_is_assignable(a: Long?, b: Long?): Int = "hao_reflect_is_assignable";
+extern func hao_reflect_is_interface(m: Long?): Int = "hao_reflect_is_interface";
+extern func hao_reflect_is_annotation(m: Long?): Int = "hao_reflect_is_annotation";
+extern func hao_reflect_meta_hash(m: Long?): Int = "hao_reflect_meta_hash";
+extern func hao_reflect_class_mirror(m: Long?): Object? = "hao_reflect_class_mirror";
+extern func hao_reflect_set_class_mirror(m: Long?, obj: Object): Object = "hao_reflect_set_class_mirror";

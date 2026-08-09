@@ -1,0 +1,25 @@
+import reflect;
+
+class Foo {
+    var x: Int = 0;
+    constructor() { this.x = 1; }
+}
+
+@interface ControllerProbe {
+    val value: String = "";
+}
+
+func main() {
+    val a = Foo.Class;
+    val b = (new Foo()).getClass();
+    val c = reflect.typeOf(new Foo());
+    val a2 = Foo.Class;
+    // v0.50.1：单例身份（== 为指针相等，不再靠 meta 特判）
+    if (a == b && b == c && a == a2 && a.equals(c)) {
+        fmt.println(a.getName());
+        fmt.println(a.isAnnotation());
+        fmt.println(ControllerProbe.Class.isAnnotation());
+    } else {
+        fmt.println("fail");
+    }
+}

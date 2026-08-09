@@ -40,6 +40,8 @@ void* gc_alloc(size_t n);
 
 /* 分代写屏障：dst 可为堆对象任意内指针；old→young 时记入记忆集。 */
 void hao_gc_barrier(void* dst, void* new_val);
+/* MARK 期 shade 指针（供 array 扩容 memcpy 后补标；非 MARK 为 no-op）。 */
+void hao_gc_shade(void* p);
 
 /* 协作式 safepoint：STW 请求时溅射 GPR 并 park。勿持 GC 锁调用。 */
 void hao_gc_safepoint(void);
@@ -55,8 +57,16 @@ void gc_init(void);
 void hao_gc_add_root(void* p);
 /* 是否指向某 GC 块用户区（持 GC 锁查堆链；channel 等只对堆指针挂根） */
 int8_t hao_gc_is_heap_ptr(void* p);
-/* STW 未齐 park 走全标活保底的累计次数 */
+/* 已废除全标活（恒 0）；请用 hao_gc_stw_incomplete */
 int64_t hao_gc_stw_mark_all_fallbacks(void);
+/* STW 未齐 park、本轮跳过 sweep 的累计次数（v0.50.4+） */
+int64_t hao_gc_stw_incomplete(void);
+/* 已进入并发标记窗口的回收轮次（v0.51+） */
+int64_t hao_gc_concurrent_mark_cycles(void);
+/* 堆上用户区字节合计（alloc/sweep 维护；比 liveBytes 更能反映当前堆压） */
+int64_t hao_gc_heap_bytes(void);
+/* mark assist 累计推进的 grey 块数（v0.52+） */
+int64_t hao_gc_mark_assist_steps(void);
 void hao_gc_remove_root(void* p);
 
 /* 注册静态/全局 ptr 槽地址：标记时解引用 *slot（类静态 String/对象字段等）。*/
@@ -79,6 +89,11 @@ int64_t hao_gc_minor_count(void);
 int64_t hao_gc_major_count(void);
 int64_t hao_gc_nursery_bytes(void);
 int64_t hao_gc_registered_threads(void);
+/*
+ * 一次持锁写入 Hao 对象字段（槽 0=vtable；槽 1..16 见 gc.GcStats 声明序）。
+ * 供 /api/gc 等避免十几次独立加锁。
+ */
+void hao_gc_stats(void* obj);
 
 /* 进程资源快照（runtime_proc.c；供 os.Process，对标 .NET Process） */
 int64_t hao_proc_working_set_bytes(void);
@@ -91,6 +106,12 @@ int64_t hao_proc_uptime_ms(void);
 /* 注册/注销当前线程（GC v2 STW）*/
 void gc_register_thread(void);
 void gc_unregister_thread(void);
+/* Mark parked across OS block (Sleep/accept/recv); stack remains scannable. */
+void hao_gc_os_block_enter(void);
+void hao_gc_os_block_leave(void);
+/* 持锁即将 cond_wait：只挂 park，勿 safepoint（见 runtime_thread 池 worker）。 */
+void hao_gc_os_block_arm(void);
+void hao_gc_os_block_disarm(void);
 
 /* channel（runtime_channel.c）：句柄在 Long? 盒；载荷 i64；堆指针入队挂根 */
 int8_t  hao_chan_make(int64_t* unit, int32_t capacity);
@@ -184,6 +205,9 @@ HaoString* hao_str_byte_slice(HaoString* s, int32_t start, int32_t end);
 int32_t hao_str_byte_len(HaoString* s);
 /* 字节下标 indexOf；from 起搜；未找到 -1 */
 int32_t hao_str_byte_index_of(HaoString* s, HaoString* sub, int32_t from);
+/* 码点下标 indexOf；from 起搜；未找到 -1（Java 对齐） */
+int32_t hao_str_index_of_from(HaoString* s, HaoString* sub, int32_t from);
+int32_t hao_str_index_of(HaoString* s, HaoString* sub);
 
 void* hao_parse_int(HaoString* s);
 void* hao_parse_long(HaoString* s);

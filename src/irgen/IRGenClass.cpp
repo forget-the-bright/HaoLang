@@ -482,16 +482,13 @@ ClassInfoPtr IRGen::instantiateClass(const std::string& templateName,
     currentTypeParams_ = savedParams;
     currentPkgPrefix_  = savedPrefix;
 
-    // 泛型实例若实现接口，需要虚表；此处简化处理：
-    // 仅当实现接口时才建虚表，并按接口方法的全局槽位填充。
-    if (!inst->interfaceNames.empty()) {
-        // 虚表在 emitVTables 阶段统一生成，这里只标记
-        inst->hasVTable = true;
-        inst->vtableIRName = "@" + instName + ".vtable";
-    }
+    // 泛型实例与普类一致：一律虚表（Object.getClass / Class 令牌 / is/as）
+    inst->hasVTable = true;
+    inst->vtableIRName = "@" + instName + ".vtable";
     // 有虚表则字段槽位整体后移一位（槽位 0 留给虚表指针）。
     // 须在 genPendingInstantiations 生成 ctor/method 之前完成。
     vtableShiftFields(*inst);
+    ensureClassStaticField(inst);
 
     pendingInstances_.push_back(inst);
     return inst;
@@ -664,7 +661,7 @@ void IRGen::resolveInheritance() {
         std::vector<MethodInfo> mergedM = base->methods;
         for (auto& m : ci->methods) {
             auto it = std::find_if(mergedM.begin(), mergedM.end(),
-                                   [&](const MethodInfo& x) { return x.name == m.name; });
+                                   [&](const MethodInfo& x) { return x.name == m.name && x.signatureMatches(m); });
             if (it == mergedM.end()) {
                 // 本类新增的方法。
                 // 标了 override 但基类没有同名方法时，它可能是在实现接口
@@ -755,11 +752,16 @@ void IRGen::assignVtableSlots() {
             hasSubclass.insert(ci->baseName);
 
     // 找出方法 mname 在类 c 的继承链上最早的声明者
-    auto rootDeclarer = [&](const ClassInfo* c, const std::string& mname) {
+    auto methodSlotKey = [&](const ClassInfo* c, const MethodInfo& m) {
+        // irName is unique per overload (@Class.m / @Class.m$Int); use as slot key root
+        // Walk bases for same signature to share slot on override
         std::string root = c->name;
         for (const ClassInfo* p = c; p; p = p->base)
-            if (p->findMethod(mname)) root = p->name;
-        return root;
+            if (p->findMethod(m.name, m.paramTypes)) root = p->name;
+        std::string leaf = m.name;
+        auto pos = m.irName.rfind('.');
+        if (pos != std::string::npos) leaf = m.irName.substr(pos + 1);
+        return root + "." + leaf;
     };
 
     std::map<std::string, int> methodSlots;
@@ -770,7 +772,7 @@ void IRGen::assignVtableSlots() {
 
         for (auto& m : ci->methods) {
             if (m.vtableSlot >= 0) continue;         // 接口方法已分配
-            std::string key = rootDeclarer(ci.get(), m.name) + "." + m.name;
+            std::string key = methodSlotKey(ci.get(), m);
             if (!methodSlots.count(key)) methodSlots[key] = nextSlot++;
         }
     }
@@ -781,7 +783,7 @@ void IRGen::assignVtableSlots() {
         if (!inHierarchy) continue;
         for (auto& m : ci->methods) {
             if (m.vtableSlot >= 0) continue;
-            auto it = methodSlots.find(rootDeclarer(ci.get(), m.name) + "." + m.name);
+            auto it = methodSlots.find(methodSlotKey(ci.get(), m));
             if (it != methodSlots.end()) m.vtableSlot = it->second;
         }
     }
@@ -900,11 +902,12 @@ void IRGen::emitClassMeta() {
         em_.addGlobal("%r.HaoFieldMeta = type { ptr, ptr, i64, i64, i64, ptr }");
         // MethodMeta：+ annos ptr + annoCount（v0.29 方法级注解）
         em_.addGlobal("%r.HaoMethodMeta = type { ptr, ptr, ptr, i64, ptr, i64, ptr, ptr, i64 }");
-        // AnnoMeta：name + value（编码参数串）
-        em_.addGlobal("%r.HaoAnnoMeta  = type { ptr, ptr }");
-        // ClassMeta：末尾 + factory + ctorParamCount + ctorParamTypes（v0.31 多参 new）
+        // AnnoMeta：name + value + annoClassMeta（v0.50 Class 令牌）
+        em_.addGlobal("%r.HaoAnnoMeta  = type { ptr, ptr, ptr }");
+        // ClassMeta：+ factory + ctorParamCount + ctorParamTypes + isAnnotation（v0.50）
+        // + classMirror（v0.50.1 Class 单例；meta 须为 global 方可写入）
         em_.addGlobal("%r.HaoClassMeta = type { ptr, ptr, ptr, i64, ptr, i64, ptr, "
-                      "i64, ptr, i64, ptr, i64, i64, ptr, i64, ptr }");
+                      "i64, ptr, i64, ptr, i64, i64, ptr, i64, ptr, i64, ptr }");
     }
 
     auto visStrM = [](MethodInfo::Vis v, bool isStatic) {
@@ -976,8 +979,15 @@ void IRGen::emitClassMeta() {
                                  const std::string& arrName) -> size_t {
             std::vector<std::string> elems;
             for (const auto& a : annos) {
+                std::string metaPtr = "null";
+                if (!a.className.empty() && classes_.count(a.className)) {
+                    auto aci = classes_[a.className];
+                    if (aci && aci->hasVTable)
+                        metaPtr = "@" + a.className + ".meta";
+                }
                 elems.push_back("{ ptr " + em_.internString(a.name) + ", ptr " +
-                                em_.internString(encodeAnnoValue(a)) + " }");
+                                em_.internString(encodeAnnoValue(a)) +
+                                ", ptr " + metaPtr + " }");
             }
             std::string def;
             if (elems.empty()) {
@@ -1089,7 +1099,8 @@ void IRGen::emitClassMeta() {
         std::string metaName = "@" + cname + ".meta";
         std::string superRef = ci->baseName.empty() ? "null"
                                                     : em_.internString(ci->baseName);
-        em_.addGlobal(metaName + " = internal unnamed_addr constant %r.HaoClassMeta { "
+        // global（非 constant）：末字段 classMirror 运行时写入 Class 单例
+        em_.addGlobal(metaName + " = internal global %r.HaoClassMeta { "
             "ptr " + em_.internString(cname) + ", ptr " + superRef + ", ptr @" +
             cname + ".meta_ifaces, i64 " + std::to_string(ifaceStrs.size()) +
             ", ptr @" + cname + ".meta_fields, i64 " + std::to_string(fieldStrs.size()) +
@@ -1098,7 +1109,9 @@ void IRGen::emitClassMeta() {
             ", ptr " + ci->vtableIRName + ", i64 " + (ci->isAbstract ? "1" : "0") +
             ", i64 " + (ci->isEnum ? "1" : "0") + ", ptr " + factoryRef +
             ", i64 " + std::to_string(ci->ctorParamTypes.size()) +
-            ", ptr @" + cname + ".meta_ctor_params }");
+            ", ptr @" + cname + ".meta_ctor_params" +
+            ", i64 " + (ci->isAnnotation ? "1" : "0") +
+            ", ptr null }");
         metaRefs.push_back(metaName);
     }
 
@@ -1766,12 +1779,14 @@ void IRGen::collectClassMembers(const SourceUnit& u) {
                     ci->staticMethods.push_back(mi);
                     continue;
                 }
-                mi.irName = "@" + cname + "." + mi.name;
-
-                if (ci->findMethod(mi.name)) {
-                    error(fn, "方法 '" + mi.name + "' 在类 '" + shortName + "' 中重复定义");
+                                // Instance methods: overload by param signature (IR suffix like static)
+                if (ci->findMethod(mi.name, mi.paramTypes)) {
+                    error(fn, "方法 '" + mi.name + "' 在类 '" + shortName +
+                               "' 中重复定义（参数签名相同）");
                     continue;
                 }
+                bool needsSuffix = !ci->findMethods(mi.name).empty();
+                mi.irName = instanceMethodIRName(cname, mi.name, mi.paramTypes, needsSuffix);
                 ci->methods.push_back(mi);
                 continue;
             }
@@ -2024,8 +2039,8 @@ void IRGen::genMethod(HaoLangParser::FuncDeclContext* fn, const ClassInfoPtr& ci
     }
     // 必须取本类自己声明的版本：findMethod 会返回扁平化后的项，
     // 若该方法继承自父类，其 irName 指向父类实现，用它生成会重复定义符号。
-    const MethodInfo* mi = ci->findOwnMethod(mname);
-    if (!mi) mi = ci->findMethod(mname);
+    const MethodInfo* mi = ci->findOwnMethod(mname, declParams);
+    if (!mi) mi = ci->findMethod(mname, declParams);
     if (!mi) mi = ci->findStaticMethod(mname, declParams);
     if (!mi) mi = ci->findStaticMethod(mname);
     if (!mi) return;
@@ -2504,6 +2519,12 @@ void IRGen::markStaticInitFlags() {
             continue;
         }
         for (const auto& f : ci->staticFields) {
+            // 合成 Class 无 defaultExpr，亦须 ensureInit
+            if (f.name == "Class" && f.type && f.type->kind == TypeKind::Class &&
+                f.type->className == "reflect$Class" && !f.defaultExpr) {
+                ci->hasStaticInit = true;
+                break;
+            }
             if (!f.defaultExpr) continue;
             auto e = evalStaticInit(
                 static_cast<antlr4::tree::ParseTree*>(f.defaultExpr), f.type->kind);
@@ -2516,10 +2537,46 @@ void IRGen::markStaticInitFlags() {
     }
 }
 
+void IRGen::ensureClassStaticField(const ClassInfoPtr& ci) {
+    if (!ci || ci->isGenericTemplate() || !ci->hasVTable) return;
+    if (!lookupClass("reflect$Class")) return;
+    if (const FieldInfo* ex = ci->findStaticField("Class")) {
+        if (!ex->type || ex->type->kind != TypeKind::Class ||
+            ex->type->className != "reflect$Class") {
+            diags_.error(ex->line, ex->column,
+                         "静态字段 'Class' 为编译器保留名，类型须为 reflect.Class");
+        }
+        return;
+    }
+    FieldInfo sf;
+    sf.name = "Class";
+    sf.type = Type::makeClass("reflect$Class");
+    sf.isStatic = true;
+    sf.isMutable = false;
+    sf.ownerClass = ci->name;
+    sf.visibility = FieldInfo::Vis::Public;
+    sf.line = ci->line;
+    sf.column = ci->column;
+    ci->staticFields.push_back(sf);
+    ci->hasStaticInit = true;
+}
+
+void IRGen::synthesizeClassStaticFields() {
+    for (auto& [cname, ci] : classes_) {
+        (void)cname;
+        ensureClassStaticField(ci);
+    }
+}
+
 void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
     bool hasCtor = ci->staticCtorNode != nullptr;
     bool hasRuntimeField = false;
+    bool hasClassToken = false;
     for (const auto& f : ci->staticFields) {
+        if (f.name == "Class" && f.type && f.type->kind == TypeKind::Class &&
+            f.type->className == "reflect$Class" && !f.defaultExpr) {
+            hasClassToken = true;
+        }
         if (!f.defaultExpr) continue;
         auto e = evalStaticInit(
             static_cast<antlr4::tree::ParseTree*>(f.defaultExpr), f.type->kind);
@@ -2529,7 +2586,7 @@ void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
             break;
         }
     }
-    if (!hasCtor && !hasRuntimeField) return;
+    if (!hasCtor && !hasRuntimeField && !hasClassToken) return;
     ci->hasStaticInit = true;
 
     em_.addGlobal("@" + ci->name + ".initguard = private global i32 0");
@@ -2546,6 +2603,14 @@ void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
 
     em_.emitRaw("define void @" + ci->name + ".staticinit() {");
     em_.emitLabel("entry");
+
+    // 合成 TypeName.Class ← classOfMeta(@T.meta)（枚举/普通类共用）
+    if (hasClassToken) {
+        std::string tok = em_.nextTemp();
+        em_.emit(tok + " = call ptr @reflect$classOfMeta(ptr @" + ci->name +
+                 ".meta)");
+        em_.emit("store ptr " + tok + ", ptr @" + ci->name + ".Class");
+    }
 
     if (ci->isEnum) {
         // ---- 枚举：创建各常量实例并存入静态字段 ----

@@ -15,7 +15,7 @@ HaoLang（好语言）是**静态类型、编译至原生机器码**的语言：
 | 维度 | 选择 |
 |------|------|
 | 执行模型 | AOT → LLVM IR → clang/lld → 单文件原生可执行文件 |
-| 内存 | 自带 GC（v3：精确堆 + 分代 + 写屏障 + 协作 STW） |
+| 内存 | 自带 GC（v3：精确堆 + 分代 + **Dijkstra + 软 STW/mark assist**；清扫仍短停顿） |
 | 包模型 | **目录即包**（Go 风格），清单用 `haoproject.json` |
 | 并发关键字 | **`haoroutine`**（禁止称 goroutine） |
 | 泛型 | **单态化**（C++/Rust 路线，非 JVM 擦除） |
@@ -326,6 +326,21 @@ class Person { }
 
 - 定义用 Java 风格 `@interface`；使用 `@Name(args)`。
 - 反射可读；MVC 使用 `@Controller` / `@GetMapping` 等。
+- **v0.50**：注解身份用 `GetMapping.Class` 等令牌比对（`isAnnotationPresent`），勿再靠短名字符串后缀。
+
+### 10.3b Class 令牌（v0.50～v0.50.2，对标 Java `Class`）
+
+```hao
+import reflect;
+val c = Foo.Class;                 // 每类型合成的 static Class 常量
+val d = (new Foo()).getClass();  // Object.getClass()
+fmt.println(c == d);               // 同类型同一 Class 单例（指针相等）
+fmt.println(c.isAnnotationPresent(Controller.Class));
+```
+
+- 编译器为每个类合成 `static Class: reflect.Class`（对标 Java 类字面量；属 Object 类型体系 API，**不是**共用 `Object` 上一个 static）。
+- `TypeName.Class` / `getClass` / `typeOf` / `typeAt` / `classForName` 返回**每类型单例**。勿手搓 `new Class()` 当令牌。
+- 实例方法可按参数签名重载（与 static/顶层一致）；完全相同签名才报重复定义。
 
 ### 10.4 对标
 
@@ -481,14 +496,17 @@ ch.trySendInt(1);
 
 ```hao
 import reflect;
-val t = reflect.typeOf(obj);
+val t = Foo.Class;                 // 或 obj.getClass() / typeOf(obj)
 t.getField(obj, "age");
 // invoke：参数槽 [Long]，按签名编组
+t.isAnnotationPresent(GetMapping.Class);
 ```
 
 | 能力 | 状态 |
 |------|------|
 | 类型名/父类/接口/字段/方法/注解 | ✅ |
+| `TypeName.Class` / `getClass` / Class 单例 | ✅（v0.50.1） |
+| 注解按 Class 令牌匹配 | ✅（v0.50） |
 | 字段读写（基本类型与 String） | ✅ |
 | 通用 `invoke` / `invokeFloat` | ✅ |
 | 运行时动态定义类 | ⬜ 不做将就 |
@@ -612,3 +630,26 @@ hao run hello.hao
 | `[...arr?]` | 禁展开可空数组 |
 | `Func?` 字段 | 禁止 |
 | `Int?` 赋给 `Long?` | 异宽可空 |
+
+## Socket 读契约（v0.49.4，对齐 Go / Java）
+
+| 结果 | HaoLang | Go | Java |
+|------|---------|----|------|
+| 有数据 | `recv` → 非空 `String` | `n>0` | `read>0` |
+| EOF | `recv` → 空串 | `io.EOF` | `-1` |
+| 超时/错误 | `recv` → `null` | `error` | `IOException` / `SocketTimeoutException` |
+
+另：`recvExact(n)` 对标 `io.ReadFull` / `readNBytes`；`ServerSocket.accept(): Socket?` 与出参版 `accept(Socket)` 重载并存；`setReadTimeout` / `setWriteTimeout`（`setTimeout` 仍同时设读写）。`lang.String.indexOf(sub, from)` 为码点起搜（v0.50.1）。
+
+## HTTP / Netty OIO 子集（v0.50.3）
+
+| 组件 | 作用 |
+|------|------|
+| `net.ByteBuf` | 连接入站累积；粘包时余量保留 |
+| `Http.readOneMessage(sock, buf, …)` | 取出**一条**完整 HTTP 消息 |
+| `Channel` / `ChannelPipeline` / `ChannelHandler` | 入站链；`fireChannelRead` 产出 `HttpResponse` |
+| `EventLoopGroup` | worker 线程池 |
+| `HttpServer.serveBossWorkers` / `HttpApp.serveBossWorkers` | boss 只 accept，worker 处理连接 |
+
+对标 Netty **OIO**（阻塞 socket + boss/worker）。**NIO poll EventLoop** 尚未交付，勿假称全量 Netty。
+

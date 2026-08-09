@@ -36,7 +36,7 @@ func pkgScanTest() {
 
     // ---- 注解条件：@Service ----
     val services = reflect.findTypesNested("corp/service", { t ->
-        t.hasAnnotationEnding("Service")
+        t.isAnnotationPresent(marker.Service.Class)
     });
     fmt.println(services.length >= 2);                    // true
 
@@ -47,19 +47,19 @@ func pkgScanTest() {
     fmt.println(plugins.length >= 1);                     // true
     var pluginSvc = false;
     if (plugins.length > 0) {
-        pluginSvc = plugins[0].hasAnnotationEnding("Service");
+        pluginSvc = plugins[0].isAnnotationPresent(marker.Service.Class);
     }
     fmt.println(pluginSvc);                               // true
 
     // ---- 组合谓词：Service 且可无参 new ----
     val newable = reflect.findTypesNested("corp/service", { t ->
-        t.hasAnnotationEnding("Service") && t.canNewInstance()
+        t.isAnnotationPresent(marker.Service.Class) && t.canNewInstance()
     });
     fmt.println(newable.length >= 2);                     // true
 
     // ---- 排除无注解：corp/skip 有类，但 Service 谓词为空 ----
     val skipSvc = reflect.findTypesNested("corp/skip", { t ->
-        t.hasAnnotationEnding("Service")
+        t.isAnnotationPresent(marker.Service.Class)
     });
     fmt.println(skipSvc.length == 0);                     // true
     val skipAll = reflect.findTypesNested("corp/skip", { t -> true });
@@ -75,16 +75,16 @@ func pkgScanTest() {
         fmt.println("pkgscan-listen-fail");
         return;
     }
-    val nWeb = app.scanWhere("corp/web", { t -> t.hasAnnotationEnding("Controller") });
+    val nWeb = app.scanWhere("corp/web", { t -> t.isAnnotationPresent(net.Controller.Class) });
     fmt.println(nWeb >= 2);                               // true（ctrl + admin）
 
     val app2 = new net.HttpApp();
     val nExact = app2.scanWhereExact("corp/web/ctrl", { t ->
-        t.hasAnnotationEnding("Controller")
+        t.isAnnotationPresent(net.Controller.Class)
     });
     fmt.println(nExact >= 1);                             // true
     val nExactAdminMiss = app2.scanWhereExact("corp/web", { t ->
-        t.hasAnnotationEnding("Controller")
+        t.isAnnotationPresent(net.Controller.Class)
     });
     fmt.println(nExactAdminMiss == 0);                    // true（web 本身无类）
 

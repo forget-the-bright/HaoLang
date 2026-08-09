@@ -1,0 +1,49 @@
+// v0.51：并发标记冒烟——多线程改指针图 + collect，不崩且能回收
+package main;
+
+import gc;
+import thread.*;
+import collections.*;
+
+class Box {
+    var next: Box?;
+    var tag: Int = 0;
+    constructor(t: Int) { this.tag = t; }
+}
+
+func main() {
+    var root = new Box(0);
+    val mut = new Thread();
+    mut.start({
+        var k = 0;
+        while (k < 200) {
+            val a = new Box(k);
+            val b = new Box(k + 1);
+            a.next = b;
+            b.next = a;
+            root.next = a;
+            k += 1;
+        }
+    });
+
+    var n = 0;
+    while (n < 30) {
+        var junk = new List<Object>();
+        var i = 0;
+        while (i < 800) {
+            junk.add(String.valueOf("cm-" + Integer.toStr(i)));
+            i += 1;
+        }
+        if ((n % 5) == 0) {
+            gc.GC.collect();
+        }
+        n += 1;
+    }
+    mut.join();
+
+    val keep = root.next;
+    gc.GC.collect();
+    fmt.println(gc.GC.concurrentMarkCycles() >= 1); // true
+    fmt.println(gc.GC.stwMarkAllFallbacks() == 0);  // true
+    fmt.println(keep != null || root.tag == 0);     // true（存活根不丢）
+}

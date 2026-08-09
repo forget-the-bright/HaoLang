@@ -12,7 +12,8 @@ class GcSnapshot {
     var privateBytes: Long = 0;      // 专用内存：进程独占提交
 
     // ---- GC 托管堆（对标 GC 堆，非 OS 工作集）----
-    var liveBytes: Long = 0;         // 上次 major 后仍存活的用户区字节 ≈ 托管堆
+    var liveBytes: Long = 0;         // 上次成功 major 后存活（可能为 0）
+    var heapBytes: Long = 0;         // 当前堆用户区合计（看堆压用这个）
     var nurseryBytes: Long = 0;      // 新生代已分配压力
     var threshold: Long = 0;
     var allocatedSinceGc: Long = 0;
@@ -24,6 +25,10 @@ class GcSnapshot {
     var collectCount: Long = 0;
     var finalizerRuns: Long = 0;
     var finalizerSets: Long = 0;
+    var stwIncomplete: Long = 0;     // STW 未齐次数（v0.53 终止未齐则 abort）
+    var stwMarkAllFallbacks: Long = 0; // 已废除全标活，恒 0
+    var concurrentMarkCycles: Long = 0; // 并发标记轮次
+    var markAssistSteps: Long = 0;   // mark assist 推进量
 
     // ---- CPU / 线程 / 句柄 / 运行时长 ----
     var cpuPercent: Int = 0;         // 0～100；首次采样可能为 0
@@ -36,7 +41,7 @@ class GcSnapshot {
     var usagePct: Int = 0;
     var summary: String = "";
     var note: String = "";
-    var engine: String = "HaoLang GC v3（young/old 二分代）+ os.Process";
+    var engine: String = "HaoLang GC v3（v0.53.1 IR↔GC shade）+ os.Process";
 
     constructor() {
         this.refresh();
@@ -57,21 +62,34 @@ class GcSnapshot {
             this.cpuPercent = cpu;
         }
 
-        this.liveBytes = gc.GC.liveBytes();
-        this.nurseryBytes = gc.GC.nurseryBytes();
-        this.threshold = gc.GC.threshold();
-        this.allocatedSinceGc = gc.GC.allocatedSinceGc();
-        this.blockCount = gc.GC.blockCount();
-        this.minorCount = gc.GC.minorCount();
-        this.majorCount = gc.GC.majorCount();
-        this.collectCount = gc.GC.collectCount();
-        this.finalizerRuns = gc.GC.finalizerRuns();
-        this.finalizerSets = gc.GC.finalizerSets();
-        this.gcThreads = gc.GC.registeredThreads();
-        this.summary = gc.GC.summary();
-        this.note = "对标说明：工作集/专用内存/句柄/OS线程/CPU/时长来自 os.Process；"
-        + "liveBytes≈托管堆；minor≈Gen0、major≈Gen2（无 Gen1）；"
-        + "栈为保守扫描，无逐帧堆栈 API。";
+        // v0.53：一次持锁快照，避免十几次 gc_lock_coop
+        val g = gc.GC.stats();
+        this.liveBytes = g.liveBytes;
+        this.heapBytes = g.heapBytes;
+        this.nurseryBytes = g.nurseryBytes;
+        this.threshold = g.threshold;
+        this.allocatedSinceGc = g.allocatedSinceGc;
+        this.blockCount = g.blockCount;
+        this.minorCount = g.minorCount;
+        this.majorCount = g.majorCount;
+        this.collectCount = g.collectCount;
+        this.finalizerRuns = g.finalizerRuns;
+        this.finalizerSets = g.finalizerSets;
+        this.stwIncomplete = g.stwIncomplete;
+        this.stwMarkAllFallbacks = g.stwMarkAllFallbacks;
+        this.concurrentMarkCycles = g.concurrentMarkCycles;
+        this.markAssistSteps = g.markAssistSteps;
+        this.gcThreads = g.registeredThreads;
+        this.summary = $"GC[v3] live={this.liveBytes}B heap={this.heapBytes}B threshold={this.threshold}B"
+            + $" allocatedSince={this.allocatedSinceGc}B blocks={this.blockCount}"
+            + $" collects={this.collectCount} minor={this.minorCount} major={this.majorCount}"
+            + $" stwIncomplete={this.stwIncomplete} concurrentMark={this.concurrentMarkCycles}"
+            + $" markAssist={this.markAssistSteps}";
+        if (this.note.length == 0) {
+            this.note = "对标说明：工作集/专用内存来自 os.Process；"
+                + "heapBytes=当前堆压；liveBytes=上次成功 major 后存活；"
+                + "v0.53 可达性闭环：终止未齐则 abort MARK，不可达对象可被后续轮次回收。";
+        }
         var pct: Int = 0;
         if (this.threshold > 0) {
             val thr = this.threshold;

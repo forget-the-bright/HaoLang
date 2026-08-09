@@ -7,7 +7,16 @@
 //    toString()          "<0x地址>"
 //  覆写 equals 时通常也要覆写 hashCode（与 Java/C# 一致），
 //  以保证「相等对象哈希一致」。Map/Set 的对象 key 依赖这两个方法。
+//
+//  类型身份（对标 Java Class / 类字面量）：
+//    - 每个类由编译器合成 static val Class: reflect.Class（每类型一份单例）
+//    - 访问：Foo.Class（静态常量，经 ensureInit 填充）
+//    - 实例：obj.getClass()（与 Foo.Class 同一对象）
+//    语义上属 Object 类型体系的固有 API；实现上不是「共用 Object 上一个
+//    static」（否则所有子类都会拿到 Object 的 Class）。
 package object;
+
+import reflect;
 
 class Object {
     func hashCode(): Int {
@@ -18,6 +27,10 @@ class Object {
     }
     func toString(): String {
         return hao_object_toString(this);
+    }
+    // Java Object.getClass()
+    func getClass(): reflect.Class {
+        return reflect.typeOf(this);
     }
 }
 

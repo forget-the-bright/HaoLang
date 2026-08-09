@@ -51,6 +51,14 @@ func stringCharTest() {
     fmt.println(w.charAt(0));       // a
     fmt.println(String.valueOf("中文").length()); // 2
 
+    // v0.50.1：indexOf(sub, from) 码点起搜
+    fmt.println(w.indexOf("cd"));           // 2
+    fmt.println(w.indexOf("cd", 2));        // 2
+    fmt.println(w.indexOf("cd", 3));        // -1
+    fmt.println(w.indexOf("", 3));          // 3
+    fmt.println(w.indexOf("a", 100));       // -1
+    fmt.println(String.valueOf("你好Hi").indexOf("Hi", 1)); // 2
+
     // 反向：越界索引
     val bad: Char = "ab"[9];
     fmt.println(bad == -1);   // true

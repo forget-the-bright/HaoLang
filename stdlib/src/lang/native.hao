@@ -22,6 +22,7 @@ extern func hao_str_len(s: String): Long = "hao_str_len";
 extern func hao_str_is_empty(s: String): Bool = "hao_str_is_empty";
 extern func hao_str_substring(s: String, start: Int, end: Int): String = "hao_str_substring";
 extern func hao_str_index_of(s: String, sub: String): Int = "hao_str_index_of";
+extern func hao_str_index_of_from(s: String, sub: String, from: Int): Int = "hao_str_index_of_from";
 extern func hao_str_last_index_of(s: String, sub: String): Int = "hao_str_last_index_of";
 extern func hao_str_contains(s: String, sub: String): Bool = "hao_str_contains";
 extern func hao_str_starts_with(s: String, prefix: String): Bool = "hao_str_starts_with";

@@ -535,10 +535,11 @@ int64_t IRGen::objectPtrBitmap(const ClassInfo* ci) {
 void IRGen::emitHeapStore(const std::string& addr, const std::string& valIr,
                           const TypePtr& ty, const std::string& barrierBase) {
     std::string lt = ty ? ty->llvmType() : "ptr";
-    em_.emit("store " + lt + " " + valIr + ", ptr " + addr);
+    /* v0.53：Dijkstra 先 shade 再 publish，禁止 store→barrier 窗口漏标 */
     if (isGcPointerType(ty) && !barrierBase.empty())
         em_.emit("call void @hao_gc_barrier(ptr " + barrierBase +
                  ", ptr " + valIr + ")");
+    em_.emit("store " + lt + " " + valIr + ", ptr " + addr);
 }
 
 void IRGen::emitVarStore(const SymbolPtr& sym, const TypePtr& ty,

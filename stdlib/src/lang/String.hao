@@ -31,12 +31,12 @@
 //  ═══════════════════════════════════════════════════════════
 //  【实例 API】（码点下标；substring 为半开区间 [start,end)）
 //  ═══════════════════════════════════════════════════════════
-//    length / isEmpty / substring / indexOf / lastIndexOf / contains
-//    startsWith / endsWith / charAt→Char / trim / toUpperCase / toLowerCase
+//    length / isEmpty / substring / indexOf / indexOf(sub,from) / lastIndexOf
+//    contains / startsWith / endsWith / charAt→Char / trim / toUpperCase / toLowerCase
 //    hashCode / equals / toString
 //  【静态】valueOf / fromInt / fromDouble / fromBool / compare
 //
-//  不包装时调用：String.valueOf(s).substring(0, 2)
+//  不包装时调用：String.valueOf(s).substring(0, 2) / .indexOf(sub, from)
 //  或内建："hi".length / "hi"[0]
 // ============================================================
 package lang;
@@ -84,6 +84,10 @@ class String {
     }
     func indexOf(sub: String): Int {
         return hao_str_index_of(this.value, sub);
+    }
+    // Java String.indexOf(str, fromIndex)：码点下标起搜
+    func indexOf(sub: String, from: Int): Int {
+        return hao_str_index_of_from(this.value, sub, from);
     }
     func lastIndexOf(sub: String): Int {
         return hao_str_last_index_of(this.value, sub);

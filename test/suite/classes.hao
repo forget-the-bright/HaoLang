@@ -60,6 +60,12 @@ class CBox {                   // 无构造函数
     func get(): Int { return this.value; }
 }
 
+// v0.50：实例方法按参数签名重载
+class COverload {
+    func add(a: Int): Int { return a + 1; }
+    func add(a: Int, b: Int): Int { return a + b; }
+}
+
 func shiftPoint(pt: CPoint): CPoint {
     return new CPoint(pt.x + 1, pt.y + 1);
 }
@@ -138,4 +144,9 @@ func classesTest() {
     val ib = new CInternalBox();
     fmt.println(ib.secret);          // 7
     fmt.println(ib.peek());          // 7
+
+    // v0.50：实例方法重载
+    val ov = new COverload();
+    fmt.println(ov.add(10));         // 11
+    fmt.println(ov.add(10, 20));     // 30
 }

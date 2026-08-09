@@ -4,8 +4,8 @@ package main;
 
 import monitor;
 import net;
-import collections;
-import thread;
+import collections.*;
+import thread.*;
 
 func main() {
     val app = new net.HttpApp();
@@ -20,19 +20,21 @@ func main() {
     fmt.println("API: GET /api/gc  |  POST /api/gc/collect");
     fmt.println("Ctrl+C 结束");
 
-    // 后台持续分配（lambda 内可用 Integer/String 静态方法，v0.49.2）
-    val th1 = new thread.Thread();
+    // v0.50.4 验收：4000 次保活分配会反复打满 nursery → 协作 STW；
+    // 不得再靠把循环改回 40「假装修好」。/api/gc 应仍可在秒级响应。
+    val th1 = new Thread();
     th1.start({
         while (true) {
-            var junk = new collections.List<Object>();
+            var junk = new List<Object>();
             var i = 0;
-            while (i < 200) {
+            while (i < 4000) {
                 junk.add(String.valueOf("warm-" + Integer.toStr(i)));
                 i += 1;
             }
-            thread.sleep(50);
+            sleep(500);
         }
     });
 
-    app.serve();
+    // boss 只 accept，worker 处理连接（避免与 STW 叠加抢 accept）
+    app.serveBossWorkers(4);
 }

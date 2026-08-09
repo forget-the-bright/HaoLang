@@ -1,0 +1,75 @@
+// ============================================================
+//  net.ByteBuf —— 连接入站累积缓冲（对标 Netty ByteBuf 子集）
+// ------------------------------------------------------------
+//  按 UTF-8 **字节**下标（与 HTTP 线协议一致），支持：
+//    writeBytes / readableBytes / readBytes / skipBytes / discardReadBytes
+//  用于 keep-alive 粘包：一次 recv 含多请求时，未读字节留在缓冲。
+// ============================================================
+package net;
+
+public class ByteBuf {
+    var data: String;
+    var readerIndex: Int;
+
+    constructor() {
+        this.data = "";
+        this.readerIndex = 0;
+    }
+
+    func writeBytes(s: String) {
+        if (_bbLen(s) == 0) { return; }
+        this.data = this.data + s;
+    }
+
+    func readableBytes(): Int {
+        val n = _bbLen(this.data);
+        if (this.readerIndex >= n) { return 0; }
+        return n - this.readerIndex;
+    }
+
+    func readableSlice(): String {
+        val n = _bbLen(this.data);
+        if (this.readerIndex <= 0) { return this.data; }
+        if (this.readerIndex >= n) { return ""; }
+        return _bbSlice(this.data, this.readerIndex, n);
+    }
+
+    func skipBytes(n: Int) {
+        if (n <= 0) { return; }
+        var ri = this.readerIndex + n;
+        val total = _bbLen(this.data);
+        if (ri > total) { ri = total; }
+        this.readerIndex = ri;
+    }
+
+    func readBytes(n: Int): String {
+        val avail = this.readableBytes();
+        var take = n;
+        if (take > avail) { take = avail; }
+        if (take <= 0) { return ""; }
+        val s = _bbSlice(this.data, this.readerIndex, this.readerIndex + take);
+        this.readerIndex = this.readerIndex + take;
+        return s;
+    }
+
+    // 丢掉已读前缀，readerIndex 归零（Netty discardReadBytes）
+    func discardReadBytes() {
+        if (this.readerIndex <= 0) { return; }
+        val n = _bbLen(this.data);
+        if (this.readerIndex >= n) {
+            this.data = "";
+            this.readerIndex = 0;
+            return;
+        }
+        this.data = _bbSlice(this.data, this.readerIndex, n);
+        this.readerIndex = 0;
+    }
+
+    func clear() {
+        this.data = "";
+        this.readerIndex = 0;
+    }
+}
+
+extern func _bbLen(s: String): Int = "hao_str_byte_len";
+extern func _bbSlice(s: String, start: Int, end: Int): String = "hao_str_byte_slice";

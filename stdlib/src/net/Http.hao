@@ -371,40 +371,135 @@ public class Http {
         return false;
     }
 
-    // 读 HTTP 消息。readToClose=true：无 Content-Length 时读到 EOF（客户端收响应）；
-    // false：无 CL 则头结束后即停（服务端收请求，避免空等超时）；chunked 则读至终止块。
-    // 预算、CL、头/体分隔一律按 UTF-8 字节（禁止码点下标切片）。
-    static func readMessage(sock: Socket, readToClose: Bool): String {
-        var raw = "";
+    // chunked 体完整时的字节长度（含 0 块与可选 trailer 至空行）；未完整返回 -1
+    static func chunkedBodyEnd(rawBody: String): Int {
+        var pos = 0;
+        val n = _httpByteLen(rawBody);
+        while (pos < n) {
+            val lineEnd = _httpByteIndexOf(rawBody, "\r\n", pos);
+            if (lineEnd < 0) { return -1; }
+            var sizeTok = _httpByteSlice(rawBody, pos, lineEnd);
+            val semi = _httpByteIndexOf(sizeTok, ";", 0);
+            if (semi >= 0) { sizeTok = _httpByteSlice(sizeTok, 0, semi); }
+            val sz = Http.parseHexLen(String.valueOf(sizeTok).trim());
+            if (sz < 0) { return -1; }
+            pos = lineEnd + 2;
+            if (sz == 0) {
+                // trailers：直到空行 \r\n
+                while (pos <= n) {
+                    if (pos >= n) { return pos; }
+                    val te = _httpByteIndexOf(rawBody, "\r\n", pos);
+                    if (te < 0) { return -1; }
+                    if (te == pos) { return te + 2; }
+                    pos = te + 2;
+                }
+                return -1;
+            }
+            if (pos + sz + 2 > n) { return -1; }
+            pos = pos + sz + 2;
+        }
+        return -1;
+    }
+
+    // 缓冲区从头起若已含完整 HTTP 消息则返回其字节长度，否则 -1。
+    // readToClose+sawEof：无 CL 的响应可读至 EOF。
+    static func completeMessageLen(s: String, readToClose: Bool, sawEof: Bool): Int {
+        val n = _httpByteLen(s);
+        if (n == 0) { return -1; }
+        val sep = _httpByteIndexOf(s, "\r\n\r\n", 0);
+        if (sep < 0) {
+            if (sawEof && readToClose) { return n; }
+            return -1;
+        }
+        val head = _httpByteSlice(s, 0, sep);
+        val cl = Http.contentLengthOf(head);
+        if (cl != null) {
+            var need = cl!!;
+            val maxBody = Http.maxBytesLimit - sep - 4;
+            if (maxBody < 0) { return -1; }
+            if (need > maxBody) { need = maxBody; }
+            val total = sep + 4 + need;
+            if (n >= total) { return total; }
+            return -1;
+        }
+        if (Http.isChunkedEncoding(head)) {
+            val bodyPart = _httpByteSlice(s, sep + 4, n);
+            val end = Http.chunkedBodyEnd(bodyPart);
+            if (end < 0) { return -1; }
+            return sep + 4 + end;
+        }
+        if (!readToClose) {
+            return sep + 4;
+        }
+        if (sawEof) { return n; }
+        return -1;
+    }
+
+    // v0.50.3：从 sock 读入 ByteBuf，取出**一条**完整消息，余量留在 buf（粘包安全）。
+    static func readOneMessage(sock: Socket, buf: ByteBuf, readToClose: Bool): String {
         val lim = Http.maxBytesLimit;
-        while (_httpByteLen(raw) < lim) {
-            val room = lim - _httpByteLen(raw);
+        var sawEof = false;
+        while (true) {
+            val view = buf.readableSlice();
+            val need = Http.completeMessageLen(view, readToClose, sawEof);
+            if (need >= 0) {
+                val msg = buf.readBytes(need);
+                buf.discardReadBytes();
+                return msg;
+            }
+            if (sawEof) {
+                if (buf.readableBytes() == 0) { return ""; }
+                if (readToClose) {
+                    val rest = buf.readBytes(buf.readableBytes());
+                    buf.discardReadBytes();
+                    return rest;
+                }
+                return "";
+            }
+            if (buf.readableBytes() >= lim) {
+                val forced = buf.readBytes(buf.readableBytes());
+                buf.discardReadBytes();
+                return forced;
+            }
+            val room = lim - buf.readableBytes();
             var want = 4096;
             if (want > room) { want = room; }
-            val chunk = sock.recv(want);
-            if (chunk == null) { break; }
-            if (_httpByteLen(chunk!!) == 0) { break; }
-            raw = raw + chunk!!;
-            val sep = _httpByteIndexOf(raw, "\r\n\r\n", 0);
+            if (want <= 0) {
+                val forced2 = buf.readBytes(buf.readableBytes());
+                buf.discardReadBytes();
+                return forced2;
+            }
+            // 已知还差 CL body 时用 recvExact 一次凑满
+            val sep = _httpByteIndexOf(view, "\r\n\r\n", 0);
             if (sep >= 0) {
-                val head = _httpByteSlice(raw, 0, sep);
+                val head = _httpByteSlice(view, 0, sep);
                 val cl = Http.contentLengthOf(head);
                 if (cl != null) {
-                    if (sep + 4 >= lim) { break; }
-                    var need = cl!!;
+                    var bodyNeed = cl!!;
                     val maxBody = lim - sep - 4;
-                    if (need > maxBody) { need = maxBody; }
-                    val have = _httpByteLen(raw) - sep - 4;
-                    if (have >= need) { break; }
-                } else if (Http.isChunkedEncoding(head)) {
-                    val bodyPart = _httpByteSlice(raw, sep + 4, _httpByteLen(raw));
-                    if (Http.chunkedBodyComplete(bodyPart)) { break; }
-                } else if (!readToClose) {
-                    break;
+                    if (bodyNeed > maxBody) { bodyNeed = maxBody; }
+                    val have = _httpByteLen(view) - sep - 4;
+                    if (have < bodyNeed) {
+                        val more = sock.recvExact(bodyNeed - have);
+                        if (more == null) { sawEof = true; continue; }
+                        if (_httpByteLen(more!!) == 0) { sawEof = true; continue; }
+                        buf.writeBytes(more!!);
+                        continue;
+                    }
                 }
             }
+            val chunk = sock.recv(want);
+            if (chunk == null) { sawEof = true; continue; }
+            if (_httpByteLen(chunk!!) == 0) { sawEof = true; continue; }
+            buf.writeBytes(chunk!!);
         }
-        return raw;
+        return "";
+    }
+
+    // 兼容旧 API：临时 ByteBuf（无跨调用残留）
+    static func readMessage(sock: Socket, readToClose: Bool): String {
+        val buf = new ByteBuf();
+        return Http.readOneMessage(sock, buf, readToClose);
     }
 
     // 按「行首字段名」取 Content-Length（大小写不敏感）；忽略头值里的同名子串。
@@ -539,20 +634,74 @@ public class HttpServer {
         this.server.close();
     }
 
-    // 处理单次请求（回环测试 / 简单服务）；按 Content-Length 读全 body
+    // 处理连接（v0.50 keep-alive；v0.50.3 ByteBuf 粘包 + 可选 Pipeline）
     func serveOnce(handler: (HttpRequest) -> HttpResponse): Bool {
-        val client = new Socket();
-        if (!this.server.accept(client)) { return false; }
-        client.setTimeout(5000);
-        val raw = Http.readMessage(client, false);
-        val req = HttpServer.parseRequest(raw);
-        val resp = handler(req);
-        HttpServer.writeResponse(client, resp);
-        client.close();
-        return true;
+        val client = this.server.accept();
+        if (client == null) { return false; }
+        return this.serveConnection(client!!, handler);
+    }
+
+    func serveConnection(client: Socket, handler: (HttpRequest) -> HttpResponse): Bool {
+        val ch = new Channel(client);
+        ch.pipeline.addLast(new HttpBusinessHandler(handler));
+        return this.serveChannel(ch);
+    }
+
+    // 自定义 pipeline 时：须以产出 HttpResponse 的 handler 作最后一环
+    func serveChannel(ch: Channel): Bool {
+        ch.sock.setTimeout(5000);
+        var handled = false;
+        while (true) {
+            val raw = Http.readOneMessage(ch.sock, ch.inbound, false);
+            if (_httpByteLen(raw) == 0) { break; }
+            val req = HttpServer.parseRequest(raw);
+            var keep = true;
+            val conn = req.getHeader("Connection");
+            if (conn != null && String.valueOf(conn!!).toLowerCase() == "close") {
+                keep = false;
+            }
+            val out = ch.pipeline.fireChannelRead(req);
+            if (out == null || !(out is HttpResponse)) { break; }
+            HttpServer.writeResponse(ch.sock, out as HttpResponse, keep);
+            handled = true;
+            if (!keep) { break; }
+        }
+        ch.close();
+        return handled;
+    }
+
+    // v0.50.3：boss 只 accept，worker 池跑 serveConnection（Netty OIO boss/worker）
+    func serveBossWorkers(workers: Int, handler: (HttpRequest) -> HttpResponse) {
+        var n = workers;
+        if (n < 1) { n = 1; }
+        val group = new EventLoopGroup(n);
+        var running = true;
+        while (running) {
+            val client = this.server.accept();
+            if (client == null) {
+                // listen 关闭或错误：结束 boss
+                running = false;
+                break;
+            }
+            val c = client!!;
+            val self = this;
+            val ok = group.submit({
+                self.serveConnection(c, handler);
+            });
+            if (!ok) {
+                // 队列满等：本线程兜底，避免丢连接
+                this.serveConnection(c, handler);
+            }
+        }
+        group.shutdown();
     }
 
     static func writeResponse(client: Socket, resp: HttpResponse) {
+        HttpServer.writeResponse(client, resp, false);
+    }
+
+    // keepAlive=true → HTTP/1.1 + Connection: keep-alive（Phase1）
+    static func writeResponse(client: Socket, resp: HttpResponse, keepAlive: Bool) {
         var phrase = "OK";
         if (resp.status == 404) { phrase = "Not Found"; }
         if (resp.status == 400) { phrase = "Bad Request"; }
@@ -562,7 +711,13 @@ public class HttpServer {
         if (!Http.isSafeHeaderValue(ct)) {
             ct = "text/plain; charset=utf-8";
         }
-        var out = "HTTP/1.0 " + Integer.toStr(resp.status) + " " + phrase + "\r\n";
+        var ver = "HTTP/1.0";
+        var conn = "close";
+        if (keepAlive) {
+            ver = "HTTP/1.1";
+            conn = "keep-alive";
+        }
+        var out = ver + " " + Integer.toStr(resp.status) + " " + phrase + "\r\n";
         out = out + "Content-Type: " + ct + "\r\n";
         if (resp.headers.length > 0 && HttpServer.isSafeHeaderBlock(resp.headers)) {
             out = out + resp.headers;
@@ -570,7 +725,7 @@ public class HttpServer {
                 out = out + "\r\n";
             }
         }
-        out = out + "Connection: close\r\n";
+        out = out + "Connection: " + conn + "\r\n";
         if (resp.chunked) {
             out = out + "Transfer-Encoding: chunked\r\n\r\n";
             out = out + Http.encodeChunkedBody(resp.body);

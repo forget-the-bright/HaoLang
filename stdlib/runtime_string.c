@@ -283,17 +283,29 @@ HaoString* hao_str_substring(HaoString* s, int32_t start, int32_t end) {
     return hao_str_from_bytes(s->data + b0, b1 - b0);
 }
 
-int32_t hao_str_index_of(HaoString* s, HaoString* sub) {
+/* 码点下标 from 起搜；对齐 Java String.indexOf(sub, fromIndex) */
+int32_t hao_str_index_of_from(HaoString* s, HaoString* sub, int32_t from) {
     if (!s) s = hao_str_from_cstr("");
-    if (!sub || sub->len == 0) return 0;
+    int32_t cps = utf8_cp_count(s->data, s->len);
+    if (from < 0) from = 0;
+    if (!sub || sub->len == 0) {
+        return from > cps ? cps : from;
+    }
+    if (from >= cps) return -1;
     if (sub->len > s->len) return -1;
+    int32_t b0 = utf8_byte_of_cp(s->data, s->len, from);
+    if (b0 < 0) b0 = 0;
     /* 用 s->len - sub->len 作上界，避免 i+sub->len 在接近 INT32_MAX 时有符号回绕 */
     int32_t lim = s->len - sub->len;
-    for (int32_t i = 0; i <= lim; i++) {
+    for (int32_t i = b0; i <= lim; i++) {
         if (memcmp(s->data + i, sub->data, (size_t)sub->len) == 0)
             return utf8_cp_index_of_byte(s->data, s->len, i);
     }
     return -1;
+}
+
+int32_t hao_str_index_of(HaoString* s, HaoString* sub) {
+    return hao_str_index_of_from(s, sub, 0);
 }
 
 int32_t hao_str_last_index_of(HaoString* s, HaoString* sub) {
@@ -477,8 +489,9 @@ void* hao_make_args(int argc, char** argv) {
     HaoString** elems = (HaoString**)hao_array_new(n, 8, 1);
     for (int i = 0; i < n; ++i) {
         const char* a = (argv && argv[i + 1]) ? argv[i + 1] : "";
-        elems[i] = hao_str_from_cstr(a);
-        hao_gc_barrier(elems, elems[i]);
+        HaoString* s = hao_str_from_cstr(a);
+        hao_gc_barrier(elems, s);
+        elems[i] = s;
     }
     return elems;
 }

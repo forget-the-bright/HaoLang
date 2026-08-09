@@ -209,7 +209,12 @@ int8_t hao_net_connect(int64_t* unit, HaoString* host, int32_t port) {
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = HAO_AF_UNSPEC;
     hints.ai_socktype = HAO_SOCK_STREAM;
-    if (g_ws.getaddrinfo(host->data, portstr, &hints, &res) != 0) return 0;
+    /* getaddrinfo/connect 可能阻塞：与 accept/recv 一样 park，避免拖垮 STW */
+    hao_gc_os_block_enter();
+    if (g_ws.getaddrinfo(host->data, portstr, &hints, &res) != 0) {
+        hao_gc_os_block_leave();
+        return 0;
+    }
     hao_sock_t s = HAO_INVALID_SOCKET;
     for (hao_addrinfo* p = res; p; p = p->ai_next) {
         s = g_ws.socket(p->ai_family, p->ai_socktype, p->ai_protocol);
@@ -219,6 +224,7 @@ int8_t hao_net_connect(int64_t* unit, HaoString* host, int32_t port) {
         s = HAO_INVALID_SOCKET;
     }
     g_ws.freeaddrinfo(res);
+    hao_gc_os_block_leave();
     if (s == HAO_INVALID_SOCKET) return 0;
     hao_net_attach(unit, s);
     return 1;
@@ -251,23 +257,38 @@ int8_t hao_net_listen_backlog(int64_t* unit, int32_t port, int32_t backlog) {
     return 1;
 }
 
-int8_t hao_net_set_timeout(int64_t* unit, int32_t timeout_ms) {
+int8_t hao_net_set_recv_timeout(int64_t* unit, int32_t timeout_ms) {
     if (!hao_net_ensure() || !unit) return 0;
     hao_sock_t s = hao_net_load(unit);
     if (s == HAO_INVALID_SOCKET) return 0;
     uint32_t ms = timeout_ms < 0 ? 0u : (uint32_t)timeout_ms;
     if (g_ws.setsockopt(s, HAO_SOL_SOCKET, HAO_SO_RCVTIMEO,
                         (const char*)&ms, sizeof(ms)) != 0) return 0;
+    return 1;
+}
+
+int8_t hao_net_set_send_timeout(int64_t* unit, int32_t timeout_ms) {
+    if (!hao_net_ensure() || !unit) return 0;
+    hao_sock_t s = hao_net_load(unit);
+    if (s == HAO_INVALID_SOCKET) return 0;
+    uint32_t ms = timeout_ms < 0 ? 0u : (uint32_t)timeout_ms;
     if (g_ws.setsockopt(s, HAO_SOL_SOCKET, HAO_SO_SNDTIMEO,
                         (const char*)&ms, sizeof(ms)) != 0) return 0;
     return 1;
+}
+
+int8_t hao_net_set_timeout(int64_t* unit, int32_t timeout_ms) {
+    return hao_net_set_recv_timeout(unit, timeout_ms)
+        && hao_net_set_send_timeout(unit, timeout_ms);
 }
 
 int8_t hao_net_accept(int64_t* srv, int64_t* cli) {
     if (!hao_net_ensure()) return 0;
     hao_sock_t sv = hao_net_load(srv);
     if (sv == HAO_INVALID_SOCKET) return 0;
+    hao_gc_os_block_enter();
     hao_sock_t c = g_ws.accept(sv, NULL, NULL);
+    hao_gc_os_block_leave();
     if (c == HAO_INVALID_SOCKET) return 0;
     hao_net_attach(cli, c);
     return 1;
@@ -279,11 +300,16 @@ int32_t hao_net_send(int64_t* unit, HaoString* data) {
     if (s == HAO_INVALID_SOCKET || !data) return -1;
     size_t total = (size_t)data->len;
     size_t sent = 0;
+    hao_gc_os_block_enter();
     while (sent < total) {
         int n = g_ws.send(s, data->data + sent, (int)(total - sent), 0);
-        if (n <= 0) return -1;
+        if (n <= 0) {
+            hao_gc_os_block_leave();
+            return -1;
+        }
         sent += (size_t)n;
     }
+    hao_gc_os_block_leave();
     return (int32_t)sent;
 }
 
@@ -293,8 +319,16 @@ HaoString* hao_net_recv(int64_t* unit, int32_t max) {
     if (s == HAO_INVALID_SOCKET || max <= 0) return NULL;
     if (max > INT32_MAX - 1) max = INT32_MAX - 1;
     HaoString* buf = hao_str_alloc(max);
+    hao_gc_os_block_enter();
     int n = g_ws.recv(s, buf->data, (int)max, 0);
-    if (n <= 0) return NULL;
+    hao_gc_os_block_leave();
+    /* Go/Java: n==0 EOF -> empty String; n<0 timeout/error -> null */
+    if (n < 0) return NULL;
+    if (n == 0) {
+        buf->data[0] = '\0';
+        buf->len = 0;
+        return buf;
+    }
     buf->data[n] = '\0';
     buf->len = n;
     return buf;
@@ -342,7 +376,11 @@ int32_t hao_net_udp_sendto(int64_t* unit, HaoString* host, int32_t port,
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = HAO_AF_INET;
     hints.ai_socktype = HAO_SOCK_DGRAM;
-    if (g_ws.getaddrinfo(host->data, portstr, &hints, &res) != 0) return -1;
+    hao_gc_os_block_enter();
+    if (g_ws.getaddrinfo(host->data, portstr, &hints, &res) != 0) {
+        hao_gc_os_block_leave();
+        return -1;
+    }
     int64_t sent = -1;
     for (hao_addrinfo* p = res; p; p = p->ai_next) {
         int n = g_ws.sendto(s, data->data, (int)data->len, 0,
@@ -350,6 +388,7 @@ int32_t hao_net_udp_sendto(int64_t* unit, HaoString* host, int32_t port,
         if (n >= 0) { sent = (int64_t)n; break; }
     }
     g_ws.freeaddrinfo(res);
+    hao_gc_os_block_leave();
     return sent;
 }
 
@@ -359,7 +398,9 @@ HaoString* hao_net_udp_recvfrom(int64_t* unit, int32_t max) {
     if (s == HAO_INVALID_SOCKET || max <= 0) return NULL;
     if (max > INT32_MAX - 1) max = INT32_MAX - 1;
     HaoString* buf = hao_str_alloc(max);
+    hao_gc_os_block_enter();
     int n = g_ws.recvfrom(s, buf->data, (int)max, 0, NULL, NULL);
+    hao_gc_os_block_leave();
     if (n < 0) return NULL;
     buf->data[n] = '\0';
     buf->len = n;
@@ -412,7 +453,11 @@ int8_t hao_net_connect(int64_t* unit, HaoString* host, int32_t port) {
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
-    if (getaddrinfo(host->data, portstr, &hints, &res) != 0) return 0;
+    hao_gc_os_block_enter();
+    if (getaddrinfo(host->data, portstr, &hints, &res) != 0) {
+        hao_gc_os_block_leave();
+        return 0;
+    }
     hao_sock_t s = HAO_INVALID_SOCKET;
     for (struct addrinfo* p = res; p; p = p->ai_next) {
         s = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
@@ -422,6 +467,7 @@ int8_t hao_net_connect(int64_t* unit, HaoString* host, int32_t port) {
         s = HAO_INVALID_SOCKET;
     }
     freeaddrinfo(res);
+    hao_gc_os_block_leave();
     if (s == HAO_INVALID_SOCKET) return 0;
     hao_net_attach(unit, s);
     return 1;
@@ -453,7 +499,7 @@ int8_t hao_net_listen_backlog(int64_t* unit, int32_t port, int32_t backlog) {
     return 1;
 }
 
-int8_t hao_net_set_timeout(int64_t* unit, int32_t timeout_ms) {
+int8_t hao_net_set_recv_timeout(int64_t* unit, int32_t timeout_ms) {
     if (!unit) return 0;
     hao_sock_t s = hao_net_load(unit);
     if (s == HAO_INVALID_SOCKET) return 0;
@@ -463,15 +509,33 @@ int8_t hao_net_set_timeout(int64_t* unit, int32_t timeout_ms) {
     tv.tv_usec = (timeout_ms % 1000) * 1000;
     if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv)) != 0)
         return 0;
+    return 1;
+}
+
+int8_t hao_net_set_send_timeout(int64_t* unit, int32_t timeout_ms) {
+    if (!unit) return 0;
+    hao_sock_t s = hao_net_load(unit);
+    if (s == HAO_INVALID_SOCKET) return 0;
+    struct timeval tv;
+    if (timeout_ms < 0) timeout_ms = 0;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
     if (setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv)) != 0)
         return 0;
     return 1;
 }
 
+int8_t hao_net_set_timeout(int64_t* unit, int32_t timeout_ms) {
+    return hao_net_set_recv_timeout(unit, timeout_ms)
+        && hao_net_set_send_timeout(unit, timeout_ms);
+}
+
 int8_t hao_net_accept(int64_t* srv, int64_t* cli) {
     hao_sock_t sv = hao_net_load(srv);
     if (sv == HAO_INVALID_SOCKET) return 0;
+    hao_gc_os_block_enter();
     hao_sock_t c = accept(sv, NULL, NULL);
+    hao_gc_os_block_leave();
     if (c == HAO_INVALID_SOCKET) return 0;
     hao_net_attach(cli, c);
     return 1;
@@ -482,11 +546,16 @@ int32_t hao_net_send(int64_t* unit, HaoString* data) {
     if (s == HAO_INVALID_SOCKET || !data) return -1;
     size_t total = (size_t)data->len;
     size_t sent = 0;
+    hao_gc_os_block_enter();
     while (sent < total) {
         int n = (int)send(s, data->data + sent, (int)(total - sent), 0);
-        if (n <= 0) return -1;
+        if (n <= 0) {
+            hao_gc_os_block_leave();
+            return -1;
+        }
         sent += (size_t)n;
     }
+    hao_gc_os_block_leave();
     return (int32_t)sent;
 }
 
@@ -495,8 +564,15 @@ HaoString* hao_net_recv(int64_t* unit, int32_t max) {
     if (s == HAO_INVALID_SOCKET || max <= 0) return NULL;
     if (max > INT32_MAX - 1) max = INT32_MAX - 1;
     HaoString* buf = hao_str_alloc(max);
+    hao_gc_os_block_enter();
     int n = (int)recv(s, buf->data, (int)max, 0);
-    if (n <= 0) return NULL;
+    hao_gc_os_block_leave();
+    if (n < 0) return NULL;
+    if (n == 0) {
+        buf->data[0] = '\0';
+        buf->len = 0;
+        return buf;
+    }
     buf->data[n] = '\0';
     buf->len = n;
     return buf;
@@ -540,7 +616,11 @@ int32_t hao_net_udp_sendto(int64_t* unit, HaoString* host, int32_t port,
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
-    if (getaddrinfo(host->data, portstr, &hints, &res) != 0) return -1;
+    hao_gc_os_block_enter();
+    if (getaddrinfo(host->data, portstr, &hints, &res) != 0) {
+        hao_gc_os_block_leave();
+        return -1;
+    }
     int64_t sent = -1;
     for (struct addrinfo* p = res; p; p = p->ai_next) {
         int n = (int)sendto(s, data->data, (int)data->len, 0,
@@ -548,6 +628,7 @@ int32_t hao_net_udp_sendto(int64_t* unit, HaoString* host, int32_t port,
         if (n >= 0) { sent = (int64_t)n; break; }
     }
     freeaddrinfo(res);
+    hao_gc_os_block_leave();
     return sent;
 }
 
@@ -556,7 +637,9 @@ HaoString* hao_net_udp_recvfrom(int64_t* unit, int32_t max) {
     if (s == HAO_INVALID_SOCKET || max <= 0) return NULL;
     if (max > INT32_MAX - 1) max = INT32_MAX - 1;
     HaoString* buf = hao_str_alloc(max);
+    hao_gc_os_block_enter();
     int n = (int)recvfrom(s, buf->data, (int)max, 0, NULL, NULL);
+    hao_gc_os_block_leave();
     if (n < 0) return NULL;
     buf->data[n] = '\0';
     buf->len = n;

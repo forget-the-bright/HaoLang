@@ -81,7 +81,7 @@ class SuiteFactoryDefaults {
     constructor() {}
 }
 
-func suiteFindType(name: String): reflect.Type {
+func suiteFindType(name: String): reflect.Class {
     var i = 0;
     while (i < reflect.typeCount()) {
         val t = reflect.typeAt(i);
@@ -123,18 +123,16 @@ func mvcTest() {
     var foundGet = false;
     var mi = 0;
     while (mi < t.getMethodCount()) {
-        var aj = 0;
-        while (aj < t.getMethodAnnotationCount(mi)) {
-            val an = t.getMethodAnnotationName(mi, aj);
-            if (net.HttpApp.annoEnds(an, "GetMapping")) {
-                foundGet = true;
-                fmt.println(t.getMethodAnnotationValue(mi, aj)); // path=/ping 或 /ping
-            }
-            aj += 1;
+        if (t.isMethodAnnotationPresent(mi, net.GetMapping.Class)) {
+            foundGet = true;
+            fmt.println(t.getMethodAnnotationValueFor(mi, net.GetMapping.Class) ?? ""); // path=/ping 或 /ping
         }
         mi += 1;
     }
     fmt.println(foundGet);                               // true
+    fmt.println(t.isAnnotationPresent(net.Controller.Class)
+        || t.isAnnotationPresent(net.RequestMapping.Class)); // true
+    fmt.println(net.GetMapping.Class.isAnnotation());    // true
 
     val app = new net.HttpApp();
     if (!app.listen(7902)) {
