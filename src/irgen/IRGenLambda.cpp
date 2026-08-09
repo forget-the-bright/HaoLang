@@ -407,6 +407,8 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     const LambdaInfo* savedLambda = currentLambda_;
     auto savedLoops = loops_;
     auto savedHoist = loopHoisted_;
+    auto savedSpillPools = loopSpillPools_;
+    int savedSpillDepth = loopSpillDepth_;
     int savedTryCounter = tryCounter_;
     auto savedTryStack = tryStack_;
     int savedCatchDepth = catchDepth_;
@@ -419,6 +421,8 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     blockTerminated_ = false;
     loops_.clear();
     loopHoisted_.clear();
+    loopSpillPools_.clear();
+    loopSpillDepth_ = 0;
     tryCounter_ = 0;
 
     // 签名
@@ -596,6 +600,8 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     currentLambda_ = savedLambda;
     loops_ = savedLoops;
     loopHoisted_ = savedHoist;
+    loopSpillPools_ = savedSpillPools;
+    loopSpillDepth_ = savedSpillDepth;
     tryCounter_ = savedTryCounter;
     tryStack_ = savedTryStack;
     catchDepth_ = savedCatchDepth;

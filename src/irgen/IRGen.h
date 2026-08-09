@@ -529,7 +529,7 @@ private:
     void emitVarStore(const SymbolPtr& sym, const TypePtr& ty,
                       const std::string& valIr);
     std::string emitObjectNew(int64_t nfields, int64_t bitmap);
-    // v0.54/v0.55.4：Hao 精确根（shadow；while/for 局部提升）
+    // v0.54/v0.55.5：Hao 精确根（shadow；循环局部提升；循环 spill 池）
     void emitGcRootPush(const std::string& slotAddr);
     void emitGcRootUnwind();
     void beginFunctionGcRoots();
@@ -539,8 +539,25 @@ private:
     // 把 GC 指针（或 null）写入 unwindGcRootAddr_，供跨 finally/safepoint 保活
     void storeUnwindGcRootPtr(const std::string& ptrIr);
     void clearUnwindGcRoot();
-    // 分配 ptr 槽、写入初值并 root_push；返回槽地址（用于 SSA 跨 safepoint spill）
+    // 分配 ptr 槽、写入初值并 root_push；循环内走 spill 池（只 push 一次）
     std::string emitSpillGcRoot(const std::string& nameHint, const std::string& ptrIr);
+    // 循环 spill 池：整段嵌套 while/for 共用一层；acquire 复用槽，禁止每轮 root_push
+    struct LoopSpillPool {
+        std::vector<std::string> slots;
+        size_t next = 0;
+        size_t highWater = 0; /* 用过的最大 next */
+        std::vector<size_t> scopeStack;  /* 每层 while/for 的 next 基线 */
+        std::vector<size_t> stickyStack; /* recycle 不低于栈顶（保护 for.seq 等） */
+    };
+    std::vector<LoopSpillPool> loopSpillPools_;
+    int loopSpillDepth_ = 0;
+    void enterLoopSpillScope();
+    void leaveLoopSpillScope();
+    void pinLoopSpillCheckpoint();
+    void recycleLoopSpillSlots();
+    void unpinLoopSpillCheckpoint();
+    void clearLoopSpillSlots();
+    std::string acquireLoopGcSlot(const std::string& nameHint);
 
     // 可见性校验：当前上下文能否访问 ownerClass 中具有 vis 的成员。
     // 规则：
@@ -645,6 +662,7 @@ private:
     void clearHoistedGcSince(
         const std::unordered_map<HaoLangParser::VarDeclContext*, HoistedLocal>& saved);
     TypePtr peekVarDeclType(HaoLangParser::VarDeclContext* vd);
+    bool inLoopSpillPool() const { return !loopSpillPools_.empty(); }
 
     // ---------- try / finally 清理链 ----------
     //  每个 try（无论是否有 finally）都有一个 cleanup 块，负责：

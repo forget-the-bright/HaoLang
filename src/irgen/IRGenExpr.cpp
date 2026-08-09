@@ -3067,13 +3067,19 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
             ? Type::makeClass(ci->name)
             : t;
 
-        // 求值实参
+        // 求值实参；GC 实参立刻 spill，避免后续实参/分配 safepoint 假死
         std::vector<Value> args;
         std::vector<antlr4::tree::ParseTree*> argExprs;
         if (auto* al = np->argList()) {
             for (auto* a : al->arg()) {
                 Value av = genExpr(a->expr());
                 if (!av.valid()) return Value();
+                if (isGcPointerType(av.type)) {
+                    std::string slot = emitSpillGcRoot("new.arg", av.ir);
+                    std::string p = em_.nextTemp();
+                    em_.emit(p + " = load ptr, ptr " + slot);
+                    av.ir = p;
+                }
                 args.push_back(av);
                 argExprs.push_back(a->expr());
             }
@@ -3162,8 +3168,8 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
             return Value();
         }
 
-        /* 构造窗口结束：清临时 spill，避免函数级假活（调用方须立刻写入自己的根槽） */
-        em_.emit("store ptr null, ptr " + objSlot);
+        /* 勿在此处清 objSlot：返回 SSA 仍可能跨 safepoint；
+           循环内由 spill 池清 null，函数级由 root_unwind / 调用方根槽接管 */
         return Value(obj, objType);
     }
 

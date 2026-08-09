@@ -415,19 +415,31 @@ Value IRGen::genWhenExpr(HaoLangParser::WhenStmtContext* w) {
             return Value();
         }
         subjType = subject.type;
-        subjAddr = em_.nextNamed("when.subj");
-        em_.emit(subjAddr + " = alloca " + subjType->llvmType());
-        em_.emit("store " + subjType->llvmType() + " " + subject.ir +
-                 ", ptr " + subjAddr);
-        if (isGcPointerType(subjType))
-            emitGcRootPush(subjAddr);
+        if (isGcPointerType(subjType) && inLoopSpillPool()) {
+            subjAddr = acquireLoopGcSlot("when.subj");
+            em_.emit("store " + subjType->llvmType() + " " + subject.ir +
+                     ", ptr " + subjAddr);
+        } else {
+            subjAddr = em_.nextNamed("when.subj");
+            em_.emit(subjAddr + " = alloca " + subjType->llvmType());
+            em_.emit("store " + subjType->llvmType() + " " + subject.ir +
+                     ", ptr " + subjAddr);
+            if (isGcPointerType(subjType))
+                emitGcRootPush(subjAddr);
+        }
     }
 
-    std::string resAddr = em_.nextNamed("when.res");
-    em_.emit(resAddr + " = alloca " + resultType->llvmType());
-    if (isGcPointerType(resultType)) {
+    std::string resAddr;
+    if (isGcPointerType(resultType) && inLoopSpillPool()) {
+        resAddr = acquireLoopGcSlot("when.res");
         em_.emit("store ptr null, ptr " + resAddr);
-        emitGcRootPush(resAddr);
+    } else {
+        resAddr = em_.nextNamed("when.res");
+        em_.emit(resAddr + " = alloca " + resultType->llvmType());
+        if (isGcPointerType(resultType)) {
+            em_.emit("store ptr null, ptr " + resAddr);
+            emitGcRootPush(resAddr);
+        }
     }
     std::string endL = em_.nextLabel("when.end");
 
@@ -565,6 +577,8 @@ Value IRGen::genWhenExpr(HaoLangParser::WhenStmtContext* w) {
 
     std::string out = em_.nextTemp();
     em_.emit(out + " = load " + resultType->llvmType() + ", ptr " + resAddr);
+    if (hasSubject && isGcPointerType(subjType) && !subjAddr.empty())
+        em_.emit("store ptr null, ptr " + subjAddr);
     return Value(out, resultType);
 }
 

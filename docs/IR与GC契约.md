@@ -34,7 +34,7 @@ HaoLang **不做** Win `SuspendThread`；**不用** LLVM `gc.statepoint`/stackma
 | R6 终止 | 每一轮 terminate **清空 scanned**；本轮 soft STW **齐 park** 且 worklist 空才可 sweep |
 | R7 abort | 终止失败 → IDLE + 丢 worklist + bump epoch + pacing |
 | R8 批量拷贝 | 须 **同锁原子**（`hao_gc_array_copy_and_shade`） |
-| R9 精确根 | GC 指针局部/参数 alloca：`hao_gc_root_push`；函数出口 `hao_gc_root_unwind(wm)`。**跨 safepoint/调用仍存活的 GC 指针必须在 shadow（或显式根）**——含 when.subj/res、catch 绑定、select recvStr、finally 的 unwind GC 槽、`$new`/语言 `new`/aspread·asize 合成循环中的 arr/src/obj。临时 spill 用完须 `store null`（防函数级假活） |
+| R9 精确根 | GC 指针局部/参数 alloca：`hao_gc_root_push`；函数出口 `hao_gc_root_unwind(wm)`。**跨 safepoint/调用仍存活的 GC 指针必须在 shadow（或显式根）**——含 when.subj/res、catch 绑定、select、finally 的 unwind GC 槽、`$new`/语言 `new`/aspread·asize、for.seq/iter。**循环内**合成根走 spill 池（循环前预分配+acquire，禁止每轮 `root_push`）；层/轮结束按 `scopeStack` `store null`。`new` 构造窗内勿清 objSlot（防 SSA 假死） |
 
 ---
 
@@ -94,11 +94,13 @@ flowchart TD
 | `hao_gc_root_push(slot)` | 登记 GC 指针 alloca 地址 |
 | `hao_gc_root_unwind(wm)` | 函数出口（含 return / unwind ret）回退 |
 
-**while / for-in 体内 var/val**：alloca +（若 GC）`root_push` **提到循环前**，每轮只 `store`；循环结束 GC 槽 `store null`。禁止每轮 `root_push`（否则历史对象永真根——08-gc-monitor / v0.55.3–0.55.4）。for-in 循环变量本身早已提升；**体内其它 var 自 v0.55.4 起同样提升**。
+**while / for-in 体内 var/val**：alloca +（若 GC）`root_push` **提到循环前**，每轮只 `store`；循环结束 GC 槽 `store null`。禁止每轮 `root_push`（08-gc-monitor / v0.55.3–0.55.4）。
+
+**循环 spill 池（v0.55.5）**：嵌套 while/for **共用一层池**；在循环**之前**预分配 ptr 槽并 `root_push`（支配全部 use，禁止 body 内临时 `alloca`）；`emitSpillGcRoot` / when / catch / for.seq·iter / 未提升 GC 局部 `acquire` 复用；每层 `scopeStack`；for 用 sticky+`recycle`；**内层 clear 不得清外层槽**。try 正常结束：catch 绑定 + `unwindGcRoot` 置 null。
 
 **方法 / lambda 结束**：入口 `hao_gc_root_watermark`，return / 隐式 return 时 `hao_gc_root_unwind`（整帧 shadow 回退）。
 
-**普通 `{ }` 块**：符号表有作用域；shadow **不**在块尾提前 unwind（与 Go 栈帧内死局部可拖到函数返回类似）。无限循环线程里的短生命周期对象须靠 **循环提升** 或拆到会 return 的函数。
+**普通 `{ }` 块**：符号表有作用域；shadow **不**在块尾提前 unwind（对齐「帧内死局部可拖到 return」）。无限循环里的短生命周期对象靠 **提升 + spill 池**，不是靠「文档写了限制就算了」。
 
 ### 4.4 分配
 
@@ -142,15 +144,15 @@ flowchart TD
 
 ## 7. 与 Go 的对齐 / 有意差异
 
-| 点 | Hao（v0.55.4） | Go 方向 |
+| 点 | Hao（v0.55.5） | Go 方向 |
 |----|--------------|---------|
 | 可达性 + 三色 + 混合屏障 | ✅ | ✅ |
 | 短 STW 根/终止 | 软 STW + 超时 abort | 更短 |
-| Hao 帧精确根 | ✅ shadow（含 when/catch/select/unwind/new/aspread） | 栈图 |
+| Hao 帧精确根 | ✅ shadow + **循环 spill 池**（when/catch/select/new/for.seq…） | 栈图 |
 | C runtime 帧 | os_block 时有界保守 + 显式根 | 较少混 C |
 | mark worker | ✅ 私有线程 | ✅ |
 | 抢占 | 协作 + os_block | 信号更强 |
-| concurrent sweep / span | **排期（非能力天花板）** | 有 |
+| concurrent sweep / span | **排期（停顿优化，非假活借口）** | 有 |
 | LLVM stackmap | **架构不用**（shadow 替代） | N/A |
 | Win SuspendThread | **禁止（架构）** | N/A |
 
@@ -166,9 +168,10 @@ flowchart TD
 6. mark worker 是否在**持锁外**启动？  
 7. STW 是否仍对 os_block 扫 C 叶（勿再「有 shadow 就 return」）？  
 8. `GcStats` 字段序是否与 `hao_gc_stats` 锁定？  
-9. 临时 spill（new/aspread）用完是否清 null？  
+9. 循环内合成根是否走 **spill 池**（预分配+acquire）；内层 clear 是否只动本层 `scopeStack`？  
 10. major 路径是否**禁止**把 remset 当根 enqueue？晋升后是否**勿**盲目 `remset_add`（只靠屏障记真实 old→young）？  
-11. while/**for-in** 体内 GC `var` 是否**提升**到循环外只 push 一次（勿每轮 `root_push`）？
+11. while/**for-in** 体内 GC `var` 是否**提升**；`new` 是否保留 objSlot 至调用方根/池清？  
+12. try 正常结束是否清 catch 绑定 + `unwindGcRoot`？
 
 验收：
 
@@ -187,6 +190,7 @@ hao run test/gc_html_refresh_smoke.hao
 hao run test/gc_remset_major_smoke.hao
 hao run test/gc_loop_var_root_smoke.hao
 hao run test/gc_for_var_root_smoke.hao
+hao run test/gc_loop_spill_pool_smoke.hao
 ```
 
 ---
@@ -199,4 +203,4 @@ hao run test/gc_for_var_root_smoke.hao
 | GC | `stdlib/runtime_gc.c`、`runtime_internal.h` |
 | 数组/反射/fs/os | `runtime_array.c`、`runtime_reflect.c`、`runtime_string.c`、`runtime_fs.c`、`runtime_os.c` |
 | API / 面板 | `stdlib/src/gc/GC.hao`、`haolang-example/08-gc-monitor/` |
-| 历史坑 | `docs/坑债.md`（BI～BW） |
+| 历史坑 | `docs/坑债.md`（BI～BZ） |

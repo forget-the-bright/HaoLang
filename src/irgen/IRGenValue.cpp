@@ -592,7 +592,129 @@ void IRGen::clearUnwindGcRoot() {
     storeUnwindGcRootPtr("null");
 }
 
+/* 循环入口预分配槽数：须在循环前（支配整段循环），禁止在 body 内 alloca */
+static constexpr size_t kLoopSpillPoolPrealloc = 48;
+
+void IRGen::enterLoopSpillScope() {
+    if (loopSpillDepth_ == 0) {
+        LoopSpillPool pool;
+        /* 在 while/for 之前发射：支配 body/step/end 上所有 store null */
+        for (size_t i = 0; i < kLoopSpillPoolPrealloc; ++i) {
+            std::string addr = em_.nextNamed("loop.spill");
+            em_.emit(addr + " = alloca ptr");
+            em_.emit("store ptr null, ptr " + addr);
+            emitGcRootPush(addr);
+            pool.slots.push_back(addr);
+        }
+        pool.next = 0;
+        pool.highWater = 0;
+        loopSpillPools_.push_back(std::move(pool));
+    }
+    if (!loopSpillPools_.empty()) {
+        auto& pool = loopSpillPools_.back();
+        pool.scopeStack.push_back(pool.next);
+    }
+    ++loopSpillDepth_;
+}
+
+void IRGen::leaveLoopSpillScope() {
+    if (loopSpillDepth_ <= 0) return;
+    if (!loopSpillPools_.empty()) {
+        auto& pool = loopSpillPools_.back();
+        if (!pool.scopeStack.empty()) {
+            size_t base = pool.scopeStack.back();
+            size_t lim = pool.highWater > pool.next ? pool.highWater : pool.next;
+            if (lim > pool.slots.size()) lim = pool.slots.size();
+            for (size_t i = base; i < lim; ++i)
+                em_.emit("store ptr null, ptr " + pool.slots[i]);
+            pool.next = base;
+            if (pool.highWater > base) pool.highWater = base;
+            pool.scopeStack.pop_back();
+            /* 弹出本层 sticky（异常路径防护） */
+            while (!pool.stickyStack.empty() &&
+                   pool.stickyStack.back() > base)
+                pool.stickyStack.pop_back();
+        }
+    }
+    --loopSpillDepth_;
+    if (loopSpillDepth_ == 0 && !loopSpillPools_.empty())
+        loopSpillPools_.pop_back();
+}
+
+void IRGen::pinLoopSpillCheckpoint() {
+    if (loopSpillPools_.empty()) return;
+    loopSpillPools_.back().stickyStack.push_back(loopSpillPools_.back().next);
+}
+
+void IRGen::recycleLoopSpillSlots() {
+    if (loopSpillPools_.empty()) return;
+    auto& pool = loopSpillPools_.back();
+    if (!pool.stickyStack.empty()) {
+        pool.next = pool.stickyStack.back();
+        return;
+    }
+    /* 无 pin：回收到本层 while/for 基线，勿动外层槽 */
+    if (!pool.scopeStack.empty())
+        pool.next = pool.scopeStack.back();
+    else
+        pool.next = 0;
+}
+
+void IRGen::unpinLoopSpillCheckpoint() {
+    if (loopSpillPools_.empty()) return;
+    auto& pool = loopSpillPools_.back();
+    if (pool.stickyStack.empty()) return;
+    size_t sticky = pool.stickyStack.back();
+    size_t lim = pool.next > sticky ? pool.next : sticky;
+    for (size_t i = sticky; i < lim && i < pool.slots.size(); ++i)
+        em_.emit("store ptr null, ptr " + pool.slots[i]);
+    pool.next = sticky;
+    pool.stickyStack.pop_back();
+}
+
+void IRGen::clearLoopSpillSlots() {
+    if (loopSpillPools_.empty()) return;
+    auto& pool = loopSpillPools_.back();
+    /* 只清本层作用域，禁止内层 while 误杀外层仍存活的 spill/局部 */
+    size_t base = pool.scopeStack.empty() ? 0 : pool.scopeStack.back();
+    size_t lim = pool.highWater > pool.next ? pool.highWater : pool.next;
+    if (lim > pool.slots.size()) lim = pool.slots.size();
+    for (size_t i = base; i < lim; ++i)
+        em_.emit("store ptr null, ptr " + pool.slots[i]);
+    pool.next = base;
+    pool.highWater = base;
+    while (!pool.stickyStack.empty() && pool.stickyStack.back() > base)
+        pool.stickyStack.pop_back();
+}
+
+std::string IRGen::acquireLoopGcSlot(const std::string& nameHint) {
+    if (loopSpillPools_.empty()) {
+        std::string addr = em_.nextNamed(nameHint);
+        em_.emit(addr + " = alloca ptr");
+        em_.emit("store ptr null, ptr " + addr);
+        emitGcRootPush(addr);
+        return addr;
+    }
+    auto& pool = loopSpillPools_.back();
+    if (pool.next < pool.slots.size()) {
+        std::string addr = pool.slots[pool.next++];
+        if (pool.next > pool.highWater) pool.highWater = pool.next;
+        return addr;
+    }
+    /* 预分配用尽：退回独立槽（罕见；不入池，避免 body 内 alloca 破坏支配关系被 clear） */
+    std::string addr = em_.nextNamed(nameHint);
+    em_.emit(addr + " = alloca ptr");
+    em_.emit("store ptr null, ptr " + addr);
+    emitGcRootPush(addr);
+    return addr;
+}
+
 std::string IRGen::emitSpillGcRoot(const std::string& nameHint, const std::string& ptrIr) {
+    if (!loopSpillPools_.empty()) {
+        std::string addr = acquireLoopGcSlot(nameHint);
+        em_.emit("store ptr " + ptrIr + ", ptr " + addr);
+        return addr;
+    }
     std::string addr = em_.nextNamed(nameHint);
     em_.emit(addr + " = alloca ptr");
     em_.emit("store ptr " + ptrIr + ", ptr " + addr);

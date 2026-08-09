@@ -1,0 +1,51 @@
+// v0.55.5：循环内合成根（when/try/new/for.seq）走 spill 池，禁止每轮 root_push 假活
+package main;
+
+import gc;
+import collections.*;
+import exception;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var items = new List<Object>();
+    var k = 0;
+    while (k < 20) {
+        items.add(new Box("i-" + Integer.toStr(k)));
+        k += 1;
+    }
+
+    var round = 0;
+    while (round < 30) {
+        // when 主体 / 表达式结果
+        var tag = when (round % 3) {
+            0 -> "a";
+            1 -> "b";
+            else -> "c";
+        };
+        // try/catch 绑定
+        try {
+            if (round % 7 == 0) {
+                throw new exception.Exception("x");
+            }
+        } catch (e: exception.Exception) {
+            var _m = e.getMessage();
+        }
+        // for.seq + 体内 new
+        for (it in items) {
+            var junk = new Box(tag + "-" + Integer.toStr(round));
+            junk = new Box("drop");
+        }
+        round += 1;
+    }
+
+    gc.GC.collect();
+    var blocks = gc.GC.blockCount();
+    fmt.println(blocks < 25000); // true：合成根不跨轮堆积
+    fmt.println(gc.GC.liveBytes() < (3 * 1024 * 1024)); // true
+    fmt.println(gc.GC.markAbortCycles() == 0); // true
+    fmt.println(gc.GC.stwMarkAllFallbacks() == 0); // true
+}

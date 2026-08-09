@@ -412,8 +412,14 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         if (!ci.isDefault && ci.isRecv) {
             std::string bits = em_.nextTemp();
             em_.emit(bits + " = load i64, ptr " + ci.outAlloca);
-            std::string addr = em_.nextNamed(ci.bindName + ".addr");
-            em_.emit(addr + " = alloca " + ci.bindType->llvmType());
+            std::string addr;
+            bool poolBind = isGcPointerType(ci.bindType) && inLoopSpillPool();
+            if (poolBind)
+                addr = acquireLoopGcSlot(ci.bindName + ".addr");
+            else {
+                addr = em_.nextNamed(ci.bindName + ".addr");
+                em_.emit(addr + " = alloca " + ci.bindType->llvmType());
+            }
             if (ci.method == "recv") {
                 em_.emit("store i64 " + bits + ", ptr " + addr);
             } else if (ci.method == "recvInt") {
@@ -426,7 +432,7 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
                 em_.emit(p + " = inttoptr i64 " + bits + " to ptr");
                 em_.emit("store ptr " + p + ", ptr " + addr);
             }
-            if (isGcPointerType(ci.bindType))
+            if (isGcPointerType(ci.bindType) && !poolBind)
                 emitGcRootPush(addr);
             auto sym = std::make_shared<Symbol>();
             sym->kind = SymbolKind::Variable;
@@ -529,11 +535,30 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
         return;
     }
 
+    // 未提升但仍在循环 spill 池内的 GC 局部：走池槽（补 Unknown 等 hoist 缺口）
+    bool boxed = !isVal && capturedVarNames_.count(name) > 0;
+    if (!boxed && isGcPointerType(type) && inLoopSpillPool()) {
+        std::string addr = acquireLoopGcSlot(name + ".addr");
+        if (hasInit)
+            em_.emit("store " + type->llvmType() + " " + init.ir + ", ptr " + addr);
+        else
+            em_.emit("store ptr null, ptr " + addr);
+        auto sym = std::make_shared<Symbol>();
+        sym->kind = SymbolKind::Variable;
+        sym->name = name;
+        sym->type = type;
+        sym->isMutable = !isVal;
+        sym->irAddr = addr;
+        sym->boxed = false;
+        sym->line = vd->getStart()->getLine();
+        syms_.declare(sym);
+        return;
+    }
+
     std::string addr = em_.nextNamed(name + ".addr");
 
     // 被 lambda 捕获的可变 var 装箱到堆 cell，与闭包共享；
     // val 不可变，按值捕获即可，无需装箱。
-    bool boxed = !isVal && capturedVarNames_.count(name) > 0;
     if (boxed) {
         em_.emit(addr + " = alloca ptr");
         int64_t cbm = isGcPointerType(type) ? 1 : 0;
@@ -635,7 +660,8 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
     std::string bodyL = em_.nextLabel("while.body");
     std::string endL  = em_.nextLabel("while.end");
 
-    /* 提升体内 var：同一槽每轮 store，旧对象失去根 → major 可回收（08-gc-monitor） */
+    /* 提升体内 var + 进入 spill 池：同一槽每轮 store，旧对象失去根 */
+    enterLoopSpillScope();
     auto savedHoist = loopHoisted_;
     hoistVarDeclsInLoopBody(st->statement());
 
@@ -647,16 +673,22 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
     em_.emit("call void @hao_gc_safepoint()");
     Value cond = genExpr(st->expr());
     if (!cond.valid()) {
+        clearHoistedGcSince(savedHoist);
         loopHoisted_ = std::move(savedHoist);
+        leaveLoopSpillScope();
         return;
     }
     if (cond.type->kind != TypeKind::Bool) {
         error(st->expr(), "while 条件必须是 Bool 类型，实际为 " + cond.type->toString());
+        clearHoistedGcSince(savedHoist);
         loopHoisted_ = std::move(savedHoist);
+        leaveLoopSpillScope();
         return;
     }
     if (!ensureNonNullOperand(cond, st->expr(), "while 条件")) {
+        clearHoistedGcSince(savedHoist);
         loopHoisted_ = std::move(savedHoist);
+        leaveLoopSpillScope();
         return;
     }
     em_.emit("br i1 " + toI1(cond) + ", label %" + bodyL + ", label %" + endL);
@@ -681,14 +713,18 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
     }
     genStatement(st->statement());
     popSmartCastFrame();
-    if (!blockTerminated_)
+    if (!blockTerminated_) {
+        /* 本轮合成根 / 未提升局部槽清 null，下轮复用（不 root_push） */
+        clearLoopSpillSlots();
         em_.emit("br label %" + condL);
+    }
     loops_.pop_back();
 
     em_.emitLabel(endL);
     blockTerminated_ = false;
     clearHoistedGcSince(savedHoist);
     loopHoisted_ = std::move(savedHoist);
+    leaveLoopSpillScope();
 }
 
 // ============================================================
@@ -800,11 +836,11 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
                         const Value& seq) {
     TypePtr elemType = seq.type->elem ? seq.type->elem : Type::makeInt();
 
-    // 把序列存入临时变量，避免每次迭代重复求值
-    std::string seqAddr = em_.nextNamed("for.seq");
-    em_.emit(seqAddr + " = alloca ptr");
-    em_.emit("store ptr " + seq.ir + ", ptr " + seqAddr);
-    emitGcRootPush(seqAddr);
+    enterLoopSpillScope();
+
+    // 序列进 spill 池（嵌套 while 时复用外层槽，勿每轮 root_push）
+    std::string seqAddr = emitSpillGcRoot("for.seq", seq.ir);
+    pinLoopSpillCheckpoint();
 
     // 长度也只求一次
     std::string lenReg = em_.nextTemp();
@@ -818,12 +854,18 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
     em_.emit(idxAddr + " = alloca i64");
     em_.emit("store i64 0, ptr " + idxAddr);
 
-    /* 循环变量 alloca 提到循环外，精确根只 push 一次（防每轮涨 shadow） */
-    std::string varAddr = em_.nextNamed(varName + ".addr");
-    em_.emit(varAddr + " = alloca " + elemType->llvmType());
-    if (isGcPointerType(elemType)) {
-        em_.emit("store ptr null, ptr " + varAddr);
-        emitGcRootPush(varAddr);
+    /* 循环变量：池内复用 / 池外一次 push */
+    std::string varAddr;
+    if (isGcPointerType(elemType) && inLoopSpillPool()) {
+        varAddr = acquireLoopGcSlot(varName + ".addr");
+        pinLoopSpillCheckpoint(); /* 保护 seq+var，体 spill 可 recycle */
+    } else {
+        varAddr = em_.nextNamed(varName + ".addr");
+        em_.emit(varAddr + " = alloca " + elemType->llvmType());
+        if (isGcPointerType(elemType)) {
+            em_.emit("store ptr null, ptr " + varAddr);
+            emitGcRootPush(varAddr);
+        }
     }
 
     /* 体内其它 var 一并提升（与 while 同纪律） */
@@ -889,9 +931,10 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
     }
     if (!blockTerminated_) em_.emit("br label %" + stepL);
 
-    // ---- 递增 ----
+    // ---- 递增（continue 亦入此；回收体 spill，保护 seq/var）----
     em_.emitLabel(stepL);
     blockTerminated_ = false;
+    recycleLoopSpillSlots();
     std::string iv3 = em_.nextTemp();
     em_.emit(iv3 + " = load i64, ptr " + idxAddr);
     std::string inc = em_.nextTemp();
@@ -903,8 +946,13 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
     blockTerminated_ = false;
     if (isGcPointerType(elemType))
         em_.emit("store ptr null, ptr " + varAddr);
+    em_.emit("store ptr null, ptr " + seqAddr);
+    if (isGcPointerType(elemType))
+        unpinLoopSpillCheckpoint(); /* var 保护层 */
+    unpinLoopSpillCheckpoint();     /* seq 保护层 */
     clearHoistedGcSince(savedHoist);
     loopHoisted_ = std::move(savedHoist);
+    leaveLoopSpillScope();
 }
 
 // Iterable<X> 接口迭代循环体（v0.18.0）
@@ -950,16 +998,21 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
 
     std::string iter = dispatch(seq.ir, itf, im, "ptr");
 
-    std::string iterAddr = em_.nextNamed("for.it");
-    em_.emit(iterAddr + " = alloca ptr");
-    em_.emit("store ptr " + iter + ", ptr " + iterAddr);
-    emitGcRootPush(iterAddr);
+    enterLoopSpillScope();
+    std::string iterAddr = emitSpillGcRoot("for.it", iter);
+    pinLoopSpillCheckpoint();
 
-    std::string varAddr = em_.nextNamed(varName + ".addr");
-    em_.emit(varAddr + " = alloca " + elemType->llvmType());
-    if (isGcPointerType(elemType)) {
-        em_.emit("store ptr null, ptr " + varAddr);
-        emitGcRootPush(varAddr);
+    std::string varAddr;
+    if (isGcPointerType(elemType) && inLoopSpillPool()) {
+        varAddr = acquireLoopGcSlot(varName + ".addr");
+        pinLoopSpillCheckpoint();
+    } else {
+        varAddr = em_.nextNamed(varName + ".addr");
+        em_.emit(varAddr + " = alloca " + elemType->llvmType());
+        if (isGcPointerType(elemType)) {
+            em_.emit("store ptr null, ptr " + varAddr);
+            emitGcRootPush(varAddr);
+        }
     }
 
     auto savedHoist = loopHoisted_;
@@ -1015,14 +1068,20 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
     // ---- 步进：回到条件（hasNext 每次重新判定）----
     em_.emitLabel(stepL);
     blockTerminated_ = false;
+    recycleLoopSpillSlots();
     em_.emit("br label %" + condL);
 
     em_.emitLabel(endL);
     blockTerminated_ = false;
     if (isGcPointerType(elemType))
         em_.emit("store ptr null, ptr " + varAddr);
+    em_.emit("store ptr null, ptr " + iterAddr);
+    if (isGcPointerType(elemType))
+        unpinLoopSpillCheckpoint();
+    unpinLoopSpillCheckpoint();
     clearHoistedGcSince(savedHoist);
     loopHoisted_ = std::move(savedHoist);
+    leaveLoopSpillScope();
 }
 
 // ============================================================
@@ -1049,13 +1108,19 @@ void IRGen::genWhenStmt(HaoLangParser::WhenStmtContext* st) {
             return;
         }
         subjType = subject.type;
-        // 存入临时变量，避免每个分支重复求值
-        subjAddr = em_.nextNamed("when.subj");
-        em_.emit(subjAddr + " = alloca " + subjType->llvmType());
-        em_.emit("store " + subjType->llvmType() + " " + subject.ir +
-                 ", ptr " + subjAddr);
-        if (isGcPointerType(subjType))
-            emitGcRootPush(subjAddr);
+        // 存入临时变量，避免每个分支重复求值；循环内走 spill 池
+        if (isGcPointerType(subjType) && inLoopSpillPool()) {
+            subjAddr = acquireLoopGcSlot("when.subj");
+            em_.emit("store " + subjType->llvmType() + " " + subject.ir +
+                     ", ptr " + subjAddr);
+        } else {
+            subjAddr = em_.nextNamed("when.subj");
+            em_.emit(subjAddr + " = alloca " + subjType->llvmType());
+            em_.emit("store " + subjType->llvmType() + " " + subject.ir +
+                     ", ptr " + subjAddr);
+            if (isGcPointerType(subjType))
+                emitGcRootPush(subjAddr);
+        }
     }
 
     std::string endL = em_.nextLabel("when.end");
@@ -1189,6 +1254,8 @@ void IRGen::genWhenStmt(HaoLangParser::WhenStmtContext* st) {
 
     em_.emitLabel(endL);
     blockTerminated_ = false;
+    if (hasSubject && isGcPointerType(subjType) && !subjAddr.empty())
+        em_.emit("store ptr null, ptr " + subjAddr);
     (void)allBranchesJumped;
 }
 

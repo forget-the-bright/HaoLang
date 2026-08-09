@@ -213,7 +213,7 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
     tc.endLabel = endL;
     tryStack_.push_back(tc);
 
-    // catch 绑定槽：在 setjmp 前分配并 root_push（只 push 一次，进 catch 仅 store）
+    // catch 绑定槽：循环内走 spill 池；否则 setjmp 前 alloca+push 一次
     struct CatchEntry {
         HaoLangParser::CatchClauseContext* node;
         std::string label;
@@ -224,11 +224,18 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
     for (size_t i = 0; i < catches.size(); ++i) {
         auto* cc = catches[i];
         TypePtr t = resolveType(cc->type());
-        std::string bindAddr = em_.nextNamed(
-            "try" + idx + ".c" + std::to_string(i) + ".addr");
-        em_.emit(bindAddr + " = alloca ptr");
-        em_.emit("store ptr null, ptr " + bindAddr);
-        emitGcRootPush(bindAddr);
+        std::string bindHint =
+            "try" + idx + ".c" + std::to_string(i) + ".addr";
+        std::string bindAddr;
+        if (inLoopSpillPool()) {
+            bindAddr = acquireLoopGcSlot(bindHint);
+            em_.emit("store ptr null, ptr " + bindAddr);
+        } else {
+            bindAddr = em_.nextNamed(bindHint);
+            em_.emit(bindAddr + " = alloca ptr");
+            em_.emit("store ptr null, ptr " + bindAddr);
+            emitGcRootPush(bindAddr);
+        }
         catchEntries.push_back(
             {cc, "try" + idx + ".catch" + std::to_string(i), t, bindAddr});
     }
@@ -444,6 +451,10 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
     em_.emitLabel(endL);
     // 正常退出后复位 reason（避免上次的残留影响后续——虽然正常路径 reason 应为 0）
     em_.emit("store i32 0, ptr " + unwindReasonAddr_);
+    /* 放弃 catch 绑定与 unwind GC 根，避免 while{try/catch} 假活 */
+    for (const auto& ce : catchEntries)
+        em_.emit("store ptr null, ptr " + ce.bindAddr);
+    clearUnwindGcRoot();
 
     // 若 try 体与所有 catch 都不向下落入 cleanup（都 return/throw 了），
     // 则 endL 实际不可达，但仍需一条终结指令；整个 try 不会正常继续。

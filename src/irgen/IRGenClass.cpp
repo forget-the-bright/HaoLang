@@ -1159,6 +1159,8 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
     bool savedInCtor = inConstructor_;
     std::string savedGcWm = gcRootWm_;
     auto savedHoist = loopHoisted_;
+    auto savedSpillPools = loopSpillPools_;
+    int savedSpillDepth = loopSpillDepth_;
     std::string savedUnwindReason = unwindReasonAddr_;
     std::string savedUnwindRet = unwindRetAddr_;
     std::string savedUnwindStop = unwindStopAddr_;
@@ -1181,6 +1183,8 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
     thisAddr_.clear();
     loops_.clear();
     loopHoisted_.clear();
+    loopSpillPools_.clear();
+    loopSpillDepth_ = 0;
     tryCounter_ = 0;
     tryStack_.clear();
     catchDepth_ = 0;
@@ -1305,6 +1309,8 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
     blockTerminated_ = savedBlockTerm;
     loops_ = savedLoops;
     loopHoisted_ = savedHoist;
+    loopSpillPools_ = savedSpillPools;
+    loopSpillDepth_ = savedSpillDepth;
     tryCounter_ = savedTryCounter;
     tryStack_ = savedTryStack;
     catchDepth_ = savedCatchDepth;
