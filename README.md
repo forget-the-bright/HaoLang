@@ -5,8 +5,8 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.55.3**（while 局部提升 + remset 仅 minor + 精确根完备 + 皮带成对摘根 + 诚实双轨 + 混合屏障 + mark worker；详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)）
-- 测试基线：`test/suite` **1011** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.55.3
+- 当前版本：**v0.55.4**（while/for 局部提升 + remset 仅 minor + 精确根完备 + 皮带成对摘根 + 诚实双轨 + 混合屏障 + mark worker；详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)）
+- 测试基线：`test/suite` **1011** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.55.4
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
 - **下一批（默认）**：Netty NIO / select——见 [`记忆文档.md`](记忆文档.md) 第 **10** 章
 
@@ -322,7 +322,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 ## 十一、已知限制
 
 
-- GC 是 **v0.55.3**：混合屏障 + while 局部提升 + remset **仅服务 minor** + Hao shadow 精确根 + C 皮带成对摘根 + mark worker；**诚实双轨**。详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)。
+- GC 是 **v0.55.4**：混合屏障 + while/for 局部提升 + remset **仅服务 minor** + Hao shadow 精确根 + C 皮带成对摘根 + mark worker；**诚实双轨**。详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)。
 - 已有真正 **`Byte`（0～255）**、**`Char`（Unicode 码点 i32）** 与紧凑数组；String = `ptr`→`HaoString{len,cap,data[]}`，`.length`/`s[i]` 按码点。
 - **泛型接口已实现（v0.18.0）**：`Iterable<T>`/`Iterator<T>`；`toArray()` 仍作兜底。
 - **反射**：类型自省 + 字段读写 + 注解（含 value 等参数）+ **方法 invoke**（含 `invokeFloat`）已有；运行时动态定义类/成员需 VM，后续。
@@ -364,7 +364,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | **v0.55.3** while 局部提升 + remset 仅 minor + 精确根完备 + 皮带成对 + 诚实双轨；反向 28/28 |
+| ✅ 已完成 | **v0.55.4** while/for 局部提升 + remset 仅 minor + 精确根完备 + 皮带成对 + 诚实双轨；反向 28/28 |
 | 🔥 **下一批（默认开干）** | Netty NIO poll / select 真多路 wait |
 | 其后 | 自举（Stage 10） |
 

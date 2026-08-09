@@ -1479,6 +1479,7 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
         }
     }
     gcRootWm_.clear();
+    loopHoisted_.clear();
 }
 
 void IRGen::genFunction(HaoLangParser::FuncDeclContext* fn) {

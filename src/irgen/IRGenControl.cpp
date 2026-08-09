@@ -62,6 +62,15 @@ void IRGen::hoistVarDeclsInLoopBody(HaoLangParser::StatementContext* body) {
     walk(body);
 }
 
+void IRGen::clearHoistedGcSince(
+    const std::unordered_map<HaoLangParser::VarDeclContext*, HoistedLocal>& saved) {
+    for (auto& kv : loopHoisted_) {
+        if (saved.count(kv.first)) continue;
+        if (kv.second.boxed || isGcPointerType(kv.second.type))
+            em_.emit("store ptr null, ptr " + kv.second.addr);
+    }
+}
+
 void IRGen::genBlock(HaoLangParser::BlockContext* blk, bool newScope) {
     if (!blk) return;
     if (newScope) {
@@ -494,7 +503,7 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
         return;
     }
 
-    // while 提升：复用循环前 alloca/push，本轮只写初值（覆盖即放弃上轮对象）
+    // 循环提升：复用循环前 alloca/push，本轮只写初值（覆盖即放弃上轮对象）
     auto hit = loopHoisted_.find(vd);
     if (hit != loopHoisted_.end()) {
         const HoistedLocal& h = hit->second;
@@ -654,11 +663,13 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
 
     // ---- 循环体 ----
     // continue 回到条件判断，break 跳出循环
-    LoopContext lc; lc.breakLabel = endL; lc.continueLabel = condL;
-    lc.tryDepth = static_cast<int>(tryStack_.size());
-    loops_.push_back(lc);
     em_.emitLabel(bodyL);
     blockTerminated_ = false;
+    LoopContext lc;
+    lc.breakLabel = endL;
+    lc.continueLabel = condL;
+    lc.tryDepth = static_cast<int>(tryStack_.size());
+    loops_.push_back(lc);
     NullCheckFact wfact = analyzeNullCheck(st->expr());
     pushSmartCastFrame();
     if (!wfact.name.empty() && wfact.isNotNull) {
@@ -670,17 +681,13 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
     }
     genStatement(st->statement());
     popSmartCastFrame();
-    if (!blockTerminated_) em_.emit("br label %" + condL);
+    if (!blockTerminated_)
+        em_.emit("br label %" + condL);
     loops_.pop_back();
 
     em_.emitLabel(endL);
     blockTerminated_ = false;
-    /* 循环结束：提升的 GC 槽置 null，避免末轮对象假活到函数出口 */
-    for (auto& kv : loopHoisted_) {
-        if (savedHoist.count(kv.first)) continue;
-        if (kv.second.boxed || isGcPointerType(kv.second.type))
-            em_.emit("store ptr null, ptr " + kv.second.addr);
-    }
+    clearHoistedGcSince(savedHoist);
     loopHoisted_ = std::move(savedHoist);
 }
 
@@ -814,8 +821,14 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
     /* 循环变量 alloca 提到循环外，精确根只 push 一次（防每轮涨 shadow） */
     std::string varAddr = em_.nextNamed(varName + ".addr");
     em_.emit(varAddr + " = alloca " + elemType->llvmType());
-    if (isGcPointerType(elemType))
+    if (isGcPointerType(elemType)) {
+        em_.emit("store ptr null, ptr " + varAddr);
         emitGcRootPush(varAddr);
+    }
+
+    /* 体内其它 var 一并提升（与 while 同纪律） */
+    auto savedHoist = loopHoisted_;
+    hoistVarDeclsInLoopBody(st->statement());
 
     std::string condL = em_.nextLabel("for.cond");
     std::string bodyL = em_.nextLabel("for.body");
@@ -866,8 +879,9 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
         sym->irAddr = varAddr;
         syms_.declare(sym);
 
-        // continue 跳到 step（递增索引），而非 cond，否则会死循环
-        LoopContext flc; flc.breakLabel = endL; flc.continueLabel = stepL;
+        LoopContext flc;
+        flc.breakLabel = endL;
+        flc.continueLabel = stepL;
         flc.tryDepth = static_cast<int>(tryStack_.size());
         loops_.push_back(flc);
         genStatement(st->statement());
@@ -887,6 +901,10 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
 
     em_.emitLabel(endL);
     blockTerminated_ = false;
+    if (isGcPointerType(elemType))
+        em_.emit("store ptr null, ptr " + varAddr);
+    clearHoistedGcSince(savedHoist);
+    loopHoisted_ = std::move(savedHoist);
 }
 
 // Iterable<X> 接口迭代循环体（v0.18.0）
@@ -939,8 +957,13 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
 
     std::string varAddr = em_.nextNamed(varName + ".addr");
     em_.emit(varAddr + " = alloca " + elemType->llvmType());
-    if (isGcPointerType(elemType))
+    if (isGcPointerType(elemType)) {
+        em_.emit("store ptr null, ptr " + varAddr);
         emitGcRootPush(varAddr);
+    }
+
+    auto savedHoist = loopHoisted_;
+    hoistVarDeclsInLoopBody(st->statement());
 
     std::string condL = em_.nextLabel("for.cond");
     std::string bodyL = em_.nextLabel("for.body");
@@ -979,7 +1002,9 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
         sym->irAddr = varAddr;
         syms_.declare(sym);
 
-        LoopContext flc; flc.breakLabel = endL; flc.continueLabel = stepL;
+        LoopContext flc;
+        flc.breakLabel = endL;
+        flc.continueLabel = stepL;
         flc.tryDepth = static_cast<int>(tryStack_.size());
         loops_.push_back(flc);
         genStatement(st->statement());
@@ -994,6 +1019,10 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
 
     em_.emitLabel(endL);
     blockTerminated_ = false;
+    if (isGcPointerType(elemType))
+        em_.emit("store ptr null, ptr " + varAddr);
+    clearHoistedGcSince(savedHoist);
+    loopHoisted_ = std::move(savedHoist);
 }
 
 // ============================================================

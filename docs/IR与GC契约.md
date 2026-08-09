@@ -1,4 +1,4 @@
-# IR ↔ GC 契约（v0.55.3+ 权威说明）
+# IR ↔ GC 契约（v0.55.4+ 权威说明）
 
 > **读者**：改 IRGen / runtime_gc / 写屏障 / STW 的人。  
 > **地位**：GC 埋点、流程、规则的**唯一详文**；记忆文档 §5.4 只保留摘要并链到本文。  
@@ -94,7 +94,11 @@ flowchart TD
 | `hao_gc_root_push(slot)` | 登记 GC 指针 alloca 地址 |
 | `hao_gc_root_unwind(wm)` | 函数出口（含 return / unwind ret）回退 |
 
-**while 体内 var/val**：alloca +（若 GC）`root_push` **提到循环前**，每轮只 `store`；循环结束 GC 槽 `store null`。禁止每轮 `root_push`（否则历史对象永真根，`blockCount` 台阶涨——08-gc-monitor / v0.55.3）。for-in 循环变量同此纪律。
+**while / for-in 体内 var/val**：alloca +（若 GC）`root_push` **提到循环前**，每轮只 `store`；循环结束 GC 槽 `store null`。禁止每轮 `root_push`（否则历史对象永真根——08-gc-monitor / v0.55.3–0.55.4）。for-in 循环变量本身早已提升；**体内其它 var 自 v0.55.4 起同样提升**。
+
+**方法 / lambda 结束**：入口 `hao_gc_root_watermark`，return / 隐式 return 时 `hao_gc_root_unwind`（整帧 shadow 回退）。
+
+**普通 `{ }` 块**：符号表有作用域；shadow **不**在块尾提前 unwind（与 Go 栈帧内死局部可拖到函数返回类似）。无限循环线程里的短生命周期对象须靠 **循环提升** 或拆到会 return 的函数。
 
 ### 4.4 分配
 
@@ -138,7 +142,7 @@ flowchart TD
 
 ## 7. 与 Go 的对齐 / 有意差异
 
-| 点 | Hao（v0.55.3） | Go 方向 |
+| 点 | Hao（v0.55.4） | Go 方向 |
 |----|--------------|---------|
 | 可达性 + 三色 + 混合屏障 | ✅ | ✅ |
 | 短 STW 根/终止 | 软 STW + 超时 abort | 更短 |
@@ -164,7 +168,7 @@ flowchart TD
 8. `GcStats` 字段序是否与 `hao_gc_stats` 锁定？  
 9. 临时 spill（new/aspread）用完是否清 null？  
 10. major 路径是否**禁止**把 remset 当根 enqueue？晋升后是否**勿**盲目 `remset_add`（只靠屏障记真实 old→young）？  
-11. while 体内 GC `var` 是否**提升**到循环外只 push 一次（勿每轮 `root_push`）？
+11. while/**for-in** 体内 GC `var` 是否**提升**到循环外只 push 一次（勿每轮 `root_push`）？
 
 验收：
 
@@ -182,6 +186,7 @@ hao run test/gc_os_root_belt_smoke.hao
 hao run test/gc_html_refresh_smoke.hao
 hao run test/gc_remset_major_smoke.hao
 hao run test/gc_loop_var_root_smoke.hao
+hao run test/gc_for_var_root_smoke.hao
 ```
 
 ---

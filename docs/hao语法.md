@@ -15,7 +15,7 @@ HaoLang（好语言）是**静态类型、编译至原生机器码**的语言：
 | 维度 | 选择 |
 |------|------|
 | 执行模型 | AOT → LLVM IR → clang/lld → 单文件原生可执行文件 |
-| 内存 | 自带 GC（v0.55.3：while 局部提升 + remset 仅 minor + 精确根完备 + 皮带成对摘根 + 诚实双轨 + 混合屏障 + mark worker；详文 [`IR与GC契约.md`](IR与GC契约.md)） |
+| 内存 | 自带 GC（v0.55.4：while/for 局部提升 + remset 仅 minor + 精确根完备 + 皮带成对摘根 + 诚实双轨 + 混合屏障 + mark worker；详文 [`IR与GC契约.md`](IR与GC契约.md)） |
 | 包模型 | **目录即包**（Go 风格），清单用 `haoproject.json` |
 | 并发关键字 | **`haoroutine`**（禁止称 goroutine） |
 | 泛型 | **单态化**（C++/Rust 路线，非 JVM 擦除） |

@@ -4,7 +4,7 @@ package gc;
 //  gc.GC —— 垃圾回收详情与手动回收（v0.37 · 多线程自动回收）
 // ------------------------------------------------------------
 //  职责：让 .hao 代码查询 GC 运行状态，并显式触发一次 STW major 回收。
-//  能力（runtime v3+ / v0.55.3：while 局部提升 + remset 仅 minor + 精确根完备 + 诚实双轨 + 皮带成对）：
+//  能力（runtime v3+ / v0.55.4：while/for 局部提升 + remset 仅 minor + 精确根完备 + 诚实双轨 + 皮带成对）：
 //    - 精确堆扫描：块头 kind + 对象槽位图 / 数组 is_ptr；叶对象（String/box）不扫。
 //    - 非移动分代：nursery + old；**混合写屏障**（Yuasa shade old + Dijkstra shade new）。
 //    - 数组扩容：`hao_gc_array_copy_and_shade`（同锁 memcpy+shade，中间无 safepoint）。

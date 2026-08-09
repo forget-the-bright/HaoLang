@@ -1,0 +1,28 @@
+// v0.55.4：for-in 体内 var 提升；普通块结束 GC 槽清 null。
+package main;
+
+import gc;
+import collections.*;
+
+func main() {
+    var outer = new List<Object>();
+    var k = 0;
+    while (k < 30) {
+        outer.add(String.valueOf("o-" + Integer.toStr(k)));
+        k += 1;
+    }
+    var round = 0;
+    while (round < 25) {
+        for (item in outer) {
+            var junk = new List<Object>();
+            junk.add(item);
+            junk.add(String.valueOf("f-" + Integer.toStr(round)));
+        }
+        round += 1;
+    }
+    gc.GC.collect();
+    var blocks = gc.GC.blockCount();
+    fmt.println(blocks < 20000); // true：for 体内 junk 不跨轮假活
+    fmt.println(gc.GC.liveBytes() < (2 * 1024 * 1024)); // true
+    fmt.println(gc.GC.markAbortCycles() == 0); // true
+}

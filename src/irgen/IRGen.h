@@ -529,7 +529,7 @@ private:
     void emitVarStore(const SymbolPtr& sym, const TypePtr& ty,
                       const std::string& valIr);
     std::string emitObjectNew(int64_t nfields, int64_t bitmap);
-    // v0.54/v0.55/v0.55.3：Hao 精确根（shadow stack；while 局部提升）
+    // v0.54/v0.55.4：Hao 精确根（shadow；while/for 局部提升）
     void emitGcRootPush(const std::string& slotAddr);
     void emitGcRootUnwind();
     void beginFunctionGcRoots();
@@ -634,7 +634,7 @@ private:
     };
     std::vector<LoopContext> loops_;
 
-    // while 体内 var 提升：alloca+root_push 一次，每轮只 store（防 shadow 假活）
+    // while/for 体内 var 提升：alloca+root_push 一次，每轮只 store（防 shadow 假活）
     struct HoistedLocal {
         std::string addr;
         TypePtr type;
@@ -642,6 +642,8 @@ private:
     };
     std::unordered_map<HaoLangParser::VarDeclContext*, HoistedLocal> loopHoisted_;
     void hoistVarDeclsInLoopBody(HaoLangParser::StatementContext* body);
+    void clearHoistedGcSince(
+        const std::unordered_map<HaoLangParser::VarDeclContext*, HoistedLocal>& saved);
     TypePtr peekVarDeclType(HaoLangParser::VarDeclContext* vd);
 
     // ---------- try / finally 清理链 ----------
