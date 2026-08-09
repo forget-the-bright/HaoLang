@@ -285,20 +285,32 @@ int64_t hao_chan_recv(int64_t* unit) {
 int32_t hao_chan_try_send(int64_t* unit, int64_t bits) {
     HaoChan* c = chan_load(unit);
     if (!c) return 1;
+    /* 与 send 同序：先 root 再 chan_lock，禁止持锁调 hao_gc_*（ABBA） */
+    chan_root(bits);
     chan_lock(c);
-    if (c->closed) { chan_unlock(c); return 1; }
+    if (c->closed) {
+        chan_unlock(c);
+        chan_unroot(bits);
+        return 1;
+    }
     if (c->cap == 0) {
         /* 无缓冲：槽空则可占槽成功（供 select try_* 轮询；真多路 wait 见路线图） */
-        if (c->has_slot) { chan_unlock(c); return 1; }
-        chan_root(bits);
+        if (c->has_slot) {
+            chan_unlock(c);
+            chan_unroot(bits);
+            return 1;
+        }
         c->slot = bits;
         c->has_slot = 1;
         chan_wake_recv(c);
         chan_unlock(c);
         return 0;
     }
-    if (c->len >= c->cap) { chan_unlock(c); return 1; }
-    chan_root(bits);
+    if (c->len >= c->cap) {
+        chan_unlock(c);
+        chan_unroot(bits);
+        return 1;
+    }
     chan_push_buf(c, bits);
     chan_wake_recv(c);
     chan_unlock(c);

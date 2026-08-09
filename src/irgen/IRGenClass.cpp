@@ -1157,6 +1157,12 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
     auto savedCapNames = capturedVarNames_;
     std::string savedThisAddr = thisAddr_;
     bool savedInCtor = inConstructor_;
+    std::string savedGcWm = gcRootWm_;
+    auto savedHoist = loopHoisted_;
+    std::string savedUnwindReason = unwindReasonAddr_;
+    std::string savedUnwindRet = unwindRetAddr_;
+    std::string savedUnwindStop = unwindStopAddr_;
+    std::string savedUnwindGc = unwindGcRootAddr_;
 
     {
         std::string baseForPkg = ci->isGenericInstance() ? ci->instanceOf : ci->name;
@@ -1174,11 +1180,13 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
     inConstructor_ = false;
     thisAddr_.clear();
     loops_.clear();
+    loopHoisted_.clear();
     tryCounter_ = 0;
     tryStack_.clear();
     catchDepth_ = 0;
     lambdas_.clear();
     capturedVarNames_.clear();
+    gcRootWm_.clear();
 
     em_.emitBlank();
     em_.emitRaw("; 反射构造工厂：" + ci->name + "（"
@@ -1187,19 +1195,20 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
     em_.emitLabel("entry");
 
     // 字段默认 / 嵌套 new 可能走带异常路径的 genExpr，预留与函数体一致的槽
-    unwindReasonAddr_ = "%unwind.reason.addr";
-    unwindRetAddr_    = "%unwind.ret.addr";
-    unwindStopAddr_   = "%unwind.stop.addr";
-    em_.emit(unwindReasonAddr_ + " = alloca i32");
-    em_.emit(unwindRetAddr_ + " = alloca i64");
-    em_.emit(unwindStopAddr_ + " = alloca i32");
-    em_.emit("store i32 0, ptr " + unwindReasonAddr_);
+    emitAllocUnwindSlots();
+    beginFunctionGcRoots();
+    emitPushUnwindGcRoot();
+    /* v0.53.5：反射工厂入口 safepoint（根已就绪） */
+    em_.emit("call void @hao_gc_safepoint()");
 
     // 与普通 new 一致：先跑静态初始化（v0.30 $new0 曾漏，会导致静态字段未就绪）
     if (ci->hasStaticInit)
         em_.emit("call void @" + ci->name + ".ensureInit()");
 
-    std::string obj = emitObjectNew(ci->slotCount(), objectPtrBitmap(ci.get()));
+    std::string objRaw = emitObjectNew(ci->slotCount(), objectPtrBitmap(ci.get()));
+    std::string objSlot = emitSpillGcRoot("new.obj", objRaw);
+    std::string obj = em_.nextTemp();
+    em_.emit(obj + " = load ptr, ptr " + objSlot);
     std::string vtp = em_.nextTemp();
     em_.emit(vtp + " = getelementptr ptr, ptr " + obj + ", i64 0");
     em_.emit("store ptr " + ci->vtableIRName + ", ptr " + vtp);
@@ -1207,6 +1216,8 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
     // 字段默认值：与语言 new 同路径（genExpr + coerce），覆盖 Int?/对象/lambda 等
     for (const auto& f : ci->fields) {
         if (!f.defaultExpr) continue;
+        obj = em_.nextTemp();
+        em_.emit(obj + " = load ptr, ptr " + objSlot);
         auto* dexpr = static_cast<HaoLangParser::ExprContext*>(f.defaultExpr);
         expectedTypes_.push_back(f.type);
         ExpectedTypeGuard eg{this};
@@ -1226,6 +1237,9 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
         std::string fp = fieldPtr(obj, f.slot);
         emitHeapStore(fp, dv.ir, f.type, obj);
     }
+
+    obj = em_.nextTemp();
+    em_.emit(obj + " = load ptr, ptr " + objSlot);
 
     // 从 [Long] 槽按构造器真实 LLVM 类型解包（与 emitInvokeThunk 同约定）
     std::string argStr = "ptr " + obj;
@@ -1271,8 +1285,12 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
 
     if (!ci->ctorIRName.empty())
         em_.emit("call void " + ci->ctorIRName + "(" + argStr + ")");
-    if (!blockTerminated_)
+    if (!blockTerminated_) {
+        obj = em_.nextTemp();
+        em_.emit(obj + " = load ptr, ptr " + objSlot);
+        emitGcRootUnwind();
         em_.emit("ret ptr " + obj);
+    }
     em_.emitRaw("}");
 
     std::string def = em_.popFunctionState();
@@ -1286,6 +1304,7 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
     sawReturn_ = savedSawReturn;
     blockTerminated_ = savedBlockTerm;
     loops_ = savedLoops;
+    loopHoisted_ = savedHoist;
     tryCounter_ = savedTryCounter;
     tryStack_ = savedTryStack;
     catchDepth_ = savedCatchDepth;
@@ -1293,6 +1312,11 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
     capturedVarNames_ = savedCapNames;
     thisAddr_ = savedThisAddr;
     inConstructor_ = savedInCtor;
+    gcRootWm_ = savedGcWm;
+    unwindReasonAddr_ = savedUnwindReason;
+    unwindRetAddr_ = savedUnwindRet;
+    unwindStopAddr_ = savedUnwindStop;
+    unwindGcRootAddr_ = savedUnwindGc;
     return name;
 }
 
@@ -2603,19 +2627,23 @@ void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
 
     em_.emitRaw("define void @" + ci->name + ".staticinit() {");
     em_.emitLabel("entry");
+    /* v0.53.5：入口 safepoint（分配密集的静态/枚举初始化也能握手） */
+    em_.emit("call void @hao_gc_safepoint()");
 
     // 合成 TypeName.Class ← classOfMeta(@T.meta)（枚举/普通类共用）
     if (hasClassToken) {
         std::string tok = em_.nextTemp();
         em_.emit(tok + " = call ptr @reflect$classOfMeta(ptr @" + ci->name +
                  ".meta)");
-        em_.emit("store ptr " + tok + ", ptr @" + ci->name + ".Class");
+        emitGlobalGcStore("@" + ci->name + ".Class", tok,
+                          Type::makeClass("reflect$Class"));
     }
 
     if (ci->isEnum) {
         // ---- 枚举：创建各常量实例并存入静态字段 ----
         auto* ed = static_cast<HaoLangParser::EnumDeclContext*>(ci->staticCtorNode);
         int ord = 0;
+        TypePtr enumTy = Type::makeClass(ci->name);
         for (auto* ec : ed->enumConstant()) {
             std::string cname = ec->IDENT()->getText();
             std::string obj = emitObjectNew(ci->slotCount(), objectPtrBitmap(ci.get()));
@@ -2628,7 +2656,7 @@ void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
             em_.emit("call void " + ci->ctorIRName + "(ptr " + obj +
                      ", ptr " + nameS + ", i32 " +
                      std::to_string(ord) + ")");
-            em_.emit("store ptr " + obj + ", ptr @" + ci->name + "." + cname);
+            emitGlobalGcStore("@" + ci->name + "." + cname, obj, enumTy);
             ++ord;
         }
         em_.emit("ret void");

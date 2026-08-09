@@ -4,15 +4,18 @@ package gc;
 //  gc.GC —— 垃圾回收详情与手动回收（v0.37 · 多线程自动回收）
 // ------------------------------------------------------------
 //  职责：让 .hao 代码查询 GC 运行状态，并显式触发一次 STW major 回收。
-//  能力（runtime v3+ / v0.53.3）：
+//  能力（runtime v3+ / v0.55.3：while 局部提升 + remset 仅 minor + 精确根完备 + 诚实双轨 + 皮带成对）：
 //    - 精确堆扫描：块头 kind + 对象槽位图 / 数组 is_ptr；叶对象（String/box）不扫。
-//    - 非移动分代：nursery + old；写屏障 = remset + **Dijkstra**（IR/C 均先 shade 再 store）。
-//    - 数组扩容：`memcpy` 后 `hao_gc_shade` 补标（禁黑父白子）；major 清空 remset。
-//    - **并发标记**：色纪元 O(1) setup → 先开屏障 → 软根 STW → drain + mark assist。
-//    - **可达性闭环**：终止每轮重扫；未齐不得 term；失败 **abort MARK**（禁止无限黑囤）。
-//    - 页索引 find_block；线程池/channel `os_block_arm`；calloc 不持 GC 锁。
-//    - 栈/寄存器仍保守扫描；Win 不 SuspendThread。
-//    - `GC.stats()` 一次持锁快照；liveBytes 仅成功 major 后更新，看堆压用 heapBytes。
+//    - 非移动分代：nursery + old；**混合写屏障**（Yuasa shade old + Dijkstra shade new）。
+//    - 数组扩容：`hao_gc_array_copy_and_shade`（同锁 memcpy+shade，中间无 safepoint）。
+//    - **Hao 精确根**：shadow stack（`hao_gc_root_push/unwind`）；跨 safepoint 活指针须登记。
+//    - **诚实双轨**：始终扫 shadow；os_block/arm 或无 shadow → GPR+有界 C 叶；仅 Hao park → shadow-only。
+//    - **并发标记**：色纪元 + 软 STW + mutator assist + **GC 私有 mark worker**。
+//    - **可达性闭环**：终止须齐；失败 abort MARK；finalizer 完整复活。
+//    - 页索引 find_block；池/channel/fs/os/join `os_block_*`；Mutex 自旋 safepoint。
+//    - Win 不 SuspendThread；不用 LLVM stackmap（架构选择，shadow 替代）。
+//    - `GC.stats()` 一次持锁快照；看堆压用 heapBytes。
+//  详文：docs/IR与GC契约.md
 //  何时手动 collect：测试、压测、或确认刚丢掉大图后想立刻回收；
 //  平时依赖 nursery/全堆阈值自动触发即可。
 //  线程安全：各方法内部由 runtime 加锁；collect 会停止全世界。
@@ -36,6 +39,8 @@ extern func hao_gc_concurrent_mark_cycles(): Long = "hao_gc_concurrent_mark_cycl
 extern func hao_gc_heap_bytes(): Long = "hao_gc_heap_bytes";
 extern func hao_gc_mark_assist_steps(): Long = "hao_gc_mark_assist_steps";
 extern func hao_gc_mark_abort_cycles(): Long = "hao_gc_mark_abort_cycles";
+extern func hao_gc_mark_worker_steps(): Long = "hao_gc_mark_worker_steps";
+extern func hao_gc_remset_count(): Long = "hao_gc_remset_count";
 
 // 与 hao_gc_stats 槽位序锁定：槽 0=vtable，下列字段从槽 1 起依次写入。
 public class GcStats {
@@ -56,6 +61,8 @@ public class GcStats {
     var markAssistSteps: Long = 0;
     var registeredThreads: Long = 0;
     var markAbortCycles: Long = 0; /* 终止失败 abort MARK（v0.53.3） */
+    var markWorkerSteps: Long = 0; /* GC 私有 mark worker 推进量（v0.54） */
+    var remsetCount: Long = 0; /* 分代 remset 条目数（v0.55.2；仅服务 minor） */
 }
 
 extern func hao_gc_stats(dst: GcStats): Unit = "hao_gc_stats";
@@ -197,11 +204,25 @@ class GC {
         return hao_gc_mark_abort_cycles();
     }
 
+    // GC 私有 mark worker 累计推进的 grey 块数（v0.54+）。
+    // @return 次数
+    // 复杂度：O(1)
+    static func markWorkerSteps(): Long {
+        return hao_gc_mark_worker_steps();
+    }
+
+    // 分代 remset 当前条目数（仅服务 minor 扫 old→young；major 不 seed）（v0.55.2+）。
+    // @return 条目数
+    // 复杂度：O(1)
+    static func remsetCount(): Long {
+        return hao_gc_remset_count();
+    }
+
     // 人类可读摘要，便于 fmt.println 调试。
     // @return 多字段一行文本
     // 复杂度：O(1)（单次 stats）
     static func summary(): String {
         val s = GC.stats();
-        return $"GC[v3] live={s.liveBytes}B heap={s.heapBytes}B threshold={s.threshold}B allocatedSince={s.allocatedSinceGc}B blocks={s.blockCount} collects={s.collectCount} minor={s.minorCount} major={s.majorCount} finalizerRuns={s.finalizerRuns} finalizerSets={s.finalizerSets} stwIncomplete={s.stwIncomplete} concurrentMark={s.concurrentMarkCycles} markAssist={s.markAssistSteps} markAbort={s.markAbortCycles}";
+        return $"GC[v3] live={s.liveBytes}B heap={s.heapBytes}B threshold={s.threshold}B allocatedSince={s.allocatedSinceGc}B blocks={s.blockCount} collects={s.collectCount} minor={s.minorCount} major={s.majorCount} finalizerRuns={s.finalizerRuns} finalizerSets={s.finalizerSets} stwIncomplete={s.stwIncomplete} concurrentMark={s.concurrentMarkCycles} markAssist={s.markAssistSteps} markAbort={s.markAbortCycles} markWorker={s.markWorkerSteps} remset={s.remsetCount}";
     }
 }

@@ -490,7 +490,7 @@ void* hao_make_args(int argc, char** argv) {
     for (int i = 0; i < n; ++i) {
         const char* a = (argv && argv[i + 1]) ? argv[i + 1] : "";
         HaoString* s = hao_str_from_cstr(a);
-        hao_gc_barrier(elems, s);
+        hao_gc_barrier(&elems[i], s);
         elems[i] = s;
     }
     return elems;

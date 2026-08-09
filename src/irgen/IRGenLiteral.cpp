@@ -151,14 +151,20 @@ Value IRGen::genArrayLiteral(HaoLangParser::ArrayLiteralContext* al) {
     }
 
     std::string isPtrLit = isGcPointerType(elemType) ? "1" : "0";
-    std::string arr = em_.nextTemp();
-    em_.emit(arr + " = call ptr @hao_array_new(i64 " + total + ", i64 " +
+    std::string arrRaw = em_.nextTemp();
+    em_.emit(arrRaw + " = call ptr @hao_array_new(i64 " + total + ", i64 " +
              std::to_string(esz) + ", i64 " + isPtrLit + ")");
+    // 目标数组跨合成循环 safepoint
+    std::string arrSlot = emitSpillGcRoot("aspread.arr", arrRaw);
+    std::string arr = em_.nextTemp();
+    em_.emit(arr + " = load ptr, ptr " + arrSlot);
 
     // 写入：维护写指针偏移（i64）
     std::string off = "0";
     for (size_t i = 0; i < elems.size(); ++i) {
         if (!elems[i].spread) {
+            arr = em_.nextTemp();
+            em_.emit(arr + " = load ptr, ptr " + arrSlot);
             Value v = coerce(elems[i].v, elemType, 0, 0);
             std::string ptr = em_.nextTemp();
             em_.emit(ptr + " = getelementptr " + gepTy + ", ptr " + arr +
@@ -173,9 +179,11 @@ Value IRGen::genArrayLiteral(HaoLangParser::ArrayLiteralContext* al) {
             TypePtr srcElem = elems[i].v.type->elem;
             std::string srcGep = srcElem->arrayGepType();
             std::string srcLt = srcElem->llvmType();
-            std::string src = elems[i].v.ir;
+            std::string srcSlot = emitSpillGcRoot("aspread.src", elems[i].v.ir);
+            std::string src0 = em_.nextTemp();
+            em_.emit(src0 + " = load ptr, ptr " + srcSlot);
             std::string slen = em_.nextTemp();
-            em_.emit(slen + " = call i64 @hao_array_len(ptr " + src + ")");
+            em_.emit(slen + " = call i64 @hao_array_len(ptr " + src0 + ")");
             std::string jAlloca = em_.nextTemp();
             em_.emit(jAlloca + " = alloca i64");
             em_.emit("store i64 0, ptr " + jAlloca);
@@ -189,6 +197,12 @@ Value IRGen::genArrayLiteral(HaoLangParser::ArrayLiteralContext* al) {
             em_.emit("br label %" + loopLbl);
             em_.emitLabel(loopLbl);
             blockTerminated_ = false;
+            /* v0.53.5：合成展开循环须 safepoint；活数组指针须在 shadow */
+            em_.emit("call void @hao_gc_safepoint()");
+            arr = em_.nextTemp();
+            em_.emit(arr + " = load ptr, ptr " + arrSlot);
+            std::string src = em_.nextTemp();
+            em_.emit(src + " = load ptr, ptr " + srcSlot);
             std::string jv = em_.nextTemp();
             em_.emit(jv + " = load i64, ptr " + jAlloca);
             std::string cmp = em_.nextTemp();
@@ -220,9 +234,13 @@ Value IRGen::genArrayLiteral(HaoLangParser::ArrayLiteralContext* al) {
             blockTerminated_ = false;
             off = em_.nextTemp();
             em_.emit(off + " = load i64, ptr " + offAlloca);
+            em_.emit("store ptr null, ptr " + srcSlot);
         }
     }
 
+    arr = em_.nextTemp();
+    em_.emit(arr + " = load ptr, ptr " + arrSlot);
+    em_.emit("store ptr null, ptr " + arrSlot);
     return Value(arr, Type::makeArray(elemType));
 }
 
@@ -266,9 +284,10 @@ Value IRGen::genSizedArray(const TypePtr& elemType, const Value& len,
     std::string gepTy = elemType->arrayGepType();
     std::string lt = elemType->llvmType();
     std::string isPtr = isGcPointerType(elemType) ? "1" : "0";
-    std::string arr = em_.nextTemp();
-    em_.emit(arr + " = call ptr @hao_array_new(i64 " + len64 + ", i64 " +
+    std::string arrRaw = em_.nextTemp();
+    em_.emit(arrRaw + " = call ptr @hao_array_new(i64 " + len64 + ", i64 " +
              std::to_string(esz) + ", i64 " + isPtr + ")");
+    std::string arrSlot = emitSpillGcRoot("asize.arr", arrRaw);
 
     if (fill) {
         if (!isAssignable(fill->type, elemType)) {
@@ -277,6 +296,9 @@ Value IRGen::genSizedArray(const TypePtr& elemType, const Value& len,
             return Value();
         }
         Value fv = coerce(*fill, elemType, 0, 0);
+        std::string fillSlot;
+        if (isGcPointerType(elemType))
+            fillSlot = emitSpillGcRoot("asize.fill", fv.ir);
         std::string iAlloca = em_.nextTemp();
         em_.emit(iAlloca + " = alloca i64");
         em_.emit("store i64 0, ptr " + iAlloca);
@@ -286,6 +308,15 @@ Value IRGen::genSizedArray(const TypePtr& elemType, const Value& len,
         em_.emit("br label %" + loopLbl);
         em_.emitLabel(loopLbl);
         blockTerminated_ = false;
+        /* v0.53.5：合成填充循环须 safepoint；arr/fill 从 shadow 重载 */
+        em_.emit("call void @hao_gc_safepoint()");
+        std::string arr = em_.nextTemp();
+        em_.emit(arr + " = load ptr, ptr " + arrSlot);
+        std::string fillIr = fv.ir;
+        if (!fillSlot.empty()) {
+            fillIr = em_.nextTemp();
+            em_.emit(fillIr + " = load ptr, ptr " + fillSlot);
+        }
         std::string iv = em_.nextTemp();
         em_.emit(iv + " = load i64, ptr " + iAlloca);
         std::string cmp = em_.nextTemp();
@@ -295,15 +326,20 @@ Value IRGen::genSizedArray(const TypePtr& elemType, const Value& len,
         blockTerminated_ = false;
         std::string p = em_.nextTemp();
         em_.emit(p + " = getelementptr " + gepTy + ", ptr " + arr + ", i64 " + iv);
-        emitHeapStore(p, fv.ir, elemType, arr);
+        emitHeapStore(p, fillIr, elemType, arr);
         std::string i2 = em_.nextTemp();
         em_.emit(i2 + " = add i64 " + iv + ", 1");
         em_.emit("store i64 " + i2 + ", ptr " + iAlloca);
         em_.emit("br label %" + loopLbl);
         em_.emitLabel(endLbl);
         blockTerminated_ = false;
+        if (!fillSlot.empty())
+            em_.emit("store ptr null, ptr " + fillSlot);
     }
 
+    std::string arr = em_.nextTemp();
+    em_.emit(arr + " = load ptr, ptr " + arrSlot);
+    em_.emit("store ptr null, ptr " + arrSlot);
     return Value(arr, Type::makeArray(elemType));
 }
 
@@ -383,10 +419,16 @@ Value IRGen::genWhenExpr(HaoLangParser::WhenStmtContext* w) {
         em_.emit(subjAddr + " = alloca " + subjType->llvmType());
         em_.emit("store " + subjType->llvmType() + " " + subject.ir +
                  ", ptr " + subjAddr);
+        if (isGcPointerType(subjType))
+            emitGcRootPush(subjAddr);
     }
 
     std::string resAddr = em_.nextNamed("when.res");
     em_.emit(resAddr + " = alloca " + resultType->llvmType());
+    if (isGcPointerType(resultType)) {
+        em_.emit("store ptr null, ptr " + resAddr);
+        emitGcRootPush(resAddr);
+    }
     std::string endL = em_.nextLabel("when.end");
 
     for (size_t bi = 0; bi < branches.size(); ++bi) {

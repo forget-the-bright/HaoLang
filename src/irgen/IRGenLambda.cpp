@@ -406,6 +406,7 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     bool savedBlockTerm = blockTerminated_;
     const LambdaInfo* savedLambda = currentLambda_;
     auto savedLoops = loops_;
+    auto savedHoist = loopHoisted_;
     int savedTryCounter = tryCounter_;
     auto savedTryStack = tryStack_;
     int savedCatchDepth = catchDepth_;
@@ -417,6 +418,7 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     sawReturn_ = false;
     blockTerminated_ = false;
     loops_.clear();
+    loopHoisted_.clear();
     tryCounter_ = 0;
 
     // 签名
@@ -430,16 +432,12 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     em_.emitRaw(sig);
     em_.emitLabel("entry");
 
-    // try/finally 函数级槽位
-    unwindReasonAddr_ = "%unwind.reason.addr";
-    unwindRetAddr_    = "%unwind.ret.addr";
-    unwindStopAddr_   = "%unwind.stop.addr";
-    em_.emit(unwindReasonAddr_ + " = alloca i32");
-    em_.emit(unwindRetAddr_ + " = alloca i64");
-    em_.emit(unwindStopAddr_ + " = alloca i32");
-    em_.emit("store i32 0, ptr " + unwindReasonAddr_);
+    // try/finally 函数级槽位（含 GC 返回/异常根）
+    emitAllocUnwindSlots();
     tryStack_.clear();
     catchDepth_ = 0;
+    beginFunctionGcRoots();
+    emitPushUnwindGcRoot();
 
     {
         SymbolTable::Guard guard(syms_);
@@ -468,6 +466,7 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
             std::string tv = em_.nextTemp();
             em_.emit(tv + " = load ptr, ptr " + fp);
             em_.emit("store ptr " + tv + ", ptr " + thisAddr_);
+            emitGcRootPush(thisAddr_);
             ++slot;
         }
         for (auto& cap : mi.captures) {
@@ -478,11 +477,14 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
                 std::string cv = em_.nextTemp();
                 em_.emit(cv + " = load ptr, ptr " + fp);
                 em_.emit("store ptr " + cv + ", ptr " + addr);
+                emitGcRootPush(addr);
             } else {
                 em_.emit(addr + " = alloca " + cap.type->llvmType());
                 std::string cv = em_.nextTemp();
                 em_.emit(cv + " = load " + cap.type->llvmType() + ", ptr " + fp);
                 em_.emit("store " + cap.type->llvmType() + " " + cv + ", ptr " + addr);
+                if (isGcPointerType(cap.type))
+                    emitGcRootPush(addr);
             }
             auto cs = std::make_shared<Symbol>();
             cs->kind = SymbolKind::Variable;
@@ -511,6 +513,7 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
             if (arrayByRef) {
                 ps->irAddr = argSrc;
                 ps->byRefParam = true;
+                emitGcRootPush(argSrc);
             } else if (boxed) {
                 em_.emit(addr + " = alloca ptr");
                 int64_t cbm = isGcPointerType(mi.paramTypes[i]) ? 1 : 0;
@@ -519,11 +522,14 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
                 em_.emit("store ptr " + cell + ", ptr " + addr);
                 ps->irAddr = addr;
                 ps->boxed = true;
+                emitGcRootPush(addr);
             } else {
                 em_.emit(addr + " = alloca " + mi.paramTypes[i]->llvmType());
                 em_.emit("store " + mi.paramTypes[i]->llvmType() + " " +
                          argSrc + ", ptr " + addr);
                 ps->irAddr = addr;
+                if (isGcPointerType(mi.paramTypes[i]))
+                    emitGcRootPush(addr);
             }
             syms_.declare(ps);
         }
@@ -546,10 +552,12 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
 
         if (!blockTerminated_) {
             if (mi.returnType->isUnit()) {
+                emitGcRootUnwind();
                 em_.emit("ret void");
             } else if (trailingIsReturn) {
                 auto* es = stmts.back()->exprStmt();
                 Value v = genExpr(es->expr());
+                emitGcRootUnwind();
                 if (!v.valid()) {
                     em_.emit("ret " + mi.returnType->llvmType() + " zeroinitializer");
                 } else {
@@ -563,6 +571,7 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
             } else {
                 error(mi.ctx, "lambda 返回 " + mi.returnType->toString() +
                               "，但存在没有 return 的执行路径");
+                emitGcRootUnwind();
                 em_.emit("ret " + mi.returnType->llvmType() + " " +
                          zeroValueFor(mi.returnType));
             }
@@ -572,6 +581,8 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
         lambdas_ = savedLambdas;
         capturedVarNames_ = savedCapNames;
     }
+    gcRootWm_.clear();
+    loopHoisted_.clear();
 
     em_.emitRaw("}");
     std::string def = em_.popFunctionState();
@@ -584,6 +595,7 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     blockTerminated_ = savedBlockTerm;
     currentLambda_ = savedLambda;
     loops_ = savedLoops;
+    loopHoisted_ = savedHoist;
     tryCounter_ = savedTryCounter;
     tryStack_ = savedTryStack;
     catchDepth_ = savedCatchDepth;

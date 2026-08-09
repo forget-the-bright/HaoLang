@@ -1,0 +1,30 @@
+// v0.55.3：while 体内 var GC 局部必须作用域 unwind；
+// 修前每轮 root_push 永不摘 → 与 08-gc-monitor warmup 同型假活。
+package main;
+
+import gc;
+import collections.*;
+
+func main() {
+    var round = 0;
+    while (round < 40) {
+        var junk = new List<Object>();
+        var i = 0;
+        while (i < 2000) {
+            junk.add(String.valueOf("lv-" + Integer.toStr(i)));
+            i += 1;
+        }
+        round += 1;
+    }
+    gc.GC.collect();
+    var blocks = gc.GC.blockCount();
+    var heap = gc.GC.heapBytes();
+    var live = gc.GC.liveBytes();
+
+    // 修前：≈40*2000 量级假活；修后约一轮残留 + 开销
+    fmt.println(blocks < 15000); // true
+    fmt.println(heap < (2 * 1024 * 1024)); // true
+    fmt.println(live < (2 * 1024 * 1024)); // true
+    fmt.println(gc.GC.markAbortCycles() == 0); // true
+    fmt.println(gc.GC.stwMarkAllFallbacks() == 0); // true
+}

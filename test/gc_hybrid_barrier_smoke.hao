@@ -1,0 +1,32 @@
+// v0.54：混合屏障——MARK 期替换字段/数组元素不漏标、不 UAF
+package main;
+
+import gc;
+import collections.*;
+
+class Node {
+    var next: Node? = null;
+    var tag: Int = 0;
+}
+
+func main() {
+    var keep = new Node();
+    keep.tag = 1;
+    var junk = new List<Node>();
+    var i = 0;
+    while (i < 2000) {
+        var n = new Node();
+        n.tag = i;
+        n.next = keep; // 写屏障 shade
+        junk.add(n);
+        // 覆盖 next：Yuasa 须 shade 旧指针
+        n.next = null;
+        n.next = keep;
+        i += 1;
+    }
+    junk = new List<Node>();
+    gc.GC.collect();
+    fmt.println(keep.tag == 1); // true：存活根未丢
+    fmt.println(gc.GC.concurrentMarkCycles() >= 0); // true
+    fmt.println(gc.GC.markAbortCycles() >= 0); // true
+}

@@ -18,6 +18,7 @@
 
 #include <map>
 #include <set>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -518,16 +519,28 @@ private:
     static bool isGcPointerType(const TypePtr& t);
     // 类实例字段位图（slot i 为 GC 指针则 bit i=1；vtable 槽不在 fields 中）
     static int64_t objectPtrBitmap(const ClassInfo* ci);
-    // 堆 store + 可选写屏障（barrierBase 为空则只 store）
+    // 堆 store + 可选写屏障（barrierBase 非空则对 **addr 槽** 调混合屏障）
     void emitHeapStore(const std::string& addr, const std::string& valIr,
                        const TypePtr& ty, const std::string& barrierBase);
-    // 静态/全局 GC 指针：先 shade 再 store（根槽终止会重扫，shade 对齐堆契约）
+    // 静态/全局 GC 指针：混合屏障再 store
     void emitGlobalGcStore(const std::string& gptr, const std::string& valIr,
                            const TypePtr& ty);
     // 变量写回：boxed 走堆屏障，否则写栈/全局槽
     void emitVarStore(const SymbolPtr& sym, const TypePtr& ty,
                       const std::string& valIr);
     std::string emitObjectNew(int64_t nfields, int64_t bitmap);
+    // v0.54/v0.55/v0.55.3：Hao 精确根（shadow stack；while 局部提升）
+    void emitGcRootPush(const std::string& slotAddr);
+    void emitGcRootUnwind();
+    void beginFunctionGcRoots();
+    // 分配函数级 unwind 槽（含 GC 返回/异常 ptr 根槽；push 须在 beginFunctionGcRoots 之后）
+    void emitAllocUnwindSlots();
+    void emitPushUnwindGcRoot();
+    // 把 GC 指针（或 null）写入 unwindGcRootAddr_，供跨 finally/safepoint 保活
+    void storeUnwindGcRootPtr(const std::string& ptrIr);
+    void clearUnwindGcRoot();
+    // 分配 ptr 槽、写入初值并 root_push；返回槽地址（用于 SSA 跨 safepoint spill）
+    std::string emitSpillGcRoot(const std::string& nameHint, const std::string& ptrIr);
 
     // 可见性校验：当前上下文能否访问 ownerClass 中具有 vis 的成员。
     // 规则：
@@ -621,6 +634,16 @@ private:
     };
     std::vector<LoopContext> loops_;
 
+    // while 体内 var 提升：alloca+root_push 一次，每轮只 store（防 shadow 假活）
+    struct HoistedLocal {
+        std::string addr;
+        TypePtr type;
+        bool boxed = false;
+    };
+    std::unordered_map<HaoLangParser::VarDeclContext*, HoistedLocal> loopHoisted_;
+    void hoistVarDeclsInLoopBody(HaoLangParser::StatementContext* body);
+    TypePtr peekVarDeclType(HaoLangParser::VarDeclContext* vd);
+
     // ---------- try / finally 清理链 ----------
     //  每个 try（无论是否有 finally）都有一个 cleanup 块，负责：
     //    1. 调用 hao_try_end 弹出运行时异常帧（必须在 finally 之前，
@@ -641,13 +664,14 @@ private:
     std::string unwindReasonAddr_;   // i32*：0=正常 1=return 2=break 3=continue 4=rethrow
     std::string unwindRetAddr_;      // i64*：return 值或异常对象（按位存放）
     std::string unwindStopAddr_;     // i32*：break/continue 只清理该深度以上的 try
+    std::string unwindGcRootAddr_;   // ptr*：与 unwindRet 同步的 GC 指针根（shadow）
     int catchDepth_ = 0;             // >0 表示正在生成 catch 体（throw 走 IR 展开而非 longjmp）
     int tryCounter_ = 0;             // 每个 try 语句唯一编号，避免标签重名
 
     // 从 try/catch 体中"离开"：把原因写入函数级槽位，跳到最近的 cleanup；
     // 没有 try 包裹时直接执行真正的 return/break/continue。
     void emitUnwind(int reason, const Value& retVal = Value());
-    // 把一个值按其类型转成 i64 存入 unwindRetAddr_
+    // 把一个值按其类型转成 i64 存入 unwindRetAddr_（GC 指针同时写入 unwindGcRootAddr_）
     void storeUnwindRet(const Value& v);
     // 从 unwindRetAddr_ 读出并转回目标类型，发射 ret
     void emitUnwindRet();
@@ -662,6 +686,9 @@ private:
 
     // 是否正在生成 main：其 IR 返回类型固定为 i32（C 入口约定）
     bool inMain_ = false;
+
+    // v0.54：函数入口 shadow 水位寄存器（空=本函数未启用精确根）
+    std::string gcRootWm_;
 
     // v0.42：hao test —— 非 harness 的业务 main 跳过登记与 codegen
     bool testMode_ = false;

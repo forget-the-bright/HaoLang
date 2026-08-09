@@ -20,6 +20,8 @@ void hao_sync_lock(int64_t* m) {
     while (!__atomic_compare_exchange_n(m, &expected, 1, 0,
                                         __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
         expected = 0;  /* 失败，expected 被更新为当前值(1)，重置后重试 */
+        /* 自旋须 safepoint：否则软 STW 永远等不齐（禁止无 park 空转） */
+        hao_gc_safepoint();
     }
 }
 

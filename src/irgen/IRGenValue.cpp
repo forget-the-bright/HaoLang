@@ -535,19 +535,69 @@ int64_t IRGen::objectPtrBitmap(const ClassInfo* ci) {
 void IRGen::emitHeapStore(const std::string& addr, const std::string& valIr,
                           const TypePtr& ty, const std::string& barrierBase) {
     std::string lt = ty ? ty->llvmType() : "ptr";
-    /* v0.53：Dijkstra 先 shade 再 publish，禁止 store→barrier 窗口漏标 */
+    /* v0.54：混合屏障；dst 必须是槽地址（addr），非对象基址 */
     if (isGcPointerType(ty) && !barrierBase.empty())
-        em_.emit("call void @hao_gc_barrier(ptr " + barrierBase +
-                 ", ptr " + valIr + ")");
+        em_.emit("call void @hao_gc_barrier(ptr " + addr + ", ptr " + valIr + ")");
     em_.emit("store " + lt + " " + valIr + ", ptr " + addr);
 }
 
 void IRGen::emitGlobalGcStore(const std::string& gptr, const std::string& valIr,
                               const TypePtr& ty) {
     std::string lt = ty ? ty->llvmType() : "ptr";
+    /* 静态槽同样走混合屏障（gptr 即槽地址） */
     if (isGcPointerType(ty))
-        em_.emit("call void @hao_gc_shade(ptr " + valIr + ")");
+        em_.emit("call void @hao_gc_barrier(ptr " + gptr + ", ptr " + valIr + ")");
     em_.emit("store " + lt + " " + valIr + ", ptr " + gptr);
+}
+
+void IRGen::beginFunctionGcRoots() {
+    gcRootWm_ = em_.nextTemp();
+    em_.emit(gcRootWm_ + " = call i64 @hao_gc_root_watermark()");
+}
+
+void IRGen::emitGcRootPush(const std::string& slotAddr) {
+    if (slotAddr.empty()) return;
+    em_.emit("call void @hao_gc_root_push(ptr " + slotAddr + ")");
+}
+
+void IRGen::emitGcRootUnwind() {
+    if (gcRootWm_.empty()) return;
+    em_.emit("call void @hao_gc_root_unwind(i64 " + gcRootWm_ + ")");
+}
+
+void IRGen::emitAllocUnwindSlots() {
+    unwindReasonAddr_ = "%unwind.reason.addr";
+    unwindRetAddr_    = "%unwind.ret.addr";
+    unwindStopAddr_   = "%unwind.stop.addr";
+    unwindGcRootAddr_ = "%unwind.gc.addr";
+    em_.emit(unwindReasonAddr_ + " = alloca i32");
+    em_.emit(unwindRetAddr_ + " = alloca i64");
+    em_.emit(unwindStopAddr_ + " = alloca i32");
+    em_.emit(unwindGcRootAddr_ + " = alloca ptr");
+    em_.emit("store i32 0, ptr " + unwindReasonAddr_);
+    em_.emit("store ptr null, ptr " + unwindGcRootAddr_);
+}
+
+void IRGen::emitPushUnwindGcRoot() {
+    if (!unwindGcRootAddr_.empty())
+        emitGcRootPush(unwindGcRootAddr_);
+}
+
+void IRGen::storeUnwindGcRootPtr(const std::string& ptrIr) {
+    if (unwindGcRootAddr_.empty()) return;
+    em_.emit("store ptr " + ptrIr + ", ptr " + unwindGcRootAddr_);
+}
+
+void IRGen::clearUnwindGcRoot() {
+    storeUnwindGcRootPtr("null");
+}
+
+std::string IRGen::emitSpillGcRoot(const std::string& nameHint, const std::string& ptrIr) {
+    std::string addr = em_.nextNamed(nameHint);
+    em_.emit(addr + " = alloca ptr");
+    em_.emit("store ptr " + ptrIr + ", ptr " + addr);
+    emitGcRootPush(addr);
+    return addr;
 }
 
 void IRGen::emitVarStore(const SymbolPtr& sym, const TypePtr& ty,

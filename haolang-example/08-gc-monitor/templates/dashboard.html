@@ -125,6 +125,10 @@
         <div class="label">堆块数 blockCount<br>当前 GC 块链表长度</div>
         <div class="value" id="blockCount">{{blockCount}}</div>
       </div>
+      <div class="metric">
+        <div class="label">remsetCount<br>分代 remset 条目（仅服务 minor）</div>
+        <div class="value" id="remsetCount">{{remsetCount}}</div>
+      </div>
     </div>
 
     <div class="bar" title="allocatedSince / threshold"><i id="usageBar" style="width: {{usagePct}}%"></i></div>
@@ -176,6 +180,10 @@
         <div class="label">markAbortCycles<br>终止失败 abort MARK（v0.53.3）</div>
         <div class="value" id="markAbortCycles">{{markAbortCycles}}</div>
       </div>
+      <div class="metric">
+        <div class="label">markWorkerSteps<br>GC 私有 mark worker（v0.54）</div>
+        <div class="value" id="markWorkerSteps">{{markWorkerSteps}}</div>
+      </div>
     </div>
 
     <div class="panel">
@@ -223,9 +231,9 @@
     bytesIds.forEach(function (id) {
       document.getElementById(id).textContent = fmtBytes(data[id]);
     });
-    ["minorCount","majorCount","handleCount","blockCount","threadCount","gcThreads",
+    ["minorCount","majorCount","handleCount","blockCount","remsetCount","threadCount","gcThreads",
      "collectCount","finalizerRuns","finalizerSets","stwIncomplete","stwMarkAllFallbacks",
-     "concurrentMarkCycles","markAssistSteps","markAbortCycles"].forEach(function (id) {
+     "concurrentMarkCycles","markAssistSteps","markAbortCycles","markWorkerSteps"].forEach(function (id) {
       document.getElementById(id).textContent = data[id];
     });
     const cpuEl = document.getElementById("cpuPercent");

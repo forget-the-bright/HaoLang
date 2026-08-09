@@ -3080,7 +3080,11 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
         }
 
         // 分配对象内存（有虚表时槽位 0 留给虚表指针；位图不含 vtable）
-        std::string obj = emitObjectNew(ci->slotCount(), objectPtrBitmap(ci.get()));
+        std::string objRaw = emitObjectNew(ci->slotCount(), objectPtrBitmap(ci.get()));
+        // 字段默认 / ctor 求值可能 safepoint：obj 须进 shadow
+        std::string objSlot = emitSpillGcRoot("new.obj", objRaw);
+        std::string obj = em_.nextTemp();
+        em_.emit(obj + " = load ptr, ptr " + objSlot);
 
         // 写入虚表指针，使该对象可通过接口动态分派
         if (ci->hasVTable) {
@@ -3095,6 +3099,8 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
         // Func 字段默认 lambda：须先 analyzeLambdas（默认值不在 new 所在函数体 AST 内）。
         for (const auto& f : ci->fields) {
             if (!f.defaultExpr) continue;
+            obj = em_.nextTemp();
+            em_.emit(obj + " = load ptr, ptr " + objSlot);
             auto* dexpr = static_cast<HaoLangParser::ExprContext*>(f.defaultExpr);
             expectedTypes_.push_back(f.type);
             ExpectedTypeGuard eg{this};
@@ -3124,6 +3130,9 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
             }
         }
 
+        obj = em_.nextTemp();
+        em_.emit(obj + " = load ptr, ptr " + objSlot);
+
         // 调用构造函数
         if (!ci->ctorIRName.empty()) {
             if (args.size() != ci->ctorParamTypes.size()) {
@@ -3146,11 +3155,15 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
                                               args[i]);
             }
             em_.emit("call void " + ci->ctorIRName + "(" + argStr + ")");
+            obj = em_.nextTemp();
+            em_.emit(obj + " = load ptr, ptr " + objSlot);
         } else if (!args.empty()) {
             error(e, "类 '" + ci->name + "' 没有构造函数，不能传递参数");
             return Value();
         }
 
+        /* 构造窗口结束：清临时 spill，避免函数级假活（调用方须立刻写入自己的根槽） */
+        em_.emit("store ptr null, ptr " + objSlot);
         return Value(obj, objType);
     }
 

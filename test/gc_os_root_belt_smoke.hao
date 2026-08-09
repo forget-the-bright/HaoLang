@@ -1,0 +1,30 @@
+// v0.55.1：os.readFile 皮带根须成对摘掉，否则每次读模板永久假活 → blockCount 只涨
+package main;
+
+import gc;
+import os;
+
+func main() {
+    // 写一个临时小文件反复读
+    val path = "target/gc_os_root_belt.tmp";
+    os.writeFile(path, "belt-root-smoke");
+    var before = gc.GC.heapBytes();
+    var round = 0;
+    while (round < 80) {
+        val t = os.readFile(path);
+        if (t == null) {
+            fmt.println(false);
+            return;
+        }
+        // 丢弃内容，下一轮不应因永久根而囤积
+        round += 1;
+    }
+    gc.GC.collect();
+    var after = gc.GC.heapBytes();
+    var blocks = gc.GC.blockCount();
+    fmt.println(gc.GC.collectCount() >= 1); // true
+    // 80 次读不应把堆抬到数兆（永久根会）
+    fmt.println(after < before + (2 * 1024 * 1024)); // true
+    fmt.println(blocks < 200000); // true：相对「只加不摘」数量级收敛
+    os.remove(path);
+}

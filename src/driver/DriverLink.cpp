@@ -46,8 +46,8 @@ bool Driver::linkExecutable(const BuildOptions& opts,
         return false;
     }
 
-    // -O2：用户程序默认优化。GC 的保守栈扫描依赖内联/优化后合理的栈布局；
-    // -O0 下生成的大栈帧配合保守扫描可能越过 guard page。-O2 也显著提升运行速度。
+    // -O2：用户程序默认优化。Hao 帧以 shadow 精确根为准；os_block C 叶保守扫
+    // 仍受益于合理栈布局。-O0 大栈帧可能越过 guard page。-O2 也显著提升速度。
     std::string cmd = quote(clang) + " " + quote(llPath) + " " + quote(rt)
                     + " -o " + quote(exePath)
                     + " -O2 -Wno-override-module";

@@ -108,9 +108,9 @@ void* hao_array_push(void* arr, int64_t val) {
     } else if (esz == 4) {
         *(int32_t*)slot = (int32_t)val;
     } else {
-        /* v0.53：与 IR 一致，先 shade 再 publish */
+        /* v0.54：dst=槽地址；混合屏障 load old 后再 publish */
         if (is_ptr)
-            hao_gc_barrier(arr, (void*)(uintptr_t)val);
+            hao_gc_barrier(slot, (void*)(uintptr_t)val);
         *(int64_t*)slot = val;
     }
     *(int64_t*)((char*)arr - HAO_ARR_LEN_OFF) = len + 1;

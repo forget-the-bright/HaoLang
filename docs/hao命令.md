@@ -50,7 +50,7 @@
 
 1. **路径**：Windows 下 `hao run` 经 `cmd`/`system` 启动时，正斜杠路径可能静默失败；相对路径建议 `.\` 风格（见 [`坑债.md`](坑债.md)）。
 2. **文件 vs 目录**：传文件 = 只编译列出的文件（`go run a.go b.go` 语义）；传目录 = 编译该目录全部 `.hao`（目录即包）。
-3. **优化**：用户程序默认 **`-O2`**。GC 保守栈扫描依赖合理栈布局；勿为「调试方便」长期用 `-O0` 跑 GC 重负载。
+3. **优化**：用户程序默认 **`-O2`**。Hao 帧以 shadow 精确根为准；`-O2` 主要改善 os_block C 叶布局。勿长期用 `-O0` 跑 GC 重负载。
 4. **发行包**：只拷 `hao.exe` 不够；须整包 `bin/` + `stdlib/src/` + `lib/llvm/` + `lib/sysroot/...`。
 5. **清单生效**：入口旁存在 `haoproject.json` 时，`build`/`run`/`test` 会加载并应用 `localReferences` 与 `dependencies`（见 §4）。
 

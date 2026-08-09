@@ -1,0 +1,44 @@
+// v0.55.2：模拟 08-gc-monitor warmup——多轮 List+String 晋升后，
+// major 不得因 remset 伪根把历史 junk 假活；collect 后块数/堆压须回落。
+package main;
+
+import gc;
+import collections.*;
+import thread.*;
+
+func burnRound(n: Int) {
+    var junk = new List<Object>();
+    var i = 0;
+    while (i < n) {
+        junk.add(String.valueOf("rs-" + Integer.toStr(i)));
+        i += 1;
+    }
+    // 丢掉根：下一轮 / collect 后应不可达
+    junk = new List<Object>();
+}
+
+func main() {
+    var round = 0;
+    while (round < 12) {
+        burnRound(2500);
+        // 给 minor/晋升窗口；与 monitor sleep 同量级意图
+        sleep(20);
+        round += 1;
+    }
+    var peakBlocks = gc.GC.blockCount();
+    var peakHeap = gc.GC.heapBytes();
+    gc.GC.collect();
+    var afterBlocks = gc.GC.blockCount();
+    var afterHeap = gc.GC.heapBytes();
+    var live = gc.GC.liveBytes();
+
+    fmt.println(gc.GC.majorCount() >= 1); // true：至少一次 major
+    // 修前：major enqueue remset → 历史 List 假活，块数贴近 12*2500 量级不回落
+    fmt.println(afterBlocks < peakBlocks); // true：major 后块数下降
+    fmt.println(afterHeap < peakHeap); // true：堆压下降
+    // 存活远小于「累计分配总量」（约 3 万字符串量级）
+    fmt.println(afterBlocks < 20000); // true
+    fmt.println(live < (4 * 1024 * 1024)); // true：liveBytes 不贴历史分配
+    fmt.println(gc.GC.stwMarkAllFallbacks() == 0); // true
+    fmt.println(gc.GC.remsetCount() >= 0); // true：指标可读
+}

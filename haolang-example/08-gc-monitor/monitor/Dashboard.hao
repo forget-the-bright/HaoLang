@@ -30,6 +30,8 @@ class GcSnapshot {
     var concurrentMarkCycles: Long = 0; // 并发标记轮次
     var markAssistSteps: Long = 0;   // mark assist 推进量
     var markAbortCycles: Long = 0;   // 终止失败 abort MARK（v0.53.3）
+    var markWorkerSteps: Long = 0;   // GC 私有 mark worker（v0.54）
+    var remsetCount: Long = 0;       // 分代 remset 条目（v0.55.2；仅 minor）
 
     // ---- CPU / 线程 / 句柄 / 运行时长 ----
     var cpuPercent: Int = 0;         // 0～100；首次采样可能为 0
@@ -42,7 +44,7 @@ class GcSnapshot {
     var usagePct: Int = 0;
     var summary: String = "";
     var note: String = "";
-    var engine: String = "HaoLang GC v3（v0.53.3 入口 safepoint）+ os.Process";
+    var engine: String = "HaoLang GC v3（v0.55.3 while局部提升 + remset仅minor + 精确根）+ os.Process";
 
     constructor() {
         this.refresh();
@@ -81,16 +83,19 @@ class GcSnapshot {
         this.concurrentMarkCycles = g.concurrentMarkCycles;
         this.markAssistSteps = g.markAssistSteps;
         this.markAbortCycles = g.markAbortCycles;
+        this.markWorkerSteps = g.markWorkerSteps;
+        this.remsetCount = g.remsetCount;
         this.gcThreads = g.registeredThreads;
         this.summary = $"GC[v3] live={this.liveBytes}B heap={this.heapBytes}B threshold={this.threshold}B"
             + $" allocatedSince={this.allocatedSinceGc}B blocks={this.blockCount}"
             + $" collects={this.collectCount} minor={this.minorCount} major={this.majorCount}"
             + $" stwIncomplete={this.stwIncomplete} concurrentMark={this.concurrentMarkCycles}"
-            + $" markAssist={this.markAssistSteps} markAbort={this.markAbortCycles}";
+            + $" markAssist={this.markAssistSteps} markAbort={this.markAbortCycles}"
+            + $" markWorker={this.markWorkerSteps} remset={this.remsetCount}";
         if (this.note.length == 0) {
             this.note = "对标说明：工作集/专用内存来自 os.Process；"
                 + "heapBytes=当前堆压；liveBytes=上次成功 major 后存活；"
-                + "v0.53.3：入口 safepoint + markAbortCycles；终止未齐则 abort MARK。";
+                + "v0.55.3：while 内 var 只 push 一次；warmup 历史 List 在 major 后应收。";
         }
         var pct: Int = 0;
         if (this.threshold > 0) {

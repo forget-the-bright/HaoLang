@@ -38,8 +38,18 @@ void* gc_alloc_ex(size_t n, uint8_t kind, uint64_t meta);
 /* 薄包装 → gc_alloc_ex(n, GC_KIND_FULL, 0) */
 void* gc_alloc(size_t n);
 
-/* 分代写屏障：dst 可为堆对象任意内指针；old→young 时记入记忆集。 */
+/* 混合写屏障：dst 须为槽地址；MARK 期 shade(old)+shade(new)；old→young 记 remset。 */
 void hao_gc_barrier(void* dst, void* new_val);
+/*
+ * Hao 精确根（shadow stack）：登记/水位回退；STW 始终扫 *slot。
+ * os_block 期间另扫 GPR+有界 C 叶（诚实双轨，见 docs/IR与GC契约.md R2）。
+ */
+size_t hao_gc_root_watermark(void);
+void   hao_gc_root_push(void** slot);
+void   hao_gc_root_unwind(size_t wm);
+/* mark worker 累计推进的 grey 块数（v0.54+） */
+int64_t hao_gc_mark_worker_steps(void);
+int64_t hao_gc_remset_count(void);
 /* MARK 期 shade 指针（供单指针补标；非 MARK 为 no-op）。 */
 void hao_gc_shade(void* p);
 /*
@@ -102,6 +112,12 @@ int64_t hao_gc_registered_threads(void);
 void hao_gc_stats(void* obj);
 /* 终止失败 abort MARK 累计次数（v0.53.3+） */
 int64_t hao_gc_mark_abort_cycles(void);
+
+/* 测试辅助（finalizer 复活冒烟；正式 API 勿依赖） */
+void  hao_gc_test_arm_rescue_finalizer(void* obj);
+void  hao_gc_test_arm_nop_finalizer(void* obj);
+void* hao_gc_test_get_rescue(void);
+void  hao_gc_test_clear_rescue(void);
 
 /* 进程资源快照（runtime_proc.c；供 os.Process，对标 .NET Process） */
 int64_t hao_proc_working_set_bytes(void);

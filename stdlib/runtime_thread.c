@@ -103,12 +103,15 @@ int64_t hao_thread_start(void* env) {
 
 void hao_thread_join(int64_t handle) {
     if (!handle) return;
+    /* join 阻塞：须 park，否则 STW 永远等不齐 */
+    hao_gc_os_block_enter();
 #ifdef _WIN32
     hao_win_join_close((void*)(intptr_t)handle);
 #else
     pthread_t t = (pthread_t)handle;
     pthread_join(t, NULL);
 #endif
+    hao_gc_os_block_leave();
 }
 
 void hao_thread_yield(void) {
@@ -158,6 +161,8 @@ static void pool_drain_tasks(Pool* p) {
 static void pool_join_workers(Pool* p) {
     if (!p || p->joined) return;
     for (int i = 0; i < p->nworkers; ++i) {
+        /* join 阻塞须 park（同 hao_thread_join），否则 shutdown 路径 STW 等不齐 */
+        hao_gc_os_block_enter();
 #ifdef _WIN32
         if (p->threads && p->threads[i])
             hao_win_join_close(p->threads[i]);
@@ -165,6 +170,7 @@ static void pool_join_workers(Pool* p) {
         if (p->threads)
             pthread_join(p->threads[i], NULL);
 #endif
+        hao_gc_os_block_leave();
     }
     p->joined = 1;
 }

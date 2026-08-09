@@ -15,7 +15,7 @@ HaoLang（好语言）是**静态类型、编译至原生机器码**的语言：
 | 维度 | 选择 |
 |------|------|
 | 执行模型 | AOT → LLVM IR → clang/lld → 单文件原生可执行文件 |
-| 内存 | 自带 GC（v3：精确堆 + 分代 + **Dijkstra + 软 STW/mark assist**；清扫仍短停顿） |
+| 内存 | 自带 GC（v0.55.3：while 局部提升 + remset 仅 minor + 精确根完备 + 皮带成对摘根 + 诚实双轨 + 混合屏障 + mark worker；详文 [`IR与GC契约.md`](IR与GC契约.md)） |
 | 包模型 | **目录即包**（Go 风格），清单用 `haoproject.json` |
 | 并发关键字 | **`haoroutine`**（禁止称 goroutine） |
 | 泛型 | **单态化**（C++/Rust 路线，非 JVM 擦除） |
@@ -248,7 +248,7 @@ break; continue;
 ```
 
 - `for-in`：数组直接迭代；集合走 `collections.Iterable` / `Iterator` 虚分派。
-- 循环 IR 插入 **`hao_gc_safepoint`**（协作 GC）。
+- 循环条件与**函数/lambda 入口** IR 插入 **`hao_gc_safepoint`**（协作 GC；详文 [`IR与GC契约.md`](IR与GC契约.md)）。
 - 条件禁止可空类型直接充当 Bool。
 
 ---
@@ -562,7 +562,7 @@ extern func ntohs(x: Int): Int = "ntohs" @link("ws2_32");
 
 ## 20. 已知限制与注意事项（实战）
 
-1. **用户程序默认 `-O2`**：与 GC 栈扫描相关。  
+1. **用户程序默认 `-O2`**：Hao 帧靠 shadow 精确根；`-O2` 主要服务 os_block C 叶/无 shadow 路径。  
 2. **表达式 `when` 必须 `else`**。  
 3. **可空不参与算术/条件/下标** —— 用 negcheck 思维写代码。  
 4. **`haoroutine` 无参**；channel 非泛型载荷。  

@@ -1372,14 +1372,8 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
                             const std::string& declName) {
     SymbolTable::Guard guard(syms_);
 
-    // ---- try / finally 清理用的函数级槽位 ----
-    unwindReasonAddr_ = "%unwind.reason.addr";
-    unwindRetAddr_    = "%unwind.ret.addr";
-    unwindStopAddr_   = "%unwind.stop.addr";
-    em_.emit(unwindReasonAddr_ + " = alloca i32");
-    em_.emit(unwindRetAddr_ + " = alloca i64");
-    em_.emit(unwindStopAddr_ + " = alloca i32");
-    em_.emit("store i32 0, ptr " + unwindReasonAddr_);
+    // ---- try / finally 清理用的函数级槽位（含 GC 返回/异常根）----
+    emitAllocUnwindSlots();
     tryStack_.clear();
     catchDepth_ = 0;
     tryCounter_ = 0;
@@ -1392,11 +1386,16 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
     capturedVarNames_.clear();
     analyzeLambdas(body);
 
+    /* v0.54：精确根水位（本函数所有 push 在出口 unwind） */
+    beginFunctionGcRoots();
+    emitPushUnwindGcRoot();
+
     // ---- 隐式 this ----
     if (hasThis) {
         thisAddr_ = "%this.addr";
         em_.emit(thisAddr_ + " = alloca ptr");
         em_.emit("store ptr %this.arg, ptr " + thisAddr_);
+        emitGcRootPush(thisAddr_);
 
         auto ts = std::make_shared<Symbol>();
         ts->kind = SymbolKind::Variable;
@@ -1436,6 +1435,7 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
             // %name.arg 本身即调用方槽位 ptr；直接作 irAddr，+= 写回调用方
             ps->irAddr = argSrc;
             ps->byRefParam = true;
+            emitGcRootPush(argSrc);
         } else if (boxed) {
             em_.emit(addr + " = alloca ptr");
             int64_t cbm = isGcPointerType(ptype) ? 1 : 0;
@@ -1444,11 +1444,14 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
             em_.emit("store ptr " + cell + ", ptr " + addr);
             ps->boxed = true;
             ps->irAddr = addr;
+            emitGcRootPush(addr);
         } else {
             em_.emit(addr + " = alloca " + ptype->llvmType());
             em_.emit("store " + ptype->llvmType() + " " + argSrc +
                      ", ptr " + addr);
             ps->irAddr = addr;
+            if (isGcPointerType(ptype))
+                emitGcRootPush(addr);
         }
         syms_.declare(ps);
     }
@@ -1462,6 +1465,7 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
 
     // ---- 补全返回 ----
     if (!blockTerminated_) {
+        emitGcRootUnwind();
         if (isMain) {
             em_.emit("ret i32 0");
         } else if (returnType->isUnit()) {
@@ -1474,6 +1478,7 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
                      zeroValueFor(returnType));
         }
     }
+    gcRootWm_.clear();
 }
 
 void IRGen::genFunction(HaoLangParser::FuncDeclContext* fn) {

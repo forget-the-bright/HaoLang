@@ -1,0 +1,27 @@
+// v0.55.1：模拟 monitor 反复 os.readFile 模板路径；修前永久根导致块数失控
+package main;
+
+import gc;
+import os;
+
+func main() {
+    val path = "haolang-example/08-gc-monitor/templates/dashboard.html";
+    var peakBlocks: Long = 0;
+    var i = 0;
+    while (i < 60) {
+        val t = os.readFile(path);
+        if (t == null || t!!.length < 10) {
+            fmt.println(false);
+            return;
+        }
+        val b = gc.GC.blockCount();
+        if (b > peakBlocks) peakBlocks = b;
+        i += 1;
+    }
+    gc.GC.collect();
+    var after = gc.GC.blockCount();
+    var heap = gc.GC.heapBytes();
+    fmt.println(peakBlocks > 0); // true
+    fmt.println(after < 100000); // true：相对「只加不摘」收敛
+    fmt.println(heap < (8 * 1024 * 1024)); // true
+}

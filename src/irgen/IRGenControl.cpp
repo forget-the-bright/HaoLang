@@ -10,7 +10,57 @@
 
 #include "irgen/IRGen.h"
 
+#include <functional>
+
 namespace hao {
+
+TypePtr IRGen::peekVarDeclType(HaoLangParser::VarDeclContext* vd) {
+    if (!vd) return nullptr;
+    if (vd->type()) return resolveType(vd->type());
+    if (vd->expr()) return inferExprType(vd->expr());
+    return nullptr;
+}
+
+void IRGen::hoistVarDeclsInLoopBody(HaoLangParser::StatementContext* body) {
+    if (!body) return;
+    std::function<void(antlr4::tree::ParseTree*)> walk =
+        [&](antlr4::tree::ParseTree* n) {
+            if (!n) return;
+            /* 闭包另有函数帧，勿把其局部提升到外层 while */
+            if (dynamic_cast<HaoLangParser::LambdaContext*>(n)) return;
+            if (auto* st = dynamic_cast<HaoLangParser::StatementContext*>(n)) {
+                if (auto* vd = st->varDecl()) {
+                    if (loopHoisted_.count(vd)) return;
+                    std::string name = vd->IDENT()->getText();
+                    TypePtr type = peekVarDeclType(vd);
+                    if (!type || type->isUnit() || type->isUnknown()) return;
+                    bool isVal = vd->VAL() != nullptr;
+                    bool boxed = !isVal && capturedVarNames_.count(name) > 0;
+                    HoistedLocal h;
+                    h.type = type;
+                    h.boxed = boxed;
+                    h.addr = em_.nextNamed(name + ".addr");
+                    if (boxed) {
+                        em_.emit(h.addr + " = alloca ptr");
+                        int64_t cbm = isGcPointerType(type) ? 1 : 0;
+                        std::string cell = emitObjectNew(1, cbm);
+                        em_.emit("store ptr " + cell + ", ptr " + h.addr);
+                        emitGcRootPush(h.addr);
+                    } else {
+                        em_.emit(h.addr + " = alloca " + type->llvmType());
+                        if (isGcPointerType(type)) {
+                            em_.emit("store ptr null, ptr " + h.addr);
+                            emitGcRootPush(h.addr);
+                        }
+                    }
+                    loopHoisted_[vd] = std::move(h);
+                    return;
+                }
+            }
+            for (auto* c : n->children) walk(c);
+        };
+    walk(body);
+}
 
 void IRGen::genBlock(HaoLangParser::BlockContext* blk, bool newScope) {
     if (!blk) return;
@@ -181,8 +231,12 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         }
         if (!ensureNonNullOperand(ch, ci.chExpr, "select channel")) return;
         std::string fp = fieldPtr(ch.ir, hSlot);
+        std::string hLoaded = em_.nextTemp();
+        em_.emit(hLoaded + " = load ptr, ptr " + fp);
+        // 句柄盒跨 select 循环 safepoint：spill 进 shadow
+        std::string hSlotAddr = emitSpillGcRoot("sel.h", hLoaded);
         ci.hPtr = em_.nextTemp();
-        em_.emit(ci.hPtr + " = load ptr, ptr " + fp);
+        em_.emit(ci.hPtr + " = load ptr, ptr " + hSlotAddr);
 
         if (ci.isRecv) {
             ci.outAlloca = em_.nextNamed("sel.out");
@@ -196,9 +250,12 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
                     return;
                 }
                 if (!ensureNonNullOperand(arg, ci.sendArg, "sendStr")) return;
-                // ptrtoint
+                // String 跨循环 safepoint：先 spill 再 ptrtoint
+                std::string strSlot = emitSpillGcRoot("sel.sstr", arg.ir);
+                std::string sp = em_.nextTemp();
+                em_.emit(sp + " = load ptr, ptr " + strSlot);
                 ci.sendBits = em_.nextTemp();
-                em_.emit(ci.sendBits + " = ptrtoint ptr " + arg.ir + " to i64");
+                em_.emit(ci.sendBits + " = ptrtoint ptr " + sp + " to i64");
             } else if (ci.method == "sendInt") {
                 if (!arg.type || arg.type->kind != TypeKind::Int) {
                     error(ci.sendArg, "sendInt 需要 Int");
@@ -360,6 +417,8 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
                 em_.emit(p + " = inttoptr i64 " + bits + " to ptr");
                 em_.emit("store ptr " + p + ", ptr " + addr);
             }
+            if (isGcPointerType(ci.bindType))
+                emitGcRootPush(addr);
             auto sym = std::make_shared<Symbol>();
             sym->kind = SymbolKind::Variable;
             sym->name = ci.bindName;
@@ -435,6 +494,32 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
         return;
     }
 
+    // while 提升：复用循环前 alloca/push，本轮只写初值（覆盖即放弃上轮对象）
+    auto hit = loopHoisted_.find(vd);
+    if (hit != loopHoisted_.end()) {
+        const HoistedLocal& h = hit->second;
+        if (h.boxed) {
+            std::string cell = em_.nextTemp();
+            em_.emit(cell + " = load ptr, ptr " + h.addr);
+            if (hasInit)
+                emitHeapStore(cell, init.ir, type, cell);
+        } else if (hasInit) {
+            em_.emit("store " + type->llvmType() + " " + init.ir + ", ptr " + h.addr);
+        } else if (isGcPointerType(type)) {
+            em_.emit("store ptr null, ptr " + h.addr);
+        }
+        auto sym = std::make_shared<Symbol>();
+        sym->kind = SymbolKind::Variable;
+        sym->name = name;
+        sym->type = type;
+        sym->isMutable = !isVal;
+        sym->irAddr = h.addr;
+        sym->boxed = h.boxed;
+        sym->line = vd->getStart()->getLine();
+        syms_.declare(sym);
+        return;
+    }
+
     std::string addr = em_.nextNamed(name + ".addr");
 
     // 被 lambda 捕获的可变 var 装箱到堆 cell，与闭包共享；
@@ -447,11 +532,14 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
         if (hasInit)
             emitHeapStore(cell, init.ir, type, cell);
         em_.emit("store ptr " + cell + ", ptr " + addr);
+        emitGcRootPush(addr);
     } else {
         em_.emit(addr + " = alloca " + type->llvmType());
         if (hasInit) {
             em_.emit("store " + type->llvmType() + " " + init.ir + ", ptr " + addr);
         }
+        if (isGcPointerType(type))
+            emitGcRootPush(addr);
     }
 
     auto sym = std::make_shared<Symbol>();
@@ -538,6 +626,10 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
     std::string bodyL = em_.nextLabel("while.body");
     std::string endL  = em_.nextLabel("while.end");
 
+    /* 提升体内 var：同一槽每轮 store，旧对象失去根 → major 可回收（08-gc-monitor） */
+    auto savedHoist = loopHoisted_;
+    hoistVarDeclsInLoopBody(st->statement());
+
     em_.emit("br label %" + condL);
 
     // ---- 条件（每轮 safepoint，供多线程 STW 握手）----
@@ -545,12 +637,19 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
     blockTerminated_ = false;
     em_.emit("call void @hao_gc_safepoint()");
     Value cond = genExpr(st->expr());
-    if (!cond.valid()) return;
-    if (cond.type->kind != TypeKind::Bool) {
-        error(st->expr(), "while 条件必须是 Bool 类型，实际为 " + cond.type->toString());
+    if (!cond.valid()) {
+        loopHoisted_ = std::move(savedHoist);
         return;
     }
-    if (!ensureNonNullOperand(cond, st->expr(), "while 条件")) return;
+    if (cond.type->kind != TypeKind::Bool) {
+        error(st->expr(), "while 条件必须是 Bool 类型，实际为 " + cond.type->toString());
+        loopHoisted_ = std::move(savedHoist);
+        return;
+    }
+    if (!ensureNonNullOperand(cond, st->expr(), "while 条件")) {
+        loopHoisted_ = std::move(savedHoist);
+        return;
+    }
     em_.emit("br i1 " + toI1(cond) + ", label %" + bodyL + ", label %" + endL);
 
     // ---- 循环体 ----
@@ -576,6 +675,13 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
 
     em_.emitLabel(endL);
     blockTerminated_ = false;
+    /* 循环结束：提升的 GC 槽置 null，避免末轮对象假活到函数出口 */
+    for (auto& kv : loopHoisted_) {
+        if (savedHoist.count(kv.first)) continue;
+        if (kv.second.boxed || isGcPointerType(kv.second.type))
+            em_.emit("store ptr null, ptr " + kv.second.addr);
+    }
+    loopHoisted_ = std::move(savedHoist);
 }
 
 // ============================================================
@@ -691,6 +797,7 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
     std::string seqAddr = em_.nextNamed("for.seq");
     em_.emit(seqAddr + " = alloca ptr");
     em_.emit("store ptr " + seq.ir + ", ptr " + seqAddr);
+    emitGcRootPush(seqAddr);
 
     // 长度也只求一次
     std::string lenReg = em_.nextTemp();
@@ -703,6 +810,12 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
     std::string idxAddr = em_.nextNamed("for.idx");
     em_.emit(idxAddr + " = alloca i64");
     em_.emit("store i64 0, ptr " + idxAddr);
+
+    /* 循环变量 alloca 提到循环外，精确根只 push 一次（防每轮涨 shadow） */
+    std::string varAddr = em_.nextNamed(varName + ".addr");
+    em_.emit(varAddr + " = alloca " + elemType->llvmType());
+    if (isGcPointerType(elemType))
+        emitGcRootPush(varAddr);
 
     std::string condL = em_.nextLabel("for.cond");
     std::string bodyL = em_.nextLabel("for.body");
@@ -743,8 +856,6 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
         std::string elemVal = em_.nextTemp();
         em_.emit(elemVal + " = load " + elemType->llvmType() + ", ptr " + elemPtr);
 
-        std::string varAddr = em_.nextNamed(varName + ".addr");
-        em_.emit(varAddr + " = alloca " + elemType->llvmType());
         em_.emit("store " + elemType->llvmType() + " " + elemVal + ", ptr " + varAddr);
 
         auto sym = std::make_shared<Symbol>();
@@ -824,6 +935,12 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
     std::string iterAddr = em_.nextNamed("for.it");
     em_.emit(iterAddr + " = alloca ptr");
     em_.emit("store ptr " + iter + ", ptr " + iterAddr);
+    emitGcRootPush(iterAddr);
+
+    std::string varAddr = em_.nextNamed(varName + ".addr");
+    em_.emit(varAddr + " = alloca " + elemType->llvmType());
+    if (isGcPointerType(elemType))
+        emitGcRootPush(varAddr);
 
     std::string condL = em_.nextLabel("for.cond");
     std::string bodyL = em_.nextLabel("for.body");
@@ -852,8 +969,6 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
         em_.emit(itv2 + " = load ptr, ptr " + iterAddr);
         std::string elemVal = dispatch(itv2, itfI, nmi, elemType->llvmType());
 
-        std::string varAddr = em_.nextNamed(varName + ".addr");
-        em_.emit(varAddr + " = alloca " + elemType->llvmType());
         em_.emit("store " + elemType->llvmType() + " " + elemVal + ", ptr " + varAddr);
 
         auto sym = std::make_shared<Symbol>();
@@ -910,6 +1025,8 @@ void IRGen::genWhenStmt(HaoLangParser::WhenStmtContext* st) {
         em_.emit(subjAddr + " = alloca " + subjType->llvmType());
         em_.emit("store " + subjType->llvmType() + " " + subject.ir +
                  ", ptr " + subjAddr);
+        if (isGcPointerType(subjType))
+            emitGcRootPush(subjAddr);
     }
 
     std::string endL = em_.nextLabel("when.end");

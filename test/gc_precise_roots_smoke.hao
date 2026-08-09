@@ -1,0 +1,39 @@
+// v0.54：精确根——栈上大量非指针噪声后，不可达对象仍应被回收
+package main;
+
+import gc;
+import collections.*;
+
+func fillNoise(n: Int): Long {
+    var acc: Long = 0;
+    var i = 0;
+    while (i < n) {
+        acc = acc + (i * 17);
+        i += 1;
+    }
+    return acc;
+}
+
+func main() {
+    var before = gc.GC.heapBytes();
+    var round = 0;
+    while (round < 6) {
+        var junk = new List<Object>();
+        var i = 0;
+        while (i < 3000) {
+            junk.add(String.valueOf("pr-" + Integer.toStr(i)));
+            i += 1;
+        }
+        junk = new List<Object>();
+        // 污染栈：大量整数局部，不应把已丢弃的 String 假活
+        var noise = fillNoise(8000);
+        if (noise < 0) { fmt.println(false); return; }
+        round += 1;
+    }
+    gc.GC.collect();
+    var after = gc.GC.heapBytes();
+    fmt.println(gc.GC.collectCount() >= 1); // true
+    // 回收后堆不应相对「只涨不跌」失控（允许一定波动）
+    fmt.println(after < before + (4 * 1024 * 1024)); // true：未因假活涨超 4MiB
+    fmt.println(gc.GC.markWorkerSteps() >= 0); // true：指标可读
+}

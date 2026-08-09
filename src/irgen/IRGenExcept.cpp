@@ -31,6 +31,7 @@ void IRGen::genReturn(HaoLangParser::ReturnStmtContext* st) {
         }
         // 在 try 内：先执行 finally 再返回
         if (!tryStack_.empty()) { emitUnwind(1); return; }
+        emitGcRootUnwind();
         em_.emit(inMain_ ? "ret i32 0" : "ret void");
         blockTerminated_ = true;
         return;
@@ -62,6 +63,7 @@ void IRGen::genReturn(HaoLangParser::ReturnStmtContext* st) {
         return;
     }
 
+    emitGcRootUnwind();
     if (inMain_) {
         // main 的 C 入口返回 int(i32)。v0.25+ Int 已是 i32，直接 ret，勿再 trunc i64。
         if (currentReturn_->kind == TypeKind::Int) {
@@ -80,12 +82,18 @@ void IRGen::genReturn(HaoLangParser::ReturnStmtContext* st) {
 //  unwind 槽读写
 // ------------------------------------------------------------
 
-// 把返回值/异常对象按类型转成 i64 存入 unwind 槽
+// 把返回值/异常对象按类型转成 i64 存入 unwind 槽；
+// GC 指针同时写入 unwindGcRootAddr_，保证 finally/safepoint 期间可达。
 void IRGen::storeUnwindRet(const Value& v) {
     if (!v.valid() || v.type->isUnit()) {
         em_.emit("store i64 0, ptr " + unwindRetAddr_);
+        clearUnwindGcRoot();
         return;
     }
+    if (isGcPointerType(v.type))
+        storeUnwindGcRootPtr(v.ir);
+    else
+        clearUnwindGcRoot();
     std::string val64 = em_.boxToI64(v.ir, v.type);
     em_.emit("store i64 " + val64 + ", ptr " + unwindRetAddr_);
 }
@@ -94,6 +102,7 @@ void IRGen::storeUnwindRet(const Value& v) {
 void IRGen::emitUnwindRet() {
     std::string raw = em_.nextTemp();
     em_.emit(raw + " = load i64, ptr " + unwindRetAddr_);
+    emitGcRootUnwind();
     if (currentReturn_->isUnit()) {
         em_.emit(inMain_ ? "ret i32 0" : "ret void");
         return;
@@ -204,6 +213,26 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
     tc.endLabel = endL;
     tryStack_.push_back(tc);
 
+    // catch 绑定槽：在 setjmp 前分配并 root_push（只 push 一次，进 catch 仅 store）
+    struct CatchEntry {
+        HaoLangParser::CatchClauseContext* node;
+        std::string label;
+        TypePtr type;
+        std::string bindAddr;
+    };
+    std::vector<CatchEntry> catchEntries;
+    for (size_t i = 0; i < catches.size(); ++i) {
+        auto* cc = catches[i];
+        TypePtr t = resolveType(cc->type());
+        std::string bindAddr = em_.nextNamed(
+            "try" + idx + ".c" + std::to_string(i) + ".addr");
+        em_.emit(bindAddr + " = alloca ptr");
+        em_.emit("store ptr null, ptr " + bindAddr);
+        emitGcRootPush(bindAddr);
+        catchEntries.push_back(
+            {cc, "try" + idx + ".catch" + std::to_string(i), t, bindAddr});
+    }
+
     // ---- setjmp 分派 ----
     //  关键：setjmp 必须在用户函数自身的栈帧里调用，不能包在会返回的运行时
     //  辅助函数中（否则 longjmp 跳回一个已失效的帧会崩溃）。因此分两步：
@@ -249,18 +278,11 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
     em_.emitLabel(dispatchL);
     std::string exc = em_.nextTemp();
     em_.emit(exc + " = call ptr @hao_except_capture()");
+    // 立刻写入函数级 unwind GC 根：dispatch 匹配 / finally 期间异常对象须可达
+    storeUnwindGcRootPtr(exc);
 
     // 全都没匹配上的块：把异常存入 unwind 槽、reason=4，然后进 cleanup（重抛）
     std::string noMatchL = "try" + idx + ".nomatch";
-
-    // 收集各 catch 的类型与块名
-    struct CatchEntry { HaoLangParser::CatchClauseContext* node; std::string label; TypePtr type; };
-    std::vector<CatchEntry> catchEntries;
-    for (size_t i = 0; i < catches.size(); ++i) {
-        auto* cc = catches[i];
-        TypePtr t = resolveType(cc->type());
-        catchEntries.push_back({cc, "try" + idx + ".catch" + std::to_string(i), t});
-    }
 
     // 没有 catch：dispatch 直接落入 noMatch（标记重抛）
     if (catchEntries.empty()) {
@@ -300,17 +322,14 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
             // catch 成功处理异常：复位 reason（内层可能把它设为 4=rethrow），
             // 否则外层 cleanup 会把已处理的异常重新抛出。
             em_.emit("store i32 0, ptr " + unwindReasonAddr_);
+            em_.emit("store ptr " + exc + ", ptr " + ce.bindAddr);
             SymbolTable::Guard g(syms_);
-            // 把异常对象绑定到 catch 变量
             auto sym = std::make_shared<Symbol>();
             sym->kind = SymbolKind::Variable;
             sym->name = ce.node->IDENT()->getText();
             sym->type = ce.type;
             sym->isMutable = false;
-            std::string addr = em_.nextNamed(sym->name + ".addr");
-            em_.emit(addr + " = alloca ptr");
-            em_.emit("store ptr " + exc + ", ptr " + addr);
-            sym->irAddr = addr;
+            sym->irAddr = ce.bindAddr;
             syms_.declare(sym);
 
             for (auto* s : ce.node->block()->statement()) genStatement(s);
@@ -329,6 +348,7 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
         std::string ei = em_.nextTemp();
         em_.emit(ei + " = ptrtoint ptr " + exc + " to i64");
         em_.emit("store i64 " + ei + ", ptr " + unwindRetAddr_);
+        storeUnwindGcRootPtr(exc);
         em_.emit("store i32 4, ptr " + unwindReasonAddr_);
     }
     em_.emit("br label %" + cleanupL);

@@ -1,0 +1,71 @@
+// v0.55：when / catch / finally 返回 GC 值跨 safepoint 须在 shadow；不可达仍可回收
+package main;
+
+import gc;
+import exception;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func whenKeep(n: Int): String {
+    return when (n) {
+        0 -> "zero";
+        1 -> "one";
+        else -> "many-" + Integer.toStr(n);
+    };
+}
+
+func catchKeep(flag: Int): String {
+    try {
+        if (flag == 1) {
+            throw new exception.Exception("boom");
+        }
+        return "ok";
+    } catch (e: exception.Exception) {
+        // catch 绑定须为精确根；体内可 safepoint
+        var i = 0;
+        while (i < 200) {
+            i += 1;
+        }
+        return "caught:" + e.getMessage();
+    }
+}
+
+func finallyRet(): String {
+    try {
+        return "fin-ret";
+    } finally {
+        var i = 0;
+        while (i < 200) {
+            i += 1;
+        }
+    }
+}
+
+func main() {
+    var live = whenKeep(2);
+    var c1 = catchKeep(0);
+    var c2 = catchKeep(1);
+    var fr = finallyRet();
+    var box = new Box("alive");
+
+    // 制造不可达对象后强制回收
+    var round = 0;
+    while (round < 4) {
+        var junk = new Box("j-" + Integer.toStr(round));
+        junk = new Box("drop");
+        round += 1;
+    }
+    gc.GC.collect();
+
+    // 活根仍可读（未 UAF）
+    fmt.println(live.length > 0); // true
+    fmt.println(c1 == "ok"); // true
+    fmt.println(String.valueOf(c2).startsWith("caught:")); // true
+    fmt.println(fr == "fin-ret"); // true
+    fmt.println(box.s == "alive"); // true
+    fmt.println(gc.GC.collectCount() >= 1); // true
+    fmt.println(gc.GC.stwMarkAllFallbacks() == 0); // true：未退回全标活
+}

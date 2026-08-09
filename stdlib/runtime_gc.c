@@ -1,10 +1,10 @@
 /*
- * HaoLang 运行时 —— 垃圾回收器（GC v3 / v0.52）
+ * HaoLang 运行时 —— 垃圾回收器（GC v3 / v0.55.2+）
  * ------------------------------------------------------------
- *  精确堆扫描（kind + 位图）+ 非移动分代；
- *  写屏障：分代 remset + 并发标记期 Dijkstra 插入屏障（shade new）；
- *  标记色纪元 O(1) setup；先开屏障再软根 STW；mark assist；
- *  终止 STW 可重试，未齐不丢 MARK 进度；Win 不 SuspendThread。
+ *  权威契约：docs/IR与GC契约.md
+ *  精确堆 + 分代 remset（仅 minor seed）+ 混合屏障 + 色纪元；
+ *  诚实双轨：shadow 始终扫；os_block/纯 C 另扫 GPR+有界 C 叶；
+ *  major 禁止把 remset 当根；mark worker 不注册。
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -22,6 +22,7 @@
 static void hao_gc_lock(void);
 static void hao_gc_unlock(void);
 static void gc_scan_range(char* lo, char* hi);
+static void gc_mark_ptr(uintptr_t v);
 
 #define GC_ALIGN 16
 #define GC_GEN_YOUNG 0
@@ -87,6 +88,7 @@ static volatile int gc_phase = GC_PHASE_IDLE;
 static int64_t      g_concurrent_mark_cycles = 0;
 static int64_t      g_mark_assist_steps = 0;
 static int64_t      g_mark_abort_cycles = 0; /* 终止失败 abort MARK 次数（v0.53.3） */
+static int64_t      g_mark_worker_steps = 0; /* mark worker 推进灰块数（v0.54） */
 static size_t       gc_heap_bytes = 0; /* 用户区合计，alloc/sweep 维护 */
 /* v0.52：marked==gc_mark_epoch 为本轮已标；setup 只 ++epoch，勿扫百万清零 */
 static uint8_t      gc_mark_epoch = 1;
@@ -114,22 +116,43 @@ static __declspec(thread) int   g_stk_reg  = 0;
 static __declspec(thread) char  g_gpr_spill[128];
 static __declspec(thread) char* g_park_sp = NULL;
 static __declspec(thread) int   g_parked = 0;
+static __declspec(thread) void*** g_shadow = NULL;
+static __declspec(thread) size_t  g_shadow_n = 0;
+static __declspec(thread) size_t  g_shadow_cap = 0;
+/* gc_collect 入口 SP：seed 保守扫上限，避免扫进调用方 Hao 帧 */
+static __declspec(thread) char* g_collect_c_hi = NULL;
+/* os_block/arm 期间：STW 须加扫 GPR+C 叶（C 帧活对象） */
+static __declspec(thread) int g_in_os_block = 0;
 #else
 static __thread char* g_stk_top = NULL;
 static __thread int   g_stk_reg  = 0;
 static __thread char  g_gpr_spill[128];
 static __thread char* g_park_sp = NULL;
 static __thread int   g_parked = 0;
+static __thread void*** g_shadow = NULL;
+static __thread size_t  g_shadow_n = 0;
+static __thread size_t  g_shadow_cap = 0;
+static __thread char* g_collect_c_hi = NULL;
+static __thread int g_in_os_block = 0;
 #endif
 
 #define GC_MAX_THREADS 256
 #define GC_GPR_SPILL_BYTES 128
+#define GC_MARK_WORKERS 2
+/*
+ * park 叶保守窗口：仅 park_wait / os_block C 帧。
+ * 过大（数十 KiB）会在浅调用栈上扫回 Hao 死局部，抵消 shadow。
+ */
+#define GC_CONSERVATIVE_LEAF_BYTES ((size_t)4 * 1024)
 typedef struct {
     int64_t id;
     char*   stack_top;
     char**  park_sp_slot;
     char*   gpr_spill;
     int*    parked_flag;
+    void**** shadow_slot; /* &g_shadow */
+    size_t*  shadow_n;    /* &g_shadow_n */
+    int*     in_os_block_flag; /* &g_in_os_block */
 } GcThread;
 static GcThread gc_threads[GC_MAX_THREADS];
 static int   gc_thread_count = 0;
@@ -277,6 +300,9 @@ void gc_register_thread(void) {
     gc_threads[gc_thread_count].park_sp_slot = &g_park_sp;
     gc_threads[gc_thread_count].gpr_spill = g_gpr_spill;
     gc_threads[gc_thread_count].parked_flag = &g_parked;
+    gc_threads[gc_thread_count].shadow_slot = &g_shadow;
+    gc_threads[gc_thread_count].shadow_n = &g_shadow_n;
+    gc_threads[gc_thread_count].in_os_block_flag = &g_in_os_block;
     gc_thread_count++;
     hao_gc_unlock();
 }
@@ -313,12 +339,14 @@ void hao_gc_os_block_enter(void) {
     char* sp;
     __asm__ __volatile__("movq %%rsp, %0" : "=r"(sp));
     g_park_sp = sp;
+    __atomic_store_n(&g_in_os_block, 1, __ATOMIC_RELEASE);
     __atomic_store_n(&g_parked, 1, __ATOMIC_RELEASE);
 }
 
 void hao_gc_os_block_leave(void) {
     if (!g_stk_reg) return;
     __atomic_store_n(&g_parked, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_in_os_block, 0, __ATOMIC_RELEASE);
     g_park_sp = NULL;
     hao_gc_safepoint();
 }
@@ -333,22 +361,79 @@ void hao_gc_os_block_arm(void) {
     char* sp;
     __asm__ __volatile__("movq %%rsp, %0" : "=r"(sp));
     g_park_sp = sp;
+    __atomic_store_n(&g_in_os_block, 1, __ATOMIC_RELEASE);
     __atomic_store_n(&g_parked, 1, __ATOMIC_RELEASE);
 }
 
 void hao_gc_os_block_disarm(void) {
     if (!g_stk_reg) return;
     __atomic_store_n(&g_parked, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_in_os_block, 0, __ATOMIC_RELEASE);
     g_park_sp = NULL;
 }
 
+static void gc_scan_shadow(const GcThread* t) {
+    if (!t->shadow_slot || !t->shadow_n) return;
+    void*** slots = *t->shadow_slot;
+    size_t n = *t->shadow_n;
+    if (!slots || n == 0) return;
+    for (size_t i = 0; i < n; ++i) {
+        void** slot = slots[i];
+        if (slot && *slot) gc_mark_ptr((uintptr_t)*slot);
+    }
+}
+
+static void gc_scan_conservative_leaf(char* sp, char* stack_top) {
+    if (!sp || !stack_top || sp >= stack_top) return;
+    size_t span = (size_t)(stack_top - sp);
+    if (span > (size_t)8 * 1024 * 1024) return;
+    char* hi = sp + GC_CONSERVATIVE_LEAF_BYTES;
+    if (hi > stack_top) hi = stack_top;
+    gc_scan_range(sp, hi);
+}
+
 static void gc_scan_parked_thread(const GcThread* t) {
+    /*
+     * 诚实双轨：
+     * 1) 始终扫 shadow（Hao 精确根）
+     * 2) os_block/arm 或无 shadow → 加扫 GPR + 有界 C 叶（C 帧活对象）
+     * 3) 仅 Hao safepoint park（有 shadow、非 os_block）→ shadow-only
+     *    （避免扫回 Hao 死局部导致 finalizer 假活）
+     */
+    gc_scan_shadow(t);
+    int has_shadow = t->shadow_n && *t->shadow_n > 0;
+    int in_os = t->in_os_block_flag &&
+                __atomic_load_n(t->in_os_block_flag, __ATOMIC_ACQUIRE);
+    int need_c_leaf = !has_shadow || in_os;
+    if (!need_c_leaf) return;
     if (t->gpr_spill)
         gc_scan_range(t->gpr_spill, t->gpr_spill + GC_GPR_SPILL_BYTES);
     char* sp = (t->park_sp_slot && *t->park_sp_slot) ? *t->park_sp_slot : NULL;
-    if (sp && t->stack_top && sp < t->stack_top &&
-        (size_t)(t->stack_top - sp) <= (size_t)8 * 1024 * 1024)
-        gc_scan_range(sp, t->stack_top);
+    gc_scan_conservative_leaf(sp, t->stack_top);
+}
+
+size_t hao_gc_root_watermark(void) {
+    return g_shadow_n;
+}
+
+void hao_gc_root_push(void** slot) {
+    if (!slot) return;
+    if (!g_stk_reg) gc_register_thread();
+    if (g_shadow_n >= g_shadow_cap) {
+        size_t nc = g_shadow_cap ? g_shadow_cap * 2 : 64;
+        void*** nb = (void***)realloc(g_shadow, nc * sizeof(void**));
+        if (!nb) {
+            fputs("panic: GC shadow stack 扩容失败\n", stderr);
+            exit(1);
+        }
+        g_shadow = nb;
+        g_shadow_cap = nc;
+    }
+    g_shadow[g_shadow_n++] = slot;
+}
+
+void hao_gc_root_unwind(size_t wm) {
+    if (wm < g_shadow_n) g_shadow_n = wm;
 }
 
 /*
@@ -800,9 +885,14 @@ static void gc_drain_worklist(int concurrent) {
     while (gc_wl_head < gc_wl_count) {
         GCBlock* b = gc_worklist[gc_wl_head++];
         gc_scan_block_precise(b);
-        if (concurrent && (gc_wl_head & 63u) == 0) {
+        /* 每 16 步放锁，给 GC 私有 worker 抢灰（仅 yield 时同核易饿死） */
+        if (concurrent && (gc_wl_head & 15u) == 0) {
             hao_gc_unlock();
+#ifdef _WIN32
+            hao_win_sleep_ms(0);
+#else
             gc_yield_brief();
+#endif
             hao_gc_lock();
         }
     }
@@ -817,13 +907,29 @@ static void gc_seed_roots_and_remset(char* regs, size_t regs_size) {
         void** slot = (void**)gc_root_slots[i];
         if (slot && *slot) gc_mark_ptr((uintptr_t)*slot);
     }
-    for (size_t i = 0; i < gc_remset_count; ++i) {
-        GCBlock* b = gc_find_block(gc_remset[i]);
-        if (!b) continue;
-        if (gc_mark_major) gc_enqueue(b);
-        else gc_scan_block_precise(b);
+    /* 收集者自身 Hao 精确根 */
+    for (size_t i = 0; i < g_shadow_n; ++i) {
+        void** slot = g_shadow ? g_shadow[i] : NULL;
+        if (slot && *slot) gc_mark_ptr((uintptr_t)*slot);
     }
-    if (regs && regs_size) gc_scan_range(regs, regs + regs_size);
+    /*
+     * remset 仅服务 minor：扫 old 容器上的 young 子指针。
+     * major 禁止 seed/enqueue remset——否则把不可达 old 当真根，子图永假活
+     * （08-gc-monitor blockCount 只涨的主因，v0.55.2）。
+     */
+    if (!gc_mark_major) {
+        for (size_t i = 0; i < gc_remset_count; ++i) {
+            GCBlock* b = gc_find_block(gc_remset[i]);
+            if (b) gc_scan_block_precise(b);
+        }
+    }
+    /*
+     * 收集者：始终扫 collect 入口以下 C 帧；永不扫 trampoline GPR
+     * （Hao callee-saved 死指针是 finalizer 假活主因）。
+     * 无 shadow 时退回有界叶（纯 C 触发的 collect）。
+     */
+    (void)regs;
+    (void)regs_size;
     {
         char* sp;
 #ifdef _WIN32
@@ -831,8 +937,99 @@ static void gc_seed_roots_and_remset(char* regs, size_t regs_size) {
 #else
         char local; sp = &local;
 #endif
-        if (g_stk_top && sp < g_stk_top)
-            gc_scan_range(sp, g_stk_top);
+        char* hi = g_collect_c_hi;
+        if (hi && sp < hi)
+            gc_scan_range(sp, hi);
+        else if (g_shadow_n == 0)
+            gc_scan_conservative_leaf(sp, g_stk_top);
+    }
+}
+
+/* ---- GC 私有 mark worker（勿复用用户 hao_pool）---- */
+static volatile int g_mark_workers_run = 1;
+static int g_mark_workers_started = 0;
+#ifdef _WIN32
+static void* g_mark_worker_handles[GC_MARK_WORKERS];
+#else
+static pthread_t g_mark_worker_threads[GC_MARK_WORKERS];
+#endif
+
+#ifdef _WIN32
+static uint32_t mark_worker_main(void* arg) {
+#else
+static void* mark_worker_main(void* arg) {
+#endif
+    (void)arg;
+    /*
+     * GC 私有线程：不 gc_register_thread。
+     * 若注册为 mutator，STW 会保守扫其栈/GPR；扫描残留指针会把已死对象假活，
+     * 导致 finalizer/回收冒烟偶发失败，并增加 STW 握手目标。
+     * 与堆交互一律持 GC 锁；STW 期间仅 park，不碰 worklist。
+     */
+    while (__atomic_load_n(&g_mark_workers_run, __ATOMIC_ACQUIRE)) {
+        if (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
+            hao_gc_safepoint();
+            continue;
+        }
+        hao_gc_lock();
+        if (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
+            hao_gc_unlock();
+            hao_gc_safepoint();
+            continue;
+        }
+        if (__atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_MARK &&
+            gc_wl_head < gc_wl_count) {
+            size_t n = 0;
+            while (n < 64 && gc_wl_head < gc_wl_count) {
+                GCBlock* b = gc_worklist[gc_wl_head++];
+                gc_scan_block_precise(b);
+                n++;
+                g_mark_worker_steps++;
+            }
+            if (gc_wl_head >= gc_wl_count) {
+                gc_wl_count = 0;
+                gc_wl_head = 0;
+            }
+            hao_gc_unlock();
+        } else {
+            int marking =
+                __atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_MARK;
+            hao_gc_unlock();
+            /* MARK 期短让出；IDLE 才睡，避免 1ms 睡眠错过协助窗口 */
+            if (marking)
+                gc_yield_brief();
+            else {
+#ifdef _WIN32
+                hao_win_sleep_ms(1);
+#else
+                {
+                    struct timespec ts;
+                    ts.tv_sec = 0;
+                    ts.tv_nsec = 1000 * 1000;
+                    nanosleep(&ts, NULL);
+                }
+#endif
+            }
+        }
+    }
+#ifdef _WIN32
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
+static void gc_ensure_mark_workers(void) {
+    if (g_mark_workers_started) return;
+    g_mark_workers_started = 1;
+    for (int i = 0; i < GC_MARK_WORKERS; ++i) {
+#ifdef _WIN32
+        g_mark_worker_handles[i] = hao_win_create_thread(mark_worker_main, NULL);
+#else
+        if (pthread_create(&g_mark_worker_threads[i], NULL, mark_worker_main,
+                           NULL) != 0)
+            g_mark_worker_threads[i] = (pthread_t)0;
+#endif
     }
 }
 
@@ -852,7 +1049,83 @@ static void gc_pend_fin_add(HaoFinalizerFn fn, void* user, GCBlock* block) {
     gc_pend_fin_n++;
 }
 
-/* 回调在锁外执行；队列摘取需短暂加锁防并发 drain 互抢。 */
+/* 持锁：活堆上是否仍有指针指向 user（精确 kind 扫描）。 */
+static int gc_block_refers_to(GCBlock* b, void* user) {
+    if (!b || !user) return 0;
+    char* u = (char*)(b + 1);
+    uintptr_t want = (uintptr_t)user;
+    switch (b->scan_kind) {
+    case GC_KIND_OPAQUE:
+        return 0;
+    case GC_KIND_SLOTS: {
+        uint32_t bm = b->scan_meta;
+        size_t nslots = b->user_size / sizeof(uintptr_t);
+        if (nslots > 32) nslots = 32;
+        for (size_t i = 0; i < nslots; ++i) {
+            if ((bm & (1u << i)) && ((uintptr_t*)u)[i] == want) return 1;
+        }
+        return 0;
+    }
+    case GC_KIND_ARRAY: {
+        if ((b->scan_meta & 1u) == 0) return 0;
+        if (b->user_size < (size_t)HAO_ARR_HEADER) return 0;
+        char* elems = u + HAO_ARR_HEADER;
+        int64_t len = *(int64_t*)(u + HAO_ARR_LEN_OFF_BASE);
+        int64_t esz = *(int64_t*)(u + HAO_ARR_ESZ_OFF_BASE);
+        if (esz != 8 || len <= 0) return 0;
+        size_t max = (b->user_size - (size_t)HAO_ARR_HEADER) / 8;
+        if ((size_t)len > max) len = (int64_t)max;
+        for (int64_t i = 0; i < len; ++i)
+            if (((uintptr_t*)elems)[i] == want) return 1;
+        return 0;
+    }
+    case GC_KIND_FULL:
+    default: {
+        size_t n = b->user_size / sizeof(uintptr_t);
+        for (size_t i = 0; i < n; ++i)
+            if (((uintptr_t*)u)[i] == want) return 1;
+        return 0;
+    }
+    }
+}
+
+/* 持锁：外部根 / root_slot / 活堆是否仍引用 user（复活判定）。 */
+static int gc_user_still_reachable_locked(void* user) {
+    if (!user) return 0;
+    for (size_t i = 0; i < gc_root_count; ++i)
+        if (gc_roots[i] == user) return 1;
+    for (size_t i = 0; i < gc_root_slot_count; ++i) {
+        void** slot = (void**)gc_root_slots[i];
+        if (slot && *slot == user) return 1;
+    }
+    for (GCBlock* b = gc_heap; b; b = b->next) {
+        if (gc_block_refers_to(b, user)) return 1;
+    }
+    return 0;
+}
+
+/* 持锁：把已摘链块挂回堆（finalizer 复活）。 */
+static void gc_relink_block_locked(GCBlock* b) {
+    if (!b) return;
+    b->finalizer = NULL;
+    b->gen = GC_GEN_YOUNG;
+    b->age = 0;
+    b->marked = 0;
+    b->next = gc_heap;
+    gc_heap = b;
+    gc_num_blocks += 1;
+    gc_heap_bytes += b->user_size;
+    {
+        char* u = (char*)(b + 1);
+        if (!gc_heap_lo || u < gc_heap_lo) gc_heap_lo = u;
+        if (!gc_heap_hi || u + b->user_size > gc_heap_hi)
+            gc_heap_hi = u + b->user_size;
+    }
+    gc_page_index_add(b);
+}
+
+/* 回调在锁外执行；队列摘取需短暂加锁防并发 drain 互抢。
+ * 回调后若仍可达则挂回堆（完整复活）；否则 free。禁止「挂根仍必 free」。 */
 static void gc_drain_finalizers(void) {
     hao_gc_lock();
     size_t n = gc_pend_fin_n;
@@ -869,9 +1142,47 @@ static void gc_drain_finalizers(void) {
             list[i].fn(list[i].user);
             hao_gc_remove_root(list[i].user);
         }
-        free(list[i].block);
+        hao_gc_lock();
+        if (gc_user_still_reachable_locked(list[i].user))
+            gc_relink_block_locked(list[i].block);
+        else
+            free(list[i].block);
+        hao_gc_unlock();
     }
     free(list);
+}
+
+/* ---- 测试辅助：finalizer 复活冒烟（写入 C 静态根槽）---- */
+static void* g_fin_rescue = NULL;
+static int   g_fin_rescue_slot_reg = 0;
+
+static void gc_fin_rescue_cb(void* user) {
+    g_fin_rescue = user;
+}
+
+static void gc_fin_nop_cb(void* user) {
+    (void)user;
+}
+
+void hao_gc_test_arm_rescue_finalizer(void* obj) {
+    if (!g_fin_rescue_slot_reg) {
+        hao_gc_add_root_slot(&g_fin_rescue);
+        g_fin_rescue_slot_reg = 1;
+    }
+    g_fin_rescue = NULL;
+    hao_gc_set_finalizer(obj, gc_fin_rescue_cb);
+}
+
+void hao_gc_test_arm_nop_finalizer(void* obj) {
+    hao_gc_set_finalizer(obj, gc_fin_nop_cb);
+}
+
+void* hao_gc_test_get_rescue(void) {
+    return g_fin_rescue;
+}
+
+void hao_gc_test_clear_rescue(void) {
+    g_fin_rescue = NULL;
 }
 
 static void gc_scan_range(char* lo, char* hi) {
@@ -945,23 +1256,34 @@ static void gc_remset_filter_live(void) {
 void hao_gc_barrier(void* dst, void* new_val) {
     if (!dst) return;
     /*
-     * v0.53：IR 先 barrier 再 store。shade 必须在 publish 前完成，且 shade 前
-     * 禁止 safepoint（否则 park 窗口里指针已写入却未入灰）。
+     * v0.54 混合屏障：dst 须为**槽地址**（先 barrier 再 store）。
+     * MARK 期 Yuasa shade(old) + Dijkstra shade(new)；IDLE 仅 remset。
+     * shade 完成前禁止 safepoint；STW 重试后须重新 load old。
      */
     hao_gc_lock();
-    while (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
-        hao_gc_unlock();
-        hao_gc_safepoint();
-        hao_gc_lock();
+    for (;;) {
+        while (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
+            hao_gc_unlock();
+            hao_gc_safepoint();
+            hao_gc_lock();
+        }
+        void* old_val = *(void**)dst;
+        GCBlock* db = gc_find_block(dst);
+        GCBlock* ob = old_val ? gc_find_block(old_val) : NULL;
+        GCBlock* nb = new_val ? gc_find_block(new_val) : NULL;
+        /* 分代 remset：old 容器 → young 新值 */
+        if (db && nb && db->gen == GC_GEN_OLD && nb->gen == GC_GEN_YOUNG)
+            gc_remset_add((void*)(db + 1));
+        if (__atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_MARK) {
+            /* 重试窗口可能夹 STW；确认仍 MARK 再 shade */
+            if (ob) gc_enqueue(ob);
+            if (nb) gc_enqueue(nb);
+        }
+        /* 若 shade 前又来了 STW 请求，重跑（重新 load old） */
+        if (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE))
+            continue;
+        break;
     }
-    GCBlock* db = gc_find_block(dst);
-    GCBlock* nb = new_val ? gc_find_block(new_val) : NULL;
-    /* 分代 remset：old → young */
-    if (db && nb && db->gen == GC_GEN_OLD && nb->gen == GC_GEN_YOUNG)
-        gc_remset_add((void*)(db + 1));
-    /* Dijkstra 插入屏障：shade 新指针 */
-    if (nb && __atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_MARK)
-        gc_enqueue(nb);
     hao_gc_unlock();
 }
 
@@ -1049,6 +1371,14 @@ static void gc_collect_trampoline(void) { gc_collect_inner(0, 0); }
 
 __attribute__((noinline))
 void gc_collect_inner(char* regs, size_t regs_size) {
+    /*
+     * 保守扫上限必须落在 trampoline 之下：naked 垫片把 Hao GPR 溅到栈上，
+     * 若 hi 取 gc_collect 帧会扫回死指针 → finalizer 假活。
+     */
+    char c_hi_frame;
+    char* prev_c_hi = g_collect_c_hi;
+    g_collect_c_hi = &c_hi_frame;
+
     int64_t self = gc_os_tid();
     int continuing =
         (__atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_MARK);
@@ -1065,6 +1395,7 @@ void gc_collect_inner(char* regs, size_t regs_size) {
 
         __atomic_store_n(&gc_phase, GC_PHASE_MARK, __ATOMIC_RELEASE);
         g_concurrent_mark_cycles += 1;
+        /* mark worker 须在持锁外启动（见 gc_collect / alloc）；此处仅依赖已启动 */
 
         gc_seed_roots_and_remset(regs, regs_size);
         /* 软根 STW：未齐也扫已 park，仍进入并发 mark（根可不全，终止必须齐） */
@@ -1102,6 +1433,7 @@ void gc_collect_inner(char* regs, size_t regs_size) {
         if (!term_ok) {
             /* 禁止无限 MARK 黑囤：作废本轮色，下一轮从根重来 */
             gc_abort_mark_cycle();
+            g_collect_c_hi = prev_c_hi;
             return;
         }
     }
@@ -1174,9 +1506,9 @@ void gc_collect_inner(char* regs, size_t regs_size) {
         /* major 已扫全堆：remset 整表丢弃，避免陈旧 old→young 边拖活 */
         gc_remset_count = 0;
     } else {
+        /* 只保留仍在堆上的屏障边；晋升对象勿盲目挂 remset（无跨代写时会假膨胀） */
         gc_remset_filter_live();
-        for (size_t i = 0; i < promoted_n; ++i)
-            gc_remset_add(promoted_buf[i]);
+        (void)promoted_n;
     }
     free(promoted_buf);
     gc_nursery_alloc = 0;
@@ -1197,6 +1529,7 @@ void gc_collect_inner(char* regs, size_t regs_size) {
     gc_on_successful_collect();
     gc_mark_major = 1;
     g_collect_want_major = 1;
+    g_collect_c_hi = prev_c_hi;
 }
 
 #ifdef _WIN32
@@ -1228,13 +1561,23 @@ static int gc_collecting = 0;
 
 static void gc_run_collect_locked(int major) {
     if (gc_collecting) return; /* 防 STW 放锁窗口内嵌套收集 */
+    char frame;
+    char* prev_c_hi = g_collect_c_hi;
+    /* 取更靠近 stack_top 的 C 边界（栈向下长） */
+    if (!prev_c_hi || &frame > prev_c_hi) g_collect_c_hi = &frame;
     gc_collecting = 1;
     g_collect_want_major = major ? 1 : 0;
     gc_collect_trampoline();
     gc_collecting = 0;
+    g_collect_c_hi = prev_c_hi;
 }
 
 void gc_collect(void) {
+    char collect_frame;
+    char* prev_c_hi = g_collect_c_hi;
+    g_collect_c_hi = &collect_frame;
+    /* 持锁外启动 worker，避免 create_thread→register 与持锁 collect 死锁 */
+    gc_ensure_mark_workers();
     for (;;) {
         hao_gc_safepoint();
         hao_gc_lock();
@@ -1248,6 +1591,7 @@ void gc_collect(void) {
     if (gc_collecting) {
         g_collect_want_major = 1;
         hao_gc_unlock();
+        g_collect_c_hi = prev_c_hi;
         return;
     }
     gc_collecting = 1;
@@ -1256,6 +1600,7 @@ void gc_collect(void) {
     gc_collecting = 0;
     hao_gc_unlock();
     gc_drain_finalizers();
+    g_collect_c_hi = prev_c_hi;
 }
 
 void hao_gc_add_root(void* p) {
@@ -1312,7 +1657,7 @@ void hao_gc_clear_finalizer(void* obj) {
 
 int64_t hao_gc_finalizer_runs(void) { return gc_finalizer_runs; }
 
-/* 写入 gc.GcStats：槽 0 vtable；1..17 与 GC.hao 字段声明序一致 */
+/* 写入 gc.GcStats：槽 0 vtable；1..19 与 GC.hao 字段声明序一致 */
 void hao_gc_stats(void* obj) {
     if (!obj) return;
     int64_t* s = (int64_t*)obj;
@@ -1334,12 +1679,28 @@ void hao_gc_stats(void* obj) {
     s[15] = g_mark_assist_steps;
     s[16] = (int64_t)gc_thread_count;
     s[17] = g_mark_abort_cycles;
+    s[18] = g_mark_worker_steps;
+    s[19] = (int64_t)gc_remset_count; /* v0.55.2 */
     hao_gc_unlock();
+}
+
+int64_t hao_gc_remset_count(void) {
+    gc_lock_coop();
+    int64_t n = (int64_t)gc_remset_count;
+    hao_gc_unlock();
+    return n;
 }
 
 int64_t hao_gc_mark_abort_cycles(void) {
     gc_lock_coop();
     int64_t n = g_mark_abort_cycles;
+    hao_gc_unlock();
+    return n;
+}
+
+int64_t hao_gc_mark_worker_steps(void) {
+    gc_lock_coop();
+    int64_t n = g_mark_worker_steps;
     hao_gc_unlock();
     return n;
 }
@@ -1439,6 +1800,7 @@ static void hao_gc_init_ctor(void) { gc_init(); }
 #endif
 
 void* gc_alloc_ex(size_t n, uint8_t kind, uint64_t meta) {
+    gc_ensure_mark_workers(); /* 持锁外；nursery/阈值触发 collect 也要有 worker */
     for (;;) {
         hao_gc_safepoint();
         gc_register_thread();

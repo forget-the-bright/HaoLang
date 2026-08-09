@@ -1,0 +1,42 @@
+// v0.55：select recvStr / sendStr 绑定与载荷跨循环 safepoint 须在 shadow
+package main;
+
+import gc;
+import channel;
+
+func main() {
+    var ch = channel.make(2);
+    ch.sendStr("a");
+    ch.sendStr("b");
+
+    var got: String? = null;
+    select {
+        case s = ch.recvStr():
+            got = s;
+            var i = 0;
+            while (i < 100) { i += 1; } // safepoint 窗口
+        default:
+            fmt.println(false);
+            return;
+    }
+
+    // 再 select 一轮，sendStr 侧载荷 spill
+    var ch2 = channel.make(1);
+    var payload = "pay-" + Integer.toStr(42);
+    select {
+        case ch2.sendStr(payload):
+            var i = 0;
+            while (i < 100) { i += 1; }
+        default:
+            fmt.println(false);
+            return;
+    }
+    var back = ch2.recvStr();
+
+    gc.GC.collect();
+    fmt.println(got != null); // true
+    fmt.println(got!! == "a"); // true
+    fmt.println(back!! == payload); // true
+    fmt.println(payload.length > 0); // true：send 后载荷仍活
+    fmt.println(gc.GC.stwMarkAllFallbacks() == 0); // true
+}

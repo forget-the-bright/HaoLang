@@ -5,10 +5,10 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.53.3**（入口 safepoint + markAbort；IR↔GC 可达性闭环）
-- 测试基线：`test/suite` **1011** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.53.3
+- 当前版本：**v0.55.3**（while 局部提升 + remset 仅 minor + 精确根完备 + 皮带成对摘根 + 诚实双轨 + 混合屏障 + mark worker；详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)）
+- 测试基线：`test/suite` **1011** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.55.3
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
-- **下一批（默认）**：Netty NIO / 混合屏障或并发 sweep / select——见 [`记忆文档.md`](记忆文档.md) 第 **10** 章
+- **下一批（默认）**：Netty NIO / select——见 [`记忆文档.md`](记忆文档.md) 第 **10** 章
 
 ---
 
@@ -19,7 +19,8 @@
 | [`README.md`](README.md)（本文件） | 用户 | 介绍、快速开始、命令表、限制摘要、构建入口（详文链 docs） |
 | [`docs/hao命令.md`](docs/hao命令.md) | 用户 | **`hao` 命令详解**：build/run/mod/test/fmt…；**包管理**参数/环境变量/生效方式；`hao test` 对标 `go test` |
 | [`docs/hao语法.md`](docs/hao语法.md) | 用户 | **语法与语义说明**（原理、限制）；对标 Go / Java / C# |
-| [`记忆文档.md`](记忆文档.md) | 接手 AI | **工作规则**、设计决策、代码地图、下一批（权威） |
+| [`记忆文档.md`](记忆文档.md) | 接手 AI | **工作规则**、设计决策摘要、代码地图、下一批 |
+| [`docs/IR与GC契约.md`](docs/IR与GC契约.md) | 改 IRGen / GC | **埋点、流程、规则、指标**（GC 权威详文） |
 | [`docs/项目时间线/`](docs/项目时间线/索引.md) | 查历史 | 各版本做了什么（按十位合订，如 `0.20.*`～`0.29.*`） |
 | [`docs/坑债.md`](docs/坑债.md) | 排障 / 清债 | 踩坑表 + 将就债 |
 | [`docs/文档治理.md`](docs/文档治理.md) | 写文档时 | 职责边界、批末写哪里、禁止事项 |
@@ -34,7 +35,7 @@
 
 - **原生 & 零依赖**：编译为原生机器码，静态链接，单文件分发，无运行时依赖。
 - **现代语法**：`val/var`、类型推断、空安全 `T?`、`when`、模板字符串、Lambda/闭包、泛型（单态化零开销）。
-- **自带 GC**：v3 精确堆扫描 + 非移动分代 + 写屏障（栈仍保守）；**多线程下亦可阈值自动回收**（协作 safepoint）。
+- **自带 GC**：混合屏障 + Hao 精确根 + mark worker + 协作软 STW；详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)。
 - **自带系统库**：网络 `net`（含 Http/MVC + **`scan`/`scanWhere`/`registerNewArgs`**）、文件/路径 `os`、并发 `sync`、集合 `collections`（含 LinkedList/TreeMap/ConcurrentHashMap 等）、**`gc`**（手动回收与统计）、异常 `exception`、输出 `fmt`、基础包装 `lang`、`regex`/`json`、反射 **`findTypes*`/`newInstanceArgs`** 等。
 - **可交叉编译**：Windows 上直接产出 Linux（musl 静态链接）可执行文件。
 - **对接 C**：extern C 声明 + 链接外部库/系统库 + 直接写 C 源码。
@@ -110,7 +111,7 @@ hao env / hao version                     环境与版本信息
 - `hao fmt`：去行尾空白、统一 LF、末换行、按 `{}` 深度 4 空格缩进；目录递归；`-w`/`--check`；不断行重排。
 - 入口旁若有 **`haoproject.json`**（工程清单）：`localReferences` + `dependencies`；仓内发布包元数据是 **`haopkg.json`**（二者不同，见 [命令文档 §4.0](docs/hao命令.md#40-haoprojectjson-与-haopkgjson-的区别)）。设计权威：记忆文档 **5.15**。
 - 测试产物一律进 **`target/test/`**（规则 7）。
-- 用户程序默认以 `-O2` 编译（GC 的保守栈扫描依赖合理的栈布局）。
+- 用户程序默认以 `-O2` 编译（Hao 帧以 shadow 精确根为准；`-O2` 主要改善 os_block C 叶/无 shadow 路径的栈布局质量）。
 - 语法/语义长文与 Go·Java·C# 对照：[`docs/hao语法.md`](docs/hao语法.md)。
 
 **修改后重新构建**：
@@ -314,14 +315,14 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 ## 十、版本时间线
 
-各版本专节见 [`docs/项目时间线/索引.md`](docs/项目时间线/索引.md)。当前合订：[`v0.40-0.49.md`](docs/项目时间线/v0.40-0.49.md)。
+各版本专节见 [`docs/项目时间线/索引.md`](docs/项目时间线/索引.md)。当前合订：[`v0.50-0.59.md`](docs/项目时间线/v0.50-0.59.md)。
 
 ---
 
 ## 十一、已知限制
 
 
-- GC 是 **v3 + 并发标记（v0.52）**：色纪元 + Dijkstra 屏障 + 软根 STW + mark assist；未齐 park 不放弃 MARK；清扫仍短停顿。用户程序默认 `-O2`。
+- GC 是 **v0.55.3**：混合屏障 + while 局部提升 + remset **仅服务 minor** + Hao shadow 精确根 + C 皮带成对摘根 + mark worker；**诚实双轨**。详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)。
 - 已有真正 **`Byte`（0～255）**、**`Char`（Unicode 码点 i32）** 与紧凑数组；String = `ptr`→`HaoString{len,cap,data[]}`，`.length`/`s[i]` 按码点。
 - **泛型接口已实现（v0.18.0）**：`Iterable<T>`/`Iterator<T>`；`toArray()` 仍作兜底。
 - **反射**：类型自省 + 字段读写 + 注解（含 value 等参数）+ **方法 invoke**（含 `invokeFloat`）已有；运行时动态定义类/成员需 VM，后续。
@@ -363,8 +364,8 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | **v0.53.3** 入口 safepoint + markAbort；反向 28/28 |
-| 🔥 **下一批（默认开干）** | Netty NIO poll / 混合屏障或并发 sweep / select |
+| ✅ 已完成 | **v0.55.3** while 局部提升 + remset 仅 minor + 精确根完备 + 皮带成对 + 诚实双轨；反向 28/28 |
+| 🔥 **下一批（默认开干）** | Netty NIO poll / select 真多路 wait |
 | 其后 | 自举（Stage 10） |
 
 实现步骤见 [`记忆文档.md` 第 10 章](记忆文档.md)；历史见 [`docs/项目时间线/`](docs/项目时间线/索引.md)。

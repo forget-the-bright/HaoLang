@@ -459,8 +459,8 @@ int32_t hao_reflect_field_set(void* meta, void* obj, HaoString* fname,
         *(int32_t*)base = hao_unbox_i32(box);
     } else if (t && strcmp(t, "String") == 0) {
         HaoString* ns = hao_str_from_cstr(v);
-        /* 先 shade 再 publish（对齐 IR / Dijkstra） */
-        hao_gc_barrier(obj, ns);
+        /* v0.54：dst=字段槽；混合屏障 */
+        hao_gc_barrier(base, ns);
         *(HaoString**)base = ns;
     } else {
         return 1;

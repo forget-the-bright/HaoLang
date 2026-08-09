@@ -1,0 +1,42 @@
+// v0.53.5：finalizer 完整复活——回调把对象写入根槽后不得 free（防 UAF）
+package main;
+
+import gc;
+import object;
+
+extern func hao_gc_test_arm_rescue_finalizer(obj: Object): Unit = "hao_gc_test_arm_rescue_finalizer";
+extern func hao_gc_test_arm_nop_finalizer(obj: Object): Unit = "hao_gc_test_arm_nop_finalizer";
+extern func hao_gc_test_get_rescue(): Object = "hao_gc_test_get_rescue";
+extern func hao_gc_test_clear_rescue(): Unit = "hao_gc_test_clear_rescue";
+
+class ResBox {
+    var tag: Int = 0;
+}
+
+func main() {
+    // --- 复活路径：finalizer 写入 root_slot → 挂回堆 ---
+    var a: ResBox? = new ResBox();
+    a!!.tag = 42;
+    hao_gc_test_arm_rescue_finalizer(a!!);
+    a = null;
+    gc.GC.collect();
+    var rescued: Object? = hao_gc_test_get_rescue();
+    fmt.println(rescued != null); // true：复活后仍可通过根槽拿到
+
+    // 仍被根槽引用，再 collect 也不该 UAF；指针仍非 null
+    gc.GC.collect();
+    fmt.println(hao_gc_test_get_rescue() != null); // true
+
+    hao_gc_test_clear_rescue();
+    rescued = null; // 局部也不再握复活对象
+    gc.GC.collect();
+    fmt.println(hao_gc_test_get_rescue() == null); // true：清根后可回收
+
+    // --- 无复活：nop finalizer 后对象应真正释放（runs 增加）---
+    var runs0 = gc.GC.finalizerRuns();
+    var b: ResBox? = new ResBox();
+    hao_gc_test_arm_nop_finalizer(b!!);
+    b = null;
+    gc.GC.collect();
+    fmt.println(gc.GC.finalizerRuns() > runs0); // true
+}
