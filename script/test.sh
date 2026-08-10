@@ -378,6 +378,6 @@ rm -f "$CACHE"/*.ll 2>/dev/null || true
 rm -f target/*.ll target/*.exe 2>/dev/null || true
 
 echo "========================================"
-echo "套件总行数: $total  (基线 1010) | 退出码: $code"
+echo "套件总行数: $total  (基线 1011) | 退出码: $code"
 [[ $code -eq 0 ]] || exit 1
-# 基线：v0.52.0 软 STW + mark assist（heapBytes/assist）→ 1010
+# 基线：v0.55.x 可达性主路径 / 精确根 / 混合屏障 → 1011

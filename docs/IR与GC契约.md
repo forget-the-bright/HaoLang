@@ -28,7 +28,7 @@ HaoLang **不做** Win `SuspendThread`；**不用** LLVM `gc.statepoint`/stackma
 | 规则 | 含义 |
 |------|------|
 | R1 可达性 | 只从**根集合**沿指针找存活 |
-| R2 根集合（诚实双轨） | **始终**扫 Hao shadow；`gc_roots` / `gc_root_slots`；channel/闭包显式根。另：`os_block`/`arm` 或无 shadow → **GPR + 有界 C 叶（≤4KiB）**；仅 Hao safepoint park（有 shadow、非 os_block）→ shadow-only。收集者扫 `[sp, collect_inner_frame)`（**低于** naked trampoline 溅射区），**不**扫 trampoline GPR 缓冲。**remset 不是根**：仅 **minor** 对 remset 容器 `scan_precise`（摸 old→young）；**major 禁止** seed/enqueue remset；成功 major 后整表丢弃 |
+| R2 根集合（诚实双轨） | **始终**扫 Hao shadow、pins、**refl_i64_pins**（旧 `array_get_ptr`/`objOf` 皮带；v0.55.21+）、GPR spill、有界 C 叶（≤4KiB）。**反射调用对标 Java**：引用返回须 `invokeObj`（托管 `Object?`）；`invoke():Long` **禁止**藏堆指针（v0.55.22）。收集者扫 `[sp, collect_inner_frame)`（**低于** naked trampoline 溅射区），**不**扫 trampoline GPR 缓冲。**remset 不是根**：仅 **minor** 对 remset 容器 `scan_precise`（摸 old→young）；**major 禁止** seed/enqueue remset；成功 major 后整表丢弃。**minor 栈根命中 old**：须 `scan_precise` 入灰 young 子（不回收 old）。**晋升**：minor 后仅对仍握 young 子的晋升对象 `remset_add`（v0.55.20；禁盲目挂 OPAQUE） |
 | R3 三色 | `marked == gc_mark_epoch` = 本轮已标；worklist = 灰；其余 = 白 |
 | R4 黑分配 | `GC_PHASE_MARK` 时新对象直接打上当前 epoch（黑），**不入队**；批量填入指针必须另有 shade |
 | R5 混合屏障 | 堆/静态 GC 槽写：**dst=槽地址**；先 `hao_gc_barrier(dst,new)` 再 store。MARK 期 **shade(old)+shade(new)**；IDLE 仅 remset。shade 前禁止 safepoint；STW 重试后须重 load old |
@@ -111,7 +111,8 @@ flowchart TD
 |----|--------|------------------------------|------|
 | 函数 shadow | `root_push` 水位 | 仅 `root_unwind(wm)`（return / 帧退出） | 块级 `root_unwind` |
 | 块/分支局部 | `noteBlockGcSlot`（**非池** alloca） | `endBlockGcScope`（该 `{ }`/if/when/case 结束） | 把 **spill 池槽** 记入 noteBlock |
-| 循环 spill 池 | `scopeStack` / sticky | **本层** fallthrough/`condL`/`step`/`leave`；内层 clear 不得动外层 base 以下 | 在 `emitUnwind`（穿 finally）**之前** clear/recycle |
+| 循环 spill 池 | `scopeStack` / sticky | **本层** fallthrough/`condL`/`step`/`leave`；内层 clear 不得动外层 base 以下；**sticky（条件根/for.seq）clear 不得抹/pop**（v0.55.19） | 在 `emitUnwind`（穿 finally）**之前** clear/recycle |
+| while 条件 | 先卸上轮条件 sticky → `genExpr` 挂根 → `pin` → `safepoint`（v0.55.20） | 禁止先 safepoint 再求条件；禁止每轮只 pin 不卸（sticky 叠层） |
 | catch 绑定 | try 设置时 acquire（循环内=池槽） | try **正常** end 清绑定；continue 穿 finally 后由 while `condL` / for `step` 清 | continue/break 入口抢先 clear |
 | select spill | `selSpillSlots` | select **end** 清 | 与池 sticky 混淆时 noteBlock |
 
@@ -184,6 +185,33 @@ flowchart TD
 | LLVM stackmap | **架构不用**（shadow） | N/A |
 | Win SuspendThread | **禁止** | N/A |
 
+### 7.1 对照可达性本质（审计口径）
+
+GC 只认**可达性**：从根沿指针摸得到 = 存活；摸不到 = 可回收。下表对照工业级四步，**勿**再写「全保守栈 / 无并发 mark / 三项做不了」。
+
+| 本质能力 | Hao 现状 | 归类 |
+|----------|----------|------|
+| 根集合扫描 | shadow + 显式根/槽 + 静态槽；os_block 时 +GPR/C 叶 | **已做** |
+| 栈 / 寄存器 | Hao：shadow + IR 清槽；Hao-only park **不**扫死局部；寄存器靠 spill 进 shadow | **已做**（非 LLVM 栈图） |
+| 堆标记（三色） | epoch + worklist；并发 drain + mark worker；黑分配 | **已做** |
+| 清除白色 | 终止齐后 sweep；失败 abort（bump epoch，非假死借口） | **已做** |
+| 写屏障 | 混合（Yuasa old + Dijkstra new）；IDLE remset | **已做** |
+| C runtime 帧 | 有界保守叶 + 显式 `add_root` 皮带 | **诚实边界**（混合语言税） |
+| 软 STW abort | 单轮可能不回收，靠下一轮 | **工程债**（非架构天花板） |
+| 并发 drain 上限 | 步数/时间封顶，防密分配屏障活锁拖死 HTTP（v0.55.11） | **已做** |
+| 终止握手 | STW 内只 seed/判空，放行后再并发 drain（v0.55.13；取代 STW 下长 drain） | **已做** |
+| root 协作锁 | `add_root*`/`remove_root` 走 safepoint+STW 让出（v0.55.13） | **已做** |
+| C 形参 pin | 协作 park 前 `g_scan_pins`，防 shadow-only 漏标（v0.55.14） | **已做** |
+| sweep 持 STW | 终止成功后 sweep 完再 leave，禁止边扫边放锁（v0.55.15） | **已做** |
+| concat 新串根 | 分配结果先 `add_root` 再摘输入；`remove_root` 禁 coop（v0.55.16） | **已做** |
+| STW 扫 GPR | park 始终扫 safepoint 溅射的 GPR（v0.55.17） | **已做** |
+| minor 扫 old 子 | 栈根命中 old 时 `scan_precise` 入灰 young（v0.55.18） | **已做** |
+| 晋升挂 remset | minor 晋升后仅 `has_young_ptr` 时 `remset_add`（v0.55.18 恢复；v0.55.20 精简） | **已做** |
+| park watchdog | `park_wait` 超时强行 leave（`parkWatchdogTrips`） | **已做**（保活阀，非理想路径） |
+| 根 STW 未齐 | **abort**（禁止漏根进并发 mark）；`os_block_leave` 先等 release | **已做**（防 UAF 崩进程） |
+| concurrent sweep / span | 未做 | **停顿排期**（非可达性缺口） |
+| stackmap / SuspendThread / 移动式 | 不用 / 禁止 / 不做 | **架构选择** |
+
 ---
 
 ## 8. 改代码检查清单
@@ -197,7 +225,7 @@ flowchart TD
 7. STW 是否仍对 os_block 扫 C 叶（勿再「有 shadow 就 return」）？  
 8. `GcStats` 字段序是否与 `hao_gc_stats` 锁定？  
 9. 循环内合成根是否走 **spill 池**（预分配+acquire）；内层 clear 是否只动本层 `scopeStack`？  
-10. major 路径是否**禁止**把 remset 当根 enqueue？晋升后是否**勿**盲目 `remset_add`（只靠屏障记真实 old→young）？  
+10. major 路径是否**禁止**把 remset 当根 enqueue？晋升后是否**恢复** `remset_add`（无写屏障的 old→young；v0.55.18；major 仍禁 seed）？minor 栈根命中 old 是否 `scan_precise` young 子？  
 11. while/**for-in** 体内 GC `var` 是否**提升**；`new` 是否保留 objSlot 至调用方根/池清？  
 12. try 正常结束是否清 catch 绑定 + `unwindGcRoot`？  
 13. 自由函数/pkg.fn/super/泛型/Func、串接（先左后右）、字段赋值 recv、数组字面量、下标/`??`/`?.`/`==`、模板、haoroutine/lambda/函数值 env 是否 `rootGcOperand`？  
@@ -242,4 +270,4 @@ hao run test/gc_box_nullable_arg_smoke.hao
 | GC | `stdlib/runtime_gc.c`、`runtime_internal.h` |
 | 数组/反射/fs/os | `runtime_array.c`、`runtime_reflect.c`、`runtime_string.c`、`runtime_fs.c`、`runtime_os.c` |
 | API / 面板 | `stdlib/src/gc/GC.hao`、`haolang-example/08-gc-monitor/` |
-| 历史坑 | `docs/坑债.md`（BI～BZ） |
+| 历史坑 | `docs/坑债.md`（BI～CF） |

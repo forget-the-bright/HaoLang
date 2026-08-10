@@ -713,15 +713,24 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
     enterLoopSpillScope();
     auto savedHoist = loopHoisted_;
     hoistVarDeclsInLoopBody(st->statement());
+    /* 保护提升槽：cond clear 不得抹 hoist */
+    pinLoopSpillCheckpoint();
 
     em_.emit("br label %" + condL);
 
-    // ---- 条件（每轮 safepoint，供多线程 STW 握手）----
+    // ---- 条件：先求值（挂 GC 根）再 safepoint；条件 spill sticky 至循环结束 ----
     em_.emitLabel(condL);
     blockTerminated_ = false;
-    /* continue 穿过 finally 会跳过 body 尾 clear；在此补清本层 spill */
+    /*
+     * sticky 层：enter 时 pin 保护 hoist；每轮再 pin 条件根。
+     * 若每轮只 pin 不 unpin，sticky 叠层 → 池只增不减；且旧条件槽假活。
+     * size>1 时先卸掉上一轮条件层，只留 hoist。
+     */
+    while (!loopSpillPools_.empty() &&
+           loopSpillPools_.back().stickyStack.size() > 1)
+        unpinLoopSpillCheckpoint();
+    /* continue 穿过 finally 会跳过 body 尾 clear；在此补清本层非 sticky spill */
     clearLoopSpillSlots();
-    em_.emit("call void @hao_gc_safepoint()");
     Value cond = genExpr(st->expr());
     if (!cond.valid()) {
         clearHoistedGcSince(savedHoist);
@@ -742,6 +751,9 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
         leaveLoopSpillScope();
         return;
     }
+    /* 条件 rootGcOperand spill 钉住（如 while (i < s.length) 的 s） */
+    pinLoopSpillCheckpoint();
+    em_.emit("call void @hao_gc_safepoint()");
     em_.emit("br i1 " + toI1(cond) + ", label %" + bodyL + ", label %" + endL);
 
     // ---- 循环体 ----
@@ -933,16 +945,16 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
 
     em_.emit("br label %" + condL);
 
-    // ---- 条件：idx < len（safepoint）----
+    // ---- 条件：idx < len；seq 已在 sticky，safepoint 在判定之后 ----
     em_.emitLabel(condL);
     blockTerminated_ = false;
-    em_.emit("call void @hao_gc_safepoint()");
     std::string iv = em_.nextTemp();
     em_.emit(iv + " = load i64, ptr " + idxAddr);
     std::string lv = em_.nextTemp();
     em_.emit(lv + " = load i64, ptr " + lenAddr);
     std::string cmp = em_.nextTemp();
     em_.emit(cmp + " = icmp slt i64 " + iv + ", " + lv);
+    em_.emit("call void @hao_gc_safepoint()");
     em_.emit("br i1 " + cmp + ", label %" + bodyL + ", label %" + endL);
 
     // ---- 循环体 ----
@@ -1082,15 +1094,15 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
     std::string endL  = em_.nextLabel("for.end");
     em_.emit("br label %" + condL);
 
-    // ---- 条件：iter.hasNext()（safepoint）----
+    // ---- 条件：先 load iter（sticky 根）再 hasNext，然后 safepoint ----
     em_.emitLabel(condL);
     blockTerminated_ = false;
-    em_.emit("call void @hao_gc_safepoint()");
     std::string itv = em_.nextTemp();
     em_.emit(itv + " = load ptr, ptr " + iterAddr);
     std::string hn = dispatch(itv, itfI, hmi, "i8");
     std::string cmp = em_.nextTemp();
     em_.emit(cmp + " = icmp ne i8 " + hn + ", 0");
+    em_.emit("call void @hao_gc_safepoint()");
     em_.emit("br i1 " + cmp + ", label %" + bodyL + ", label %" + endL);
 
     // ---- 循环体：x = iter.next() ----

@@ -23,6 +23,16 @@ static void hao_gc_lock(void);
 static void hao_gc_unlock(void);
 static void gc_scan_range(char* lo, char* hi);
 static void gc_mark_ptr(uintptr_t v);
+static int64_t gc_mono_ms(void);
+static void gc_stw_leave(void);
+
+/* 并发 drain：密分配+屏障可持续入灰；不设上限会占着 gc_collecting 拖死 HTTP */
+#define GC_CONCURRENT_DRAIN_MAX  (1u << 16)
+#define GC_CONCURRENT_DRAIN_MS   48
+/* 远超 STW 预算仍不 release → 收集者楔死；强行放行保进程可服务 */
+#define GC_PARK_WATCHDOG_MS      2000
+/* 时间源异常时 mono 差可能永不达标；自旋上限作第二道 watchdog */
+#define GC_PARK_WATCHDOG_SPINS   4000000u
 
 #define GC_ALIGN 16
 #define GC_GEN_YOUNG 0
@@ -89,6 +99,7 @@ static int64_t      g_concurrent_mark_cycles = 0;
 static int64_t      g_mark_assist_steps = 0;
 static int64_t      g_mark_abort_cycles = 0; /* 终止失败 abort MARK 次数（v0.53.3） */
 static int64_t      g_mark_worker_steps = 0; /* mark worker 推进灰块数（v0.54） */
+static int64_t      g_park_watchdog_trips = 0; /* park_wait 超时强行放行（防 Web 永久楔死） */
 static size_t       gc_heap_bytes = 0; /* 用户区合计，alloc/sweep 维护 */
 /* v0.52：marked==gc_mark_epoch 为本轮已标；setup 只 ++epoch，勿扫百万清零 */
 static uint8_t      gc_mark_epoch = 1;
@@ -123,6 +134,14 @@ static __declspec(thread) size_t  g_shadow_cap = 0;
 static __declspec(thread) char* g_collect_c_hi = NULL;
 /* os_block/arm 期间：STW 须加扫 GPR+C 叶（C 帧活对象） */
 static __declspec(thread) int g_in_os_block = 0;
+/* C API 形参钉住：协作 safepoint 在 shadow-only 下会漏标仅活在 C 帧的指针 */
+#define GC_SCAN_PINS 4
+static __declspec(thread) void* g_scan_pins[GC_SCAN_PINS];
+static __declspec(thread) int   g_scan_pin_n = 0;
+/* i64 藏指针（invoke 返回值等）跨 Hao 分配窗口 */
+#define GC_REFL_I64_PINS 64
+static __declspec(thread) void* g_refl_i64_pins[GC_REFL_I64_PINS];
+static __declspec(thread) int   g_refl_i64_pin_n = 0;
 #else
 static __thread char* g_stk_top = NULL;
 static __thread int   g_stk_reg  = 0;
@@ -134,7 +153,19 @@ static __thread size_t  g_shadow_n = 0;
 static __thread size_t  g_shadow_cap = 0;
 static __thread char* g_collect_c_hi = NULL;
 static __thread int g_in_os_block = 0;
+#define GC_SCAN_PINS 4
+static __thread void* g_scan_pins[GC_SCAN_PINS];
+static __thread int   g_scan_pin_n = 0;
+#define GC_REFL_I64_PINS 64
+static __thread void* g_refl_i64_pins[GC_REFL_I64_PINS];
+static __thread int   g_refl_i64_pin_n = 0;
 #endif
+
+static void gc_pin_clear(void) { g_scan_pin_n = 0; }
+static void gc_pin_add(void* p) {
+    if (!p || g_scan_pin_n >= GC_SCAN_PINS) return;
+    g_scan_pins[g_scan_pin_n++] = p;
+}
 
 #define GC_MAX_THREADS 256
 #define GC_GPR_SPILL_BYTES 128
@@ -153,6 +184,10 @@ typedef struct {
     void**** shadow_slot; /* &g_shadow */
     size_t*  shadow_n;    /* &g_shadow_n */
     int*     in_os_block_flag; /* &g_in_os_block */
+    void**   scan_pins;        /* g_scan_pins */
+    int*     scan_pin_n;       /* &g_scan_pin_n */
+    void**   refl_i64_pins;    /* g_refl_i64_pins */
+    int*     refl_i64_pin_n;   /* &g_refl_i64_pin_n */
 } GcThread;
 static GcThread gc_threads[GC_MAX_THREADS];
 static int   gc_thread_count = 0;
@@ -221,8 +256,26 @@ static void gc_park_wait(void) {
     char local;
     g_park_sp = &local;
     __atomic_store_n(&g_parked, 1, __ATOMIC_RELEASE);
-    while (!__atomic_load_n(&gc_stw_release, __ATOMIC_ACQUIRE))
-        gc_yield_brief();
+    {
+        int64_t t0 = gc_mono_ms();
+        uint32_t spins = 0;
+        while (!__atomic_load_n(&gc_stw_release, __ATOMIC_ACQUIRE)) {
+            spins++;
+            if (spins >= GC_PARK_WATCHDOG_SPINS ||
+                gc_mono_ms() - t0 >= GC_PARK_WATCHDOG_MS) {
+                /*
+                 * 收集者应在数十 ms 内 leave。超时仍 request=1 则 Web/分配永久楔死。
+                 * 强行 leave：可能与正在扫栈的收集者竞态，但优于进程假活。
+                 * 下一轮 abort/setup 会 bump epoch 收口。
+                 */
+                g_park_watchdog_trips += 1;
+                g_mark_abort_cycles += 1;
+                gc_stw_leave();
+                break;
+            }
+            gc_yield_brief();
+        }
+    }
     __atomic_store_n(&g_parked, 0, __ATOMIC_RELEASE);
     g_park_sp = NULL;
 }
@@ -303,6 +356,10 @@ void gc_register_thread(void) {
     gc_threads[gc_thread_count].shadow_slot = &g_shadow;
     gc_threads[gc_thread_count].shadow_n = &g_shadow_n;
     gc_threads[gc_thread_count].in_os_block_flag = &g_in_os_block;
+    gc_threads[gc_thread_count].scan_pins = g_scan_pins;
+    gc_threads[gc_thread_count].scan_pin_n = &g_scan_pin_n;
+    gc_threads[gc_thread_count].refl_i64_pins = g_refl_i64_pins;
+    gc_threads[gc_thread_count].refl_i64_pin_n = &g_refl_i64_pin_n;
     gc_thread_count++;
     hao_gc_unlock();
 }
@@ -345,10 +402,28 @@ void hao_gc_os_block_enter(void) {
 
 void hao_gc_os_block_leave(void) {
     if (!g_stk_reg) return;
+    /*
+     * 必须先等 STW 放行再撤 parked：若先 parked=0 再 safepoint，
+     * 收集者可能已按「已 park」扫完并进入并发 mark，本线程开跑造成漏根 → 回收活对象 → 进程崩溃。
+     */
+    if (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
+        int64_t t0 = gc_mono_ms();
+        uint32_t spins = 0;
+        while (!__atomic_load_n(&gc_stw_release, __ATOMIC_ACQUIRE)) {
+            spins++;
+            if (spins >= GC_PARK_WATCHDOG_SPINS ||
+                gc_mono_ms() - t0 >= GC_PARK_WATCHDOG_MS) {
+                g_park_watchdog_trips += 1;
+                g_mark_abort_cycles += 1;
+                gc_stw_leave();
+                break;
+            }
+            gc_yield_brief();
+        }
+    }
     __atomic_store_n(&g_parked, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&g_in_os_block, 0, __ATOMIC_RELEASE);
     g_park_sp = NULL;
-    hao_gc_safepoint();
 }
 
 /*
@@ -367,6 +442,22 @@ void hao_gc_os_block_arm(void) {
 
 void hao_gc_os_block_disarm(void) {
     if (!g_stk_reg) return;
+    /* 同 leave：持业务锁的 wait 返回后先等 STW，再撤 parked */
+    if (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
+        int64_t t0 = gc_mono_ms();
+        uint32_t spins = 0;
+        while (!__atomic_load_n(&gc_stw_release, __ATOMIC_ACQUIRE)) {
+            spins++;
+            if (spins >= GC_PARK_WATCHDOG_SPINS ||
+                gc_mono_ms() - t0 >= GC_PARK_WATCHDOG_MS) {
+                g_park_watchdog_trips += 1;
+                g_mark_abort_cycles += 1;
+                gc_stw_leave();
+                break;
+            }
+            gc_yield_brief();
+        }
+    }
     __atomic_store_n(&g_parked, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&g_in_os_block, 0, __ATOMIC_RELEASE);
     g_park_sp = NULL;
@@ -394,18 +485,24 @@ static void gc_scan_conservative_leaf(char* sp, char* stack_top) {
 
 static void gc_scan_parked_thread(const GcThread* t) {
     /*
-     * 诚实双轨：
-     * 1) 始终扫 shadow（Hao 精确根）
-     * 2) os_block/arm 或无 shadow → 加扫 GPR + 有界 C 叶（C 帧活对象）
-     * 3) 仅 Hao safepoint park（有 shadow、非 os_block）→ shadow-only
-     *    （避免扫回 Hao 死局部导致 finalizer 假活）
+     * 诚实双轨（v0.55.18）：
+     * 1) 始终扫 shadow / pins / gpr_spill
+     * 2) 始终扫有界 C 叶：LLVM 可能把 GC 指针溅到非 shadow 栈槽；
+     *    旧「有 shadow 则跳过叶」在分代修后仍作皮带（假活可接受，UAF 不可）。
      */
     gc_scan_shadow(t);
-    int has_shadow = t->shadow_n && *t->shadow_n > 0;
-    int in_os = t->in_os_block_flag &&
-                __atomic_load_n(t->in_os_block_flag, __ATOMIC_ACQUIRE);
-    int need_c_leaf = !has_shadow || in_os;
-    if (!need_c_leaf) return;
+    if (t->scan_pins && t->scan_pin_n) {
+        int n = *t->scan_pin_n;
+        if (n > GC_SCAN_PINS) n = GC_SCAN_PINS;
+        for (int i = 0; i < n; ++i)
+            if (t->scan_pins[i]) gc_mark_ptr((uintptr_t)t->scan_pins[i]);
+    }
+    if (t->refl_i64_pins && t->refl_i64_pin_n) {
+        int n = *t->refl_i64_pin_n;
+        if (n > GC_REFL_I64_PINS) n = GC_REFL_I64_PINS;
+        for (int i = 0; i < n; ++i)
+            if (t->refl_i64_pins[i]) gc_mark_ptr((uintptr_t)t->refl_i64_pins[i]);
+    }
     if (t->gpr_spill)
         gc_scan_range(t->gpr_spill, t->gpr_spill + GC_GPR_SPILL_BYTES);
     char* sp = (t->park_sp_slot && *t->park_sp_slot) ? *t->park_sp_slot : NULL;
@@ -443,9 +540,9 @@ void hao_gc_root_unwind(size_t wm) {
  */
 #define GC_STW_ROUNDS          3
 #define GC_STW_ROUND_MS        8     /* 每轮最多等待（对齐低延迟） */
-#define GC_STW_TOTAL_MS        32    /* 根 STW 上限 */
-#define GC_STW_TERM_TOTAL_MS   24    /* 终止 STW 单次上限 */
-#define GC_STW_TERM_RETRIES    2     /* 终止重试次数 */
+#define GC_STW_TOTAL_MS        64    /* 根 STW 上限（多线程 HTTP 略放宽） */
+#define GC_STW_TERM_TOTAL_MS   48    /* 终止 STW 单次上限 */
+#define GC_STW_TERM_RETRIES    5     /* 终止握手重试（STW 内不再长 drain） */
 #define GC_TERM_COOLDOWN_MS    500   /* alloc 路径触发终止的最小间隔 */
 #define GC_NURSERY_GATE_MAX    ((size_t)4 << 20) /* pacing 放大 nursery 上限 4MiB */
 #define GC_THRESHOLD_PACE_MAX  ((size_t)64 << 20)
@@ -761,6 +858,14 @@ static GCBlock* gc_find_block(void* p) {
     return NULL;
 }
 
+/* 用户区起点精确匹配（拒绝 String 载荷内指针 / ASCII 脏值误判） */
+static GCBlock* gc_find_block_exact(void* p) {
+    GCBlock* b = gc_find_block(p);
+    if (!b) return NULL;
+    if ((void*)(b + 1) != p) return NULL;
+    return b;
+}
+
 /* 指标/查询入口：先 safepoint，避免 /api/gc 忙读时永不 park → STW incomplete */
 static void gc_lock_coop(void) {
     for (;;) {
@@ -781,6 +886,59 @@ int8_t hao_gc_is_heap_ptr(void* p) {
     ok = gc_find_block(p) ? 1 : 0;
     hao_gc_unlock();
     return ok;
+}
+
+int8_t hao_gc_expect_heap_ptr(void* p) {
+    int8_t ok;
+    if (!p) return 0;
+    hao_gc_lock();
+    ok = gc_find_block_exact(p) ? 1 : 0;
+    hao_gc_unlock();
+    return ok;
+}
+
+int8_t hao_gc_expect_heap_object(void* p) {
+    int8_t ok = 0;
+    GCBlock* b;
+    if (!p) return 0;
+    hao_gc_lock();
+    b = gc_find_block_exact(p);
+    if (b && (b->scan_kind == GC_KIND_SLOTS || b->scan_kind == GC_KIND_FULL))
+        ok = 1;
+    hao_gc_unlock();
+    return ok;
+}
+
+void hao_gc_refl_i64_pin(void* p) {
+    GCBlock* b;
+    if (!p) return;
+    if (!g_stk_reg) gc_register_thread();
+    hao_gc_lock();
+    b = gc_find_block_exact(p);
+    if (!b) {
+        hao_gc_unlock();
+        return;
+    }
+    /* 满则退回全局根（极少；避免静默丢钉） */
+    if (g_refl_i64_pin_n >= GC_REFL_I64_PINS) {
+        hao_gc_unlock();
+        hao_gc_add_root(p);
+        return;
+    }
+    g_refl_i64_pins[g_refl_i64_pin_n++] = p;
+    hao_gc_unlock();
+}
+
+void hao_gc_refl_i64_unpin(void* p) {
+    int i;
+    if (!p || g_refl_i64_pin_n <= 0) return;
+    for (i = g_refl_i64_pin_n - 1; i >= 0; --i) {
+        if (g_refl_i64_pins[i] != p) continue;
+        g_refl_i64_pins[i] = g_refl_i64_pins[--g_refl_i64_pin_n];
+        return;
+    }
+    /* 溢出路径曾走 add_root */
+    hao_gc_remove_root(p);
 }
 
 int64_t hao_gc_stw_mark_all_fallbacks(void) {
@@ -834,7 +992,16 @@ static int gc_block_is_marked(const GCBlock* b) {
 
 static void gc_enqueue(GCBlock* b) {
     if (!b || gc_block_is_marked(b)) return;
-    if (!gc_mark_major && b->gen != GC_GEN_YOUNG) return;
+    /*
+     * minor：old 本轮不回收，但栈根/字段可能指向 old，其 young 子必须入灰。
+     * 旧逻辑直接 return → 漏扫 → 下一轮 minor 回收仍被 old 引用的 String → str_len UAF。
+     * 用 marked 防 old↔old 环重复扫；不入 worklist。
+     */
+    if (!gc_mark_major && b->gen != GC_GEN_YOUNG) {
+        b->marked = gc_mark_epoch;
+        gc_scan_block_precise(b);
+        return;
+    }
     b->marked = gc_mark_epoch;
     if (gc_wl_count >= gc_wl_cap) {
         gc_wl_cap = gc_wl_cap ? gc_wl_cap * 2 : GC_WORKLIST_CAP;
@@ -880,13 +1047,19 @@ static void gc_worklist_reset(void) {
     gc_wl_cap = 0;
 }
 
-/* 调用方持 GC 锁。concurrent=1 时周期性放锁，让 mutator 分配/屏障推进。 */
+/* 调用方持 GC 锁。并发 drain：步数/时间上限 + 周期性放锁（防屏障入灰活锁）。
+ * 终止路径请用握手（STW 只 seed/判空，放行后再 drain），勿在 STW 下长抽灰。 */
 static void gc_drain_worklist(int concurrent) {
+    int64_t t0 = concurrent ? gc_mono_ms() : 0;
+    size_t steps = 0;
     while (gc_wl_head < gc_wl_count) {
         GCBlock* b = gc_worklist[gc_wl_head++];
         gc_scan_block_precise(b);
+        if (!concurrent) continue;
+        steps++;
+        if (steps >= GC_CONCURRENT_DRAIN_MAX) break;
         /* 每 16 步放锁，给 GC 私有 worker 抢灰（仅 yield 时同核易饿死） */
-        if (concurrent && (gc_wl_head & 15u) == 0) {
+        if ((gc_wl_head & 15u) == 0) {
             hao_gc_unlock();
 #ifdef _WIN32
             hao_win_sleep_ms(0);
@@ -894,10 +1067,13 @@ static void gc_drain_worklist(int concurrent) {
             gc_yield_brief();
 #endif
             hao_gc_lock();
+            if (gc_mono_ms() - t0 >= GC_CONCURRENT_DRAIN_MS) break;
         }
     }
-    gc_wl_count = 0;
-    gc_wl_head = 0;
+    if (gc_wl_head >= gc_wl_count) {
+        gc_wl_count = 0;
+        gc_wl_head = 0;
+    }
 }
 
 static void gc_seed_roots_and_remset(char* regs, size_t regs_size) {
@@ -912,6 +1088,10 @@ static void gc_seed_roots_and_remset(char* regs, size_t regs_size) {
         void** slot = g_shadow ? g_shadow[i] : NULL;
         if (slot && *slot) gc_mark_ptr((uintptr_t)*slot);
     }
+    for (int i = 0; i < g_scan_pin_n && i < GC_SCAN_PINS; ++i)
+        if (g_scan_pins[i]) gc_mark_ptr((uintptr_t)g_scan_pins[i]);
+    for (int i = 0; i < g_refl_i64_pin_n && i < GC_REFL_I64_PINS; ++i)
+        if (g_refl_i64_pins[i]) gc_mark_ptr((uintptr_t)g_refl_i64_pins[i]);
     /*
      * remset 仅服务 minor：扫 old 容器上的 young 子指针。
      * major 禁止 seed/enqueue remset——否则把不可达 old 当真根，子图永假活
@@ -1231,6 +1411,54 @@ static void gc_scan_block_precise(GCBlock* b) {
     }
 }
 
+/* 调用方持 GC 锁：块是否仍握 young 子指针（晋升挂 remset 用） */
+static int gc_block_has_young_ptr(GCBlock* b) {
+    char* u;
+    if (!b || b->scan_kind == GC_KIND_OPAQUE) return 0;
+    u = (char*)(b + 1);
+    switch (b->scan_kind) {
+    case GC_KIND_SLOTS: {
+        uint32_t bm = b->scan_meta;
+        size_t nslots = b->user_size / sizeof(uintptr_t);
+        if (nslots > 32) nslots = 32;
+        for (size_t i = 0; i < nslots; ++i) {
+            GCBlock* c;
+            if (!(bm & (1u << i))) continue;
+            c = gc_find_block((void*)((uintptr_t*)u)[i]);
+            if (c && c->gen == GC_GEN_YOUNG) return 1;
+        }
+        return 0;
+    }
+    case GC_KIND_ARRAY: {
+        char* elems;
+        int64_t len, esz;
+        size_t max;
+        if ((b->scan_meta & 1u) == 0) return 0;
+        if (b->user_size < (size_t)HAO_ARR_HEADER) return 0;
+        elems = u + HAO_ARR_HEADER;
+        len = *(int64_t*)(u + HAO_ARR_LEN_OFF_BASE);
+        esz = *(int64_t*)(u + HAO_ARR_ESZ_OFF_BASE);
+        if (esz != 8 || len <= 0) return 0;
+        max = (b->user_size - (size_t)HAO_ARR_HEADER) / 8;
+        if ((size_t)len > max) len = (int64_t)max;
+        for (int64_t i = 0; i < len; ++i) {
+            GCBlock* c = gc_find_block((void*)((uintptr_t*)elems)[i]);
+            if (c && c->gen == GC_GEN_YOUNG) return 1;
+        }
+        return 0;
+    }
+    case GC_KIND_FULL:
+    default: {
+        size_t n = b->user_size / sizeof(uintptr_t);
+        for (size_t i = 0; i < n; ++i) {
+            GCBlock* c = gc_find_block((void*)((uintptr_t*)u)[i]);
+            if (c && c->gen == GC_GEN_YOUNG) return 1;
+        }
+        return 0;
+    }
+    }
+}
+
 static void gc_remset_add(void* user) {
     if (!user) return;
     for (size_t i = 0; i < gc_remset_count; ++i)
@@ -1243,11 +1471,12 @@ static void gc_remset_add(void* user) {
     gc_remset[gc_remset_count++] = user;
 }
 
-/* 丢掉已回收对象；跨 minor 必须保留仍存活的 old→young 边。 */
+/* 丢掉已回收/已无 young 子的边；跨 minor 只保留真 old→young。 */
 static void gc_remset_filter_live(void) {
     size_t w = 0;
     for (size_t i = 0; i < gc_remset_count; ++i) {
-        if (gc_find_block(gc_remset[i]))
+        GCBlock* b = gc_find_block_exact(gc_remset[i]);
+        if (b && b->gen == GC_GEN_OLD && gc_block_has_young_ptr(b))
             gc_remset[w++] = gc_remset[i];
     }
     gc_remset_count = w;
@@ -1258,14 +1487,19 @@ void hao_gc_barrier(void* dst, void* new_val) {
     /*
      * v0.54 混合屏障：dst 须为**槽地址**（先 barrier 再 store）。
      * MARK 期 Yuasa shade(old) + Dijkstra shade(new)；IDLE 仅 remset。
-     * shade 完成前禁止 safepoint；STW 重试后须重新 load old。
+     * STW 重试放锁前须 pin old/new，否则 shadow-only 漏标 → 字符串等 UAF。
      */
     hao_gc_lock();
     for (;;) {
         while (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
+            void* old_pin = *(void**)dst;
+            gc_pin_clear();
+            gc_pin_add(new_val);
+            gc_pin_add(old_pin);
             hao_gc_unlock();
             hao_gc_safepoint();
             hao_gc_lock();
+            gc_pin_clear();
         }
         void* old_val = *(void**)dst;
         GCBlock* db = gc_find_block(dst);
@@ -1292,9 +1526,12 @@ void hao_gc_shade(void* p) {
     if (__atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) != GC_PHASE_MARK) return;
     hao_gc_lock();
     while (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
+        gc_pin_clear();
+        gc_pin_add(p);
         hao_gc_unlock();
         hao_gc_safepoint();
         hao_gc_lock();
+        gc_pin_clear();
     }
     if (__atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_MARK) {
         GCBlock* b = gc_find_block(p);
@@ -1398,9 +1635,19 @@ void gc_collect_inner(char* regs, size_t regs_size) {
         /* mark worker 须在持锁外启动（见 gc_collect / alloc）；此处仅依赖已启动 */
 
         gc_seed_roots_and_remset(regs, regs_size);
-        /* 软根 STW：未齐也扫已 park，仍进入并发 mark（根可不全，终止必须齐） */
-        (void)gc_stw_enter_and_scan_soft(GC_STW_TOTAL_MS);
-        gc_scanned_tid_add(self);
+        /*
+         * 软根 STW：未齐则 abort，禁止带着漏根进并发 mark。
+         * 旧行为「未齐仍 mark」在 accept/recv 的 os_block 竞态下会漏标 → 回收活对象 → 进程直接退出。
+         */
+        {
+            int root_ok = gc_stw_enter_and_scan_soft(GC_STW_TOTAL_MS);
+            gc_scanned_tid_add(self);
+            if (!root_ok) {
+                gc_abort_mark_cycle();
+                g_collect_c_hi = prev_c_hi;
+                return;
+            }
+        }
         gc_stw_leave();
         gc_drain_worklist(1);
     } else {
@@ -1410,7 +1657,7 @@ void gc_collect_inner(char* regs, size_t regs_size) {
         gc_drain_worklist(1);
     }
 
-    /* ---- Mark Termination（v0.53）：每轮重扫；未齐不得 term；失败 abort ---- */
+    /* ---- Mark Termination：握手 seed/判空；未空则放行后并发 drain 再试 ---- */
     {
         int term_ok = 0;
         for (int attempt = 0; attempt < GC_STW_TERM_RETRIES; ++attempt) {
@@ -1418,7 +1665,9 @@ void gc_collect_inner(char* regs, size_t regs_size) {
             int soft_ok = gc_stw_enter_and_scan_soft(GC_STW_TERM_TOTAL_MS);
             gc_scanned_tid_add(self);
             gc_seed_roots_and_remset(regs, regs_size);
-            gc_drain_worklist(0);
+            /* 二次 seed：屏障窗口漏灰时第一轮可能假空 */
+            if (soft_ok && gc_wl_head >= gc_wl_count)
+                gc_seed_roots_and_remset(regs, regs_size);
             if (soft_ok && gc_all_threads_scanned(self) &&
                 gc_wl_head >= gc_wl_count) {
                 term_ok = 1;
@@ -1440,16 +1689,17 @@ void gc_collect_inner(char* regs, size_t regs_size) {
     major = gc_cycle_is_major;
 
     __atomic_store_n(&gc_phase, GC_PHASE_IDLE, __ATOMIC_RELEASE);
-    /* 标记已终止：先放行 STW，再扫；避免数十万块 free 拖成秒级「假 STW」 */
-    gc_stw_leave();
-
+    /*
+     * v0.55.15：sweep 期间保持 STW（不中途放锁/不先 leave）。
+     * 旧「先 leave 再边扫边放锁」在漏标时与 mutator 并发 free → str_len 等处 0xC0000005。
+     * 堆块数通常有限，整段 sweep 持锁停顿可接受。
+     */
     void** promoted_buf = NULL;
     size_t promoted_n = 0, promoted_cap = 0;
 
     gc_in_collect = 1;
     GCBlock** prev = &gc_heap;
     size_t live = 0;
-    size_t sweep_steps = 0;
     while (*prev) {
         GCBlock* b = *prev;
         int marked = gc_block_is_marked(b);
@@ -1490,15 +1740,9 @@ void gc_collect_inner(char* regs, size_t regs_size) {
             else
                 free(b);
         }
-        /* 周期性放锁：/api/gc 与分配可穿插，不再被整链 sweep 堵死 */
-        if ((++sweep_steps & 127u) == 0) {
-            hao_gc_unlock();
-            gc_yield_brief();
-            hao_gc_lock();
-            /* 放锁窗口内堆链可能被并发 alloc 插到头部；从当前 prev 继续安全 */
-        }
     }
     gc_in_collect = 0;
+    gc_stw_leave();
     gc_worklist_reset();
     gc_scanned_tid_clear();
 
@@ -1506,9 +1750,17 @@ void gc_collect_inner(char* regs, size_t regs_size) {
         /* major 已扫全堆：remset 整表丢弃，避免陈旧 old→young 边拖活 */
         gc_remset_count = 0;
     } else {
-        /* 只保留仍在堆上的屏障边；晋升对象勿盲目挂 remset（无跨代写时会假膨胀） */
+        /* 只保留仍在堆上的屏障边 */
         gc_remset_filter_live();
-        (void)promoted_n;
+        /*
+         * 晋升瞬间可能产生 old→young；仅当块内仍握 young 子时挂 remset。
+         * 盲目挂全部晋升（含 OPAQUE String）会把 remset 撑到数千（monitor remset≈8007）。
+         */
+        for (size_t i = 0; i < promoted_n; ++i) {
+            GCBlock* pb = gc_find_block(promoted_buf[i]);
+            if (pb && gc_block_has_young_ptr(pb))
+                gc_remset_add(promoted_buf[i]);
+        }
     }
     free(promoted_buf);
     gc_nursery_alloc = 0;
@@ -1604,47 +1856,83 @@ void gc_collect(void) {
 }
 
 void hao_gc_add_root(void* p) {
-    hao_gc_lock();
-    if (!p) { hao_gc_unlock(); return; }
+    /*
+     * 协作锁 + pin：STW 时须 park（免堵锁），但 shadow-only 扫不到 C 形参 p，
+     * 不 pin 会在入 gc_roots 前被 sweep → UAF（v0.55.13 压测 0xC0000005）。
+     */
+    if (!p) return;
+    gc_pin_clear();
+    gc_pin_add(p);
+    gc_lock_coop();
     if (gc_root_count >= gc_root_cap) {
         gc_root_cap = gc_root_cap ? gc_root_cap * 2 : 16;
         gc_roots = (void**)realloc(gc_roots, gc_root_cap * sizeof(void*));
-        if (!gc_roots) { fputs("panic: GC 根数组分配失败\n", stderr); exit(1); }
+        if (!gc_roots) {
+            gc_pin_clear();
+            fputs("panic: GC 根数组分配失败\n", stderr);
+            exit(1);
+        }
     }
     gc_roots[gc_root_count++] = p;
+    gc_pin_clear();
     hao_gc_unlock();
 }
 
 void hao_gc_add_root_if_heap(void* p) {
     /* 与 add_root 同锁路径，但先 gc_find_block；禁止走 is_heap_ptr（其内 safepoint） */
     if (!p) return;
-    hao_gc_lock();
-    if (!gc_find_block(p)) { hao_gc_unlock(); return; }
+    gc_pin_clear();
+    gc_pin_add(p);
+    gc_lock_coop();
+    if (!gc_find_block(p)) {
+        gc_pin_clear();
+        hao_gc_unlock();
+        return;
+    }
     if (gc_root_count >= gc_root_cap) {
         gc_root_cap = gc_root_cap ? gc_root_cap * 2 : 16;
         gc_roots = (void**)realloc(gc_roots, gc_root_cap * sizeof(void*));
-        if (!gc_roots) { fputs("panic: GC 根数组分配失败\n", stderr); exit(1); }
+        if (!gc_roots) {
+            gc_pin_clear();
+            fputs("panic: GC 根数组分配失败\n", stderr);
+            exit(1);
+        }
     }
     gc_roots[gc_root_count++] = p;
+    gc_pin_clear();
     hao_gc_unlock();
 }
 
 void hao_gc_add_root_slot(void* slot) {
-    hao_gc_lock();
-    if (!slot) { hao_gc_unlock(); return; }
+    /* 注册前 pin 槽内指针，避免协作 park 窗口漏标 */
+    void* pinned = (slot && *(void**)slot) ? *(void**)slot : NULL;
+    gc_pin_clear();
+    gc_pin_add(pinned);
+    gc_lock_coop();
+    if (!slot) {
+        gc_pin_clear();
+        hao_gc_unlock();
+        return;
+    }
     for (size_t i = 0; i < gc_root_slot_count; ++i) {
-        if (gc_root_slots[i] == slot) { hao_gc_unlock(); return; }
+        if (gc_root_slots[i] == slot) {
+            gc_pin_clear();
+            hao_gc_unlock();
+            return;
+        }
     }
     if (gc_root_slot_count >= gc_root_slot_cap) {
         gc_root_slot_cap = gc_root_slot_cap ? gc_root_slot_cap * 2 : 16;
         gc_root_slots = (void**)realloc(gc_root_slots,
                                         gc_root_slot_cap * sizeof(void*));
         if (!gc_root_slots) {
+            gc_pin_clear();
             fputs("panic: GC 根槽数组分配失败\n", stderr);
             exit(1);
         }
     }
     gc_root_slots[gc_root_slot_count++] = slot;
+    gc_pin_clear();
     hao_gc_unlock();
 }
 
@@ -1695,6 +1983,7 @@ void hao_gc_stats(void* obj) {
     s[17] = g_mark_abort_cycles;
     s[18] = g_mark_worker_steps;
     s[19] = (int64_t)gc_remset_count; /* v0.55.2 */
+    s[20] = g_park_watchdog_trips;    /* v0.55.11：park 超时强行放行 */
     hao_gc_unlock();
 }
 
@@ -1785,6 +2074,11 @@ int64_t hao_gc_registered_threads(void) {
 }
 
 void hao_gc_remove_root(void* p) {
+    /*
+     * 禁止协作 safepoint：concat 等在「新串仅活在 C 返回值」窗口摘旧根时，
+     * coop → shadow-only 扫不到新串 → sweep → 随后 hao_str_len UAF（v0.55.16）。
+     * 摘根临界区极短，不 park 不会单独楔死 STW。
+     */
     hao_gc_lock();
     for (size_t i = 0; i < gc_root_count; ++i) {
         if (gc_roots[i] == p) {
@@ -1796,6 +2090,10 @@ void hao_gc_remove_root(void* p) {
 }
 
 void gc_init(void) {
+#ifdef _WIN32
+    /* 尽早挂未处理异常过滤器，避免 monitor 静默退出时无任何日志 */
+    (void)hao_win_get_current_thread_id();
+#endif
     gc_register_thread();
     if (gc_main_tid == 0) gc_main_tid = gc_os_tid();
 #ifndef _WIN32

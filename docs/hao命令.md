@@ -1,7 +1,8 @@
 # HaoLang 命令参考（`hao`）
 
 > **读者**：使用者与工具链维护者  
-> **版本范围**：v0.38～v0.48（清单第 0～2 层；`HAO_REPO` 本地仓；`test` / `fmt`）  
+> **版本**：CLI 随根目录 `VERSION`；正文覆盖 `mod` / `test` / `fmt` 与包管理现行行为（清单第 0～2 层已交付）  
+
 > **对标**：命令行 UX 对标 **`go`**；清单格式对标 **.NET 项目文件思想**（JSON），**不是** `go.mod` 文法；HTTP 仓发现 API 对标 **Maven 仓库元数据** 的简化版。  
 > **权威设计**：[`记忆文档.md`](../记忆文档.md) **5.15**；实现：`src/main.cpp`、`src/driver/`、`src/mod/`、`src/tool/`；本地私服：`script/haoreg_server.py`。
 >

@@ -8,9 +8,9 @@ import lang;
 import os;
 import reflect;
 
-// 反射路径读取 keys()/数组元素（v0.49）
-extern func _jsonArrLen(arr: Long): Int = "hao_array_len";
-extern func _jsonArrGetPtr(arr: Long, idx: Int): Long = "hao_array_get_ptr";
+// 反射路径读取 keys()/数组元素；元素走 get_obj（托管引用，对标 Java）
+extern func _jsonArrLen(arr: Object): Int = "hao_array_len";
+extern func _jsonArrGet(arr: Object, idx: Int): Object? = "hao_array_get_obj";
 
 class JSON {
     // Feature 位标志（toJSONString 可选）
@@ -266,26 +266,30 @@ class JSON {
     static func stringifyMap(value: Object, t: reflect.Class, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
         var emptyArgs: [Long] = [];
-        val keysPtr = t.invoke(value, "keys", emptyArgs);
-        val n = _jsonArrLen(keysPtr);
+        val keys = t.invokeObj(value, "keys", emptyArgs);
+        if (keys == null) { return "{}"; }
+        val keysArr = keys!!;
+        val n = _jsonArrLen(keysArr);
         var r = "{";
         var first = true;
         var i = 0;
         while (i < n) {
-            val kPtr = _jsonArrGetPtr(keysPtr, i);
-            val kStr = reflect.strOfInt(kPtr);
+            val kObj = _jsonArrGet(keysArr, i);
+            if (kObj == null) { i += 1; continue; }
+            val k = kObj!!;
+            val kStr = k.toString();
             var gargs: [Long] = [];
-            gargs += kPtr;
-            val vRaw = t.invoke(value, "get", gargs);
+            gargs += reflect.ptrOf(k);
+            val child = t.invokeObj(value, "get", gargs);
             if (!first) { r = r + ","; }
             first = false;
             if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
             r = r + JSON.quote(kStr) + ":";
             if (pretty) { r = r + " "; }
-            if (vRaw == 0) {
+            if (child == null) {
                 r = r + "null";
             } else {
-                r = r + JSON.stringifyAt(reflect.objOf(vRaw), features, indent + 1, stack, depth);
+                r = r + JSON.stringifyAt(child!!, features, indent + 1, stack, depth);
             }
             i += 1;
         }
@@ -304,11 +308,11 @@ class JSON {
             if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
             var gargs: [Long] = [];
             gargs += i;
-            val vRaw = t.invoke(value, "get", gargs);
-            if (vRaw == 0) {
+            val child = t.invokeObj(value, "get", gargs);
+            if (child == null) {
                 r = r + "null";
             } else {
-                r = r + JSON.stringifyAt(reflect.objOf(vRaw), features, indent + 1, stack, depth);
+                r = r + JSON.stringifyAt(child!!, features, indent + 1, stack, depth);
             }
             i += 1;
         }

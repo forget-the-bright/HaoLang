@@ -109,11 +109,20 @@ class Class {
         }
     }
 
-    // args：每槽 8 字节（[Long]）；返回原始 8 字节结果
-    // 方法不存在或 arity 错误 → throw（勿再静默返回 0）
+    // ---- 反射调用（对标 Java java.lang.reflect.Method）----
+    // Java：Method.invoke → Object（引用始终托管；标量先装箱）。
+    // Hao：invokeObj ≈ 引用返回正道；invoke():Long 仅非可空标量位型（禁藏堆指针）。
+    // args：每槽 8 字节（[Long]）。方法不存在或 arity 错误 → throw。
+
+    // 非可空标量位型（Int/Long/Bool/…）；引用/可空/数组 → 运行时 panic，请用 invokeObj
     func invoke(o: Object, name: String, args: [Long]): Long {
         this.ensureInvokeArity(name, args);
         return hao_reflect_invoke(this.meta, o, name, args);
+    }
+    // 引用返回（Object/String/数组/Bean…）；Unit/void → null（同 Java）
+    func invokeObj(o: Object, name: String, args: [Long]): Object? {
+        this.ensureInvokeArity(name, args);
+        return hao_reflect_invoke_obj(this.meta, o, name, args);
     }
     func invokeStr(o: Object, name: String, args: [Long]): String? {
         this.ensureInvokeArity(name, args);
@@ -450,12 +459,14 @@ extern func hao_reflect_field_set(m: Long?, o: Object, name: String, value: Stri
 extern func hao_reflect_method_return_type(m: Long?, name: String): String = "hao_reflect_method_return_type";
 
 extern func hao_reflect_invoke(m: Long?, o: Object, name: String, args: [Long]): Long = "hao_reflect_invoke";
+extern func hao_reflect_invoke_obj(m: Long?, o: Object, name: String, args: [Long]): Object? = "hao_reflect_invoke_obj";
 extern func hao_reflect_invoke_str(m: Long?, o: Object, name: String, args: [Long]): String? = "hao_reflect_invoke_str";
 extern func hao_reflect_invoke_bool(m: Long?, o: Object, name: String, args: [Long]): Bool = "hao_reflect_invoke_bool";
 extern func hao_reflect_invoke_double(m: Long?, o: Object, name: String, args: [Long]): Double = "hao_reflect_invoke_double";
 extern func hao_reflect_invoke_float(m: Long?, o: Object, name: String, args: [Long]): Float = "hao_reflect_invoke_float";
 extern func hao_reflect_invoke_void(m: Long?, o: Object, name: String, args: [Long]): Unit = "hao_reflect_invoke_void";
 
+// 实参编组助手（槽内仍是 Long）；返回值请走 invokeObj，勿长期用 objOf 藏指针
 extern func ptrOfStr(s: String): Long = "hao_reflect_ptrtoint";
 extern func ptrOf(o: Object): Long = "hao_reflect_ptrtoint";
 extern func strOfInt(i: Long): String = "hao_reflect_inttoptr";

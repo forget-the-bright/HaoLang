@@ -413,30 +413,26 @@ public class HttpApp {
         return cur;
     }
 
-    // v0.49：按返回类型把控制器结果转为 HttpResponse
-    static func coerceResult(retType: String, raw: Long): HttpResponse {
-        if (retType.length == 0) {
-            if (raw == 0) { return HttpResponse.json(200, "null"); }
-            val o = reflect.objOf(raw);
-            if (o is HttpResponse) { return o as HttpResponse; }
-            return HttpResponse.json(o);
-        }
-        if (String.valueOf(retType).indexOf("HttpResponse") >= 0) {
-            if (raw == 0) { return HttpResponse.of(500, "null response"); }
-            val resp = reflect.objOf(raw);
-            return resp as HttpResponse;
-        }
-        if (retType == "String" || retType == "String?") {
-            if (raw == 0) { return HttpResponse.text(""); }
-            return HttpResponse.text(reflect.strOfInt(raw));
-        }
-        if (retType == "Unit" || retType == "void") {
-            return HttpResponse.of(204, "");
-        }
-        if (raw == 0) {
+    // v0.49 / v0.55.22：控制器结果 → HttpResponse（引用走 invokeObj，对标 Java Method.invoke→Object）
+    static func coerceResultObj(retType: String, o: Object?): HttpResponse {
+        if (o == null) {
+            if (retType == "Unit" || retType == "void") {
+                return HttpResponse.of(204, "");
+            }
+            if (String.valueOf(retType).indexOf("HttpResponse") >= 0) {
+                return HttpResponse.of(500, "null response");
+            }
             return HttpResponse.json(200, "null");
         }
-        return HttpResponse.json(reflect.objOf(raw));
+        val v = o!!;
+        if (retType.length == 0) {
+            if (v is HttpResponse) { return v as HttpResponse; }
+            return HttpResponse.json(v);
+        }
+        if (String.valueOf(retType).indexOf("HttpResponse") >= 0) {
+            return v as HttpResponse;
+        }
+        return HttpResponse.json(v);
     }
 
     func invokeRoute(req: HttpRequest): HttpResponse {
@@ -458,13 +454,18 @@ public class HttpApp {
         var args: [Long] = [];
         args += reflect.ptrOf(req);
         val retType = t.methodReturnType(bind.methodName);
+        if (retType == "Unit" || retType == "void") {
+            t.invokeUnit(ctrl, bind.methodName, args);
+            return HttpResponse.of(204, "");
+        }
         if (retType == "String" || retType == "String?") {
             val s = t.invokeStr(ctrl, bind.methodName, args);
             if (s == null) { return HttpResponse.text(""); }
             return HttpResponse.text(s!!);
         }
-        val raw = t.invoke(ctrl, bind.methodName, args);
-        return HttpApp.coerceResult(retType, raw);
+        // 引用 / Bean / HttpResponse：invokeObj（禁止 Long 藏指针）
+        val o = t.invokeObj(ctrl, bind.methodName, args);
+        return HttpApp.coerceResultObj(retType, o);
     }
 
     // v0.50 keep-alive；v0.50.3 ByteBuf 粘包 + Pipeline
@@ -494,9 +495,12 @@ public class HttpApp {
             }
             val out = ch.pipeline.fireChannelRead(req);
             if (out == null || !(out is HttpResponse)) { break; }
-            HttpServer.writeResponse(ch.sock, out as HttpResponse, keep);
+            /* /api/* 压测常 keep-alive 占满 worker；默认短连接，避免 4 worker 被挂死连接钉死 */
+            var useKeep = keep;
+            if (String.valueOf(req.path).startsWith("/api/")) { useKeep = false; }
+            HttpServer.writeResponse(ch.sock, out as HttpResponse, useKeep);
             handled = true;
-            if (!keep) { break; }
+            if (!useKeep) { break; }
         }
         ch.close();
         return handled;

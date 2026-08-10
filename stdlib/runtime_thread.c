@@ -191,7 +191,13 @@ static void* pool_worker(void* arg) {
             /* cond_wait 会放池锁；arm 使空闲 worker 对 STW 可见 */
             hao_gc_os_block_arm();
             hao_win_cond_wait(p->cv, p->mtx);
+            /*
+             * disarm 可能等 STW release：必须先放池锁，否则 boss submit 堵在池锁上
+             * 无法 park → stwIncomplete 抖动，且 accept 侧任务堆积、请求变 pending。
+             */
+            hao_win_crit_leave(p->mtx);
             hao_gc_os_block_disarm();
+            hao_win_crit_enter(p->mtx);
         }
         if (p->head) { t = p->head; p->head = t->next; if (!p->head) p->tail = NULL; }
         shutdown = p->shutdown;
@@ -201,7 +207,9 @@ static void* pool_worker(void* arg) {
         while (!p->head && !p->shutdown) {
             hao_gc_os_block_arm();
             pthread_cond_wait(&p->cv, &p->mtx);
+            pthread_mutex_unlock(&p->mtx);
             hao_gc_os_block_disarm();
+            pthread_mutex_lock(&p->mtx);
         }
         if (p->head) { t = p->head; p->head = t->next; if (!p->head) p->tail = NULL; }
         shutdown = p->shutdown;

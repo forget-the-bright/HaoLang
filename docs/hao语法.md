@@ -1,7 +1,7 @@
 # HaoLang 语言语法与语义说明
 
 > **读者**：语言使用者、从 Go / Java / C# 迁移的开发者  
-> **版本**：v0.48.0 能力面（含 channel `select`、包管理 `HAO_REPO` / `HAO_REGISTRY`）  
+> **版本**：随根目录 `VERSION`（当前 **0.55.10**）；能力面见 [`../记忆文档.md`](../记忆文档.md) 第 3 章；GC 详文 [`IR与GC契约.md`](IR与GC契约.md)  
 > **从哪进来**：项目首页 [`../README.md`](../README.md) 第四节（摘要）链到本文；命令 / 包管理见 [`hao命令.md`](hao命令.md)。  
 > **本文侧重**：规则、原理、限制与对标 Go / Java / C#（**不写**完整 CLI）。  
 > **反向门禁**：`script/win/negcheck.ps1`（须 28/28）。设计决策见 [`记忆文档.md`](../记忆文档.md) 第 5 章；特性/库速查见第 3～4 章。
@@ -15,7 +15,7 @@ HaoLang（好语言）是**静态类型、编译至原生机器码**的语言：
 | 维度 | 选择 |
 |------|------|
 | 执行模型 | AOT → LLVM IR → clang/lld → 单文件原生可执行文件 |
-| 内存 | 自带 GC（v0.55.4：while/for 局部提升 + remset 仅 minor + 精确根完备 + 皮带成对摘根 + 诚实双轨 + 混合屏障 + mark worker；详文 [`IR与GC契约.md`](IR与GC契约.md)） |
+| 内存 | 自带 GC（v0.55.10：可达性主路径 + while/for 提升 + remset 仅 minor + 精确根/spill/块尾/`?.`/`??`/装箱 + 皮带成对 + 诚实双轨 + 混合屏障 + mark worker；详文 [`IR与GC契约.md`](IR与GC契约.md)） |
 | 包模型 | **目录即包**（Go 风格），清单用 `haoproject.json` |
 | 并发关键字 | **`haoroutine`**（禁止称 goroutine） |
 | 泛型 | **单态化**（C++/Rust 路线，非 JVM 擦除） |
@@ -556,7 +556,7 @@ extern func ntohs(x: Int): Int = "ntohs" @link("ws2_32");
 | 具名实参 | ⬜ |
 | 接口默认方法 / 接口继承接口 | ⬜ |
 
-以记忆文档第 3.3 节为准；实现前当作不存在。
+以记忆文档第 3 章特性表为准；实现前当作不存在。
 
 ---
 

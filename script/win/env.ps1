@@ -103,9 +103,10 @@ Set-Alias antlrgen Invoke-AntlrGen -Scope Global -Force
 
 function Invoke-HaoBuild {
     param([switch]$Fresh)
-    $clangxx = Join-Path $HAO_LLVM 'bin\clang++.exe'
-    $llvmrc  = Join-Path $HAO_LLVM 'bin\llvm-rc.exe'
-    if (-not (Test-Path $clangxx)) {
+    # 正斜杠：路径含 \b（如 D:\buildLang）时 cmake 写 RC 缓存会当转义失败
+    $clangxx = ((Join-Path $HAO_LLVM 'bin\clang++.exe') -replace '\\', '/')
+    $llvmrc  = ((Join-Path $HAO_LLVM 'bin\llvm-rc.exe') -replace '\\', '/')
+    if (-not (Test-Path ($clangxx -replace '/', '\'))) {
         Write-Host '[构建] 缺少 lib\llvm。请先: powershell -File script\setup_env.ps1' -ForegroundColor Red
         return
     }

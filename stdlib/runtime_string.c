@@ -157,7 +157,9 @@ HaoString* hao_str_byte_slice(HaoString* s, int32_t start, int32_t end) {
     if (end > s->len) end = s->len;
     if (end < start) end = start;
     HaoString* r = hao_str_from_bytes(s->data + start, end - start);
+    if (r) hao_gc_add_root(r); /* 摘 s 前挂新串，防并发 collect */
     hao_gc_remove_root(s);
+    if (r) hao_gc_remove_root(r);
     return r;
 }
 
@@ -210,8 +212,11 @@ HaoString* hao_str_concat(HaoString* a, HaoString* b) {
     if (b) { db = b->data; lb = b->len; if (lb < 0) lb = 0; }
     memcpy(r->data, da, (size_t)la);
     memcpy(r->data + la, db, (size_t)lb);
+    /* 新串须先入根再摘 a/b：否则并发 STW 只见旧根、扫掉 r → str_len UAF */
+    if (r) hao_gc_add_root(r);
     if (a) hao_gc_remove_root(a);
     if (b) hao_gc_remove_root(b);
+    if (r) hao_gc_remove_root(r);
     return r;
 }
 
@@ -264,7 +269,22 @@ HaoString* hao_char_to_str(int32_t cp) {
 
 /* 码点个数（String.length） */
 int64_t hao_str_len(HaoString* s) {
+    uintptr_t v;
     if (!s) return 0;
+    /*
+     * 崩溃日志曾见 rcx=ASCII「collectC」：把 String 载荷当 HaoString*。
+     * 非规范/明显非堆指针直接 panic，避免 0xC0000005 难读。
+     */
+    v = (uintptr_t)s;
+    if ((v & (sizeof(void*) - 1)) != 0 || v < (uintptr_t)0x10000 ||
+#if UINTPTR_MAX > 0xffffffffu
+        v > (uintptr_t)0x00007FFFFFFFFFFFULL ||
+#endif
+        !hao_gc_expect_heap_ptr(s)) {
+        fprintf(stderr, "panic: hao_str_len 非法指针 %p\n", (void*)s);
+        fflush(stderr);
+        abort();
+    }
     return (int64_t)utf8_cp_count(s->data, s->len);
 }
 
@@ -294,7 +314,9 @@ HaoString* hao_str_substring(HaoString* s, int32_t start, int32_t end) {
     if (b0 < 0) b0 = 0;
     if (b1 < 0) b1 = s->len;
     HaoString* r = hao_str_from_bytes(s->data + b0, b1 - b0);
+    if (r) hao_gc_add_root(r);
     hao_gc_remove_root(s);
+    if (r) hao_gc_remove_root(r);
     return r;
 }
 
@@ -381,7 +403,9 @@ HaoString* hao_str_trim(HaoString* s) {
         b--;
     }
     HaoString* r = hao_str_from_bytes(s->data + a, b - a);
+    if (r) hao_gc_add_root(r);
     hao_gc_remove_root(s);
+    if (r) hao_gc_remove_root(r);
     return r;
 }
 
@@ -394,7 +418,9 @@ HaoString* hao_str_to_upper(HaoString* s) {
         if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
         r->data[i] = c;
     }
+    if (r) hao_gc_add_root(r);
     hao_gc_remove_root(s);
+    if (r) hao_gc_remove_root(r);
     return r;
 }
 
@@ -407,7 +433,9 @@ HaoString* hao_str_to_lower(HaoString* s) {
         if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
         r->data[i] = c;
     }
+    if (r) hao_gc_add_root(r);
     hao_gc_remove_root(s);
+    if (r) hao_gc_remove_root(r);
     return r;
 }
 

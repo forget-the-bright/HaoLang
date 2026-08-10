@@ -261,17 +261,21 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                         if (!ensureNonNullOperand(curV, e, "+=") ||
                             !ensureNonNullOperand(rhs, e, "+="))
                             return Value();
+                        rootGcOperand(curV);
                         Value rs = toStringValue(rhs);
                         if (!rs.valid()) {
                             error(e, "无法将 " + rhs.type->toString() +
                                      " 拼接到 String");
                             return Value();
                         }
+                        rootGcOperand(rs);
                         std::string reg = em_.nextTemp();
-                        em_.emit(reg + " = call ptr @hao_str_concat(ptr " + cur +
+                        em_.emit(reg + " = call ptr @hao_str_concat(ptr " + curV.ir +
                                  ", ptr " + rs.ir + ")");
-                        emitGlobalGcStore(gptr, reg, Type::makeString());
-                        return Value(reg, Type::makeString());
+                        Value out(reg, Type::makeString());
+                        rootGcOperand(out);
+                        emitGlobalGcStore(gptr, out.ir, Type::makeString());
+                        return out;
                     }
                     if (sfi->type->kind == TypeKind::Array && op == "+=") {
                         Value curV(cur, sfi->type);
@@ -422,17 +426,21 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                     if (!ensureNonNullOperand(curV, e, "+=") ||
                         !ensureNonNullOperand(rhs, e, "+="))
                         return Value();
+                    rootGcOperand(curV);
                     Value rs = toStringValue(rhs);
                     if (!rs.valid()) {
                         error(e, "无法将 " + rhs.type->toString() +
                                  " 拼接到 String");
                         return Value();
                     }
+                    rootGcOperand(rs);
                     std::string reg = em_.nextTemp();
-                    em_.emit(reg + " = call ptr @hao_str_concat(ptr " + cur +
+                    em_.emit(reg + " = call ptr @hao_str_concat(ptr " + curV.ir +
                              ", ptr " + rs.ir + ")");
-                    emitHeapStore(fp, reg, Type::makeString(), recv.ir);
-                    return Value(reg, Type::makeString());
+                    Value out(reg, Type::makeString());
+                    rootGcOperand(out);
+                    emitHeapStore(fp, out.ir, Type::makeString(), recv.ir);
+                    return out;
                 }
 
                 // 数组字段 += 元素 => push，扩容后写回字段
@@ -564,15 +572,19 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
             if (!ensureNonNullOperand(cur, e, "+=") ||
                 !ensureNonNullOperand(rhs, e, "+="))
                 return Value();
+            rootGcOperand(cur);
             Value rs = toStringValue(rhs);
             if (!rs.valid()) {
                 error(e, "无法将 " + rhs.type->toString() + " 拼接到 String");
                 return Value();
             }
+            rootGcOperand(rs);
             std::string reg = em_.nextTemp();
             em_.emit(reg + " = call ptr @hao_str_concat(ptr " + cur.ir + ", ptr " + rs.ir + ")");
-            emitVarStore(sym, Type::makeString(), reg);
-            return Value(reg, Type::makeString());
+            Value out(reg, Type::makeString());
+            rootGcOperand(out);
+            emitVarStore(sym, Type::makeString(), out.ir);
+            return out;
         }
 
         // 数组 += 元素 => push（动态扩容，可能 realloc 移动，必须写回变量）
@@ -1505,6 +1517,7 @@ Value IRGen::genAdditive(HaoLangParser::AdditiveExprContext* e) {
             std::string reg = em_.nextTemp();
             em_.emit(reg + " = call ptr @hao_str_concat(ptr " + ls.ir + ", ptr " + rs.ir + ")");
             lhs = Value(reg, Type::makeString());
+            rootGcOperand(lhs); /* 拼接结果跨后续右操作数/调用 */
             continue;
         }
 
@@ -1688,15 +1701,19 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
     // String / 数组的 length（C 仍返回 i64，截断为 Int）
     if (field == "length") {
         if (base.type->kind == TypeKind::String) {
+            Value b = base;
+            rootGcOperand(b);
             std::string wide = em_.nextTemp();
-            em_.emit(wide + " = call i64 @hao_str_len(ptr " + base.ir + ")");
+            em_.emit(wide + " = call i64 @hao_str_len(ptr " + b.ir + ")");
             std::string reg = em_.nextTemp();
             em_.emit(reg + " = trunc i64 " + wide + " to i32");
             return Value(reg, Type::makeInt());
         }
         if (base.type->kind == TypeKind::Array) {
+            Value b = base;
+            rootGcOperand(b);
             std::string wide = em_.nextTemp();
-            em_.emit(wide + " = call i64 @hao_array_len(ptr " + base.ir + ")");
+            em_.emit(wide + " = call i64 @hao_array_len(ptr " + b.ir + ")");
             std::string reg = em_.nextTemp();
             em_.emit(reg + " = trunc i64 " + wide + " to i32");
             return Value(reg, Type::makeInt());

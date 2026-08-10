@@ -75,9 +75,19 @@ void hao_gc_add_root(void* p);
 void hao_gc_add_root_if_heap(void* p);
 /* 是否指向某 GC 块用户区（持 GC 锁查堆链；内含 safepoint——禁用于挂根前探测） */
 int8_t hao_gc_is_heap_ptr(void* p);
+/* 无 safepoint：p 是否为堆上 SLOTS/FULL 对象（非 String/数组）。供 reflect 防 UAF 脏读 */
+int8_t hao_gc_expect_heap_object(void* p);
+/* 无 safepoint：p 是否像合法堆用户指针（对齐+在 heap 范围内+有块） */
+int8_t hao_gc_expect_heap_ptr(void* p);
+/*
+ * reflect.invoke / array_get_ptr 把堆指针藏进 i64，直至 objOf/strOfInt。
+ * 钉住期间参与 STW 扫描；inttoptr 消费时 unpin（无 safepoint）。
+ */
+void hao_gc_refl_i64_pin(void* p);
+void hao_gc_refl_i64_unpin(void* p);
 /* 已废除全标活（恒 0）；请用 hao_gc_stw_incomplete */
 int64_t hao_gc_stw_mark_all_fallbacks(void);
-/* STW 未齐 park、本轮跳过 sweep 的累计次数（v0.50.4+） */
+/* 软 STW 未齐 park 累计次数（v0.50.4+；终止未齐 abort 见 markAbortCycles） */
 int64_t hao_gc_stw_incomplete(void);
 /* 已进入并发标记窗口的回收轮次（v0.51+） */
 int64_t hao_gc_concurrent_mark_cycles(void);

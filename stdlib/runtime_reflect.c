@@ -336,12 +336,32 @@ void* hao_reflect_field_get_obj(void* meta, void* obj, HaoString* fname) {
 /* 读字段值转字符串。obj 为对象实例。 */
 HaoString* hao_reflect_field_get(void* meta, void* obj, HaoString* fname) {
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
-    const char* name = hao_str_cstr(fname);
-    const HaoFieldMeta* f = find_field(m, name);
-    if (!f || !obj) return NULL;
-    char* base = (char*)obj + (size_t)f->slot * 8;
+    const char* name;
+    const HaoFieldMeta* f;
+    char* base;
     char buf[64];
-    const char* t = f->typeStr;
+    const char* t;
+    if (!obj || !fname) return NULL;
+    /*
+     * obj 被 sweep 后内存常复用为 String 载荷；再按槽读会得到 ASCII 当指针
+     * （崩溃 rcx=「collectC」）。须先挂根再确认仍是 SLOTS/FULL 对象。
+     */
+    hao_gc_add_root(obj);
+    hao_gc_add_root(fname);
+    if (!hao_gc_expect_heap_object(obj)) {
+        fprintf(stderr, "panic: reflect field_get 非对象/已回收 obj=%p\n", obj);
+        fflush(stderr);
+        abort();
+    }
+    name = hao_str_cstr(fname);
+    f = find_field(m, name);
+    if (!f) {
+        hao_gc_remove_root(fname);
+        hao_gc_remove_root(obj);
+        return NULL;
+    }
+    base = (char*)obj + (size_t)f->slot * 8;
+    t = f->typeStr;
     /* 非空标量按值读；String/String? 按指针；T? 数值勿走此路（槽内是指针） */
     if (t && strcmp(t, "Int") == 0) {
         snprintf(buf, sizeof buf, "%d", (int)(*(int32_t*)base));
@@ -371,12 +391,26 @@ HaoString* hao_reflect_field_get(void* meta, void* obj, HaoString* fname) {
         snprintf(buf, sizeof buf, "%d", (int)(*(int32_t*)base));
     } else if (type_is_base(t, "String")) {
         HaoString* s = *(HaoString**)base;
+        if (s && !hao_gc_expect_heap_ptr(s)) {
+            fprintf(stderr,
+                    "panic: reflect String 字段悬空/脏指针 field=%s s=%p obj=%p\n",
+                    name ? name : "?", (void*)s, obj);
+            fflush(stderr);
+            abort();
+        }
+        hao_gc_remove_root(fname);
+        hao_gc_remove_root(obj);
         return s;
     } else {
         snprintf(buf, sizeof buf, "<0x%016llx>",
                  (unsigned long long)(uintptr_t)(*(void**)base));
     }
-    return hao_str_from_cstr(buf);
+    {
+        HaoString* r = hao_str_from_cstr(buf);
+        hao_gc_remove_root(fname);
+        hao_gc_remove_root(obj);
+        return r;
+    }
 }
 
 /* 写字段值（严格解析，与 Integer.parse 等同策略）。返回 0 成功、非 0 失败。 */
@@ -493,6 +527,26 @@ static const HaoMethodMeta* find_method(const HaoClassMeta* m, const char* name)
 
 typedef int64_t (*HaoInvokeFn)(int64_t, void*);
 
+/*
+ * 对标 Java Method.invoke → Object：引用/可空/数组须走 invokeObj（GC 可见）。
+ * invoke():Long 仅允许非可空标量位型（Hao 无装箱快路径）；禁止藏堆指针。
+ */
+static int reflect_ret_is_raw_scalar(const char* t) {
+    if (!t || !t[0]) return 0;
+    if (strchr(t, '?')) return 0; /* Int? 等为装箱指针 */
+    if (t[0] == '[') return 0;    /* 数组 */
+    if (strcmp(t, "Unit") == 0 || strcmp(t, "void") == 0) return 1;
+    if (strcmp(t, "Int") == 0 || strcmp(t, "Long") == 0) return 1;
+    if (strcmp(t, "UInt") == 0 || strcmp(t, "ULong") == 0 ||
+        strcmp(t, "UIntPtr") == 0)
+        return 1;
+    if (strcmp(t, "Short") == 0 || strcmp(t, "UShort") == 0) return 1;
+    if (strcmp(t, "Byte") == 0 || strcmp(t, "SByte") == 0) return 1;
+    if (strcmp(t, "Bool") == 0 || strcmp(t, "Char") == 0) return 1;
+    if (strcmp(t, "Float") == 0 || strcmp(t, "Double") == 0) return 1;
+    return 0;
+}
+
 /* 按名查形参数量；未找到 -1（供 Hao 层抛 Exception） */
 int32_t hao_reflect_method_param_count(void* meta, HaoString* name) {
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
@@ -512,62 +566,112 @@ HaoString* hao_reflect_method_return_type(void* meta, HaoString* mname) {
     return hao_str_from_cstr(mm->retType);
 }
 
-int64_t hao_reflect_invoke(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
+/*
+ * mode：
+ *  0 = typed 标量/void（bool/double/…），不校验 ret
+ *  1 = invoke():Long —— 仅 raw scalar，否则 panic（调用前）
+ *  2 = invokeObj —— 引用；Unit→null；raw scalar（非 Unit）panic（调用前）
+ */
+static int64_t reflect_invoke_core(void* meta, void* obj, HaoString* name,
+                                   int64_t* argSlots, int mode) {
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
+    const HaoMethodMeta* mm;
     /* thunk 可分配：直接挂根（禁先 is_heap_ptr） */
     if (obj) hao_gc_add_root(obj);
     if (name) hao_gc_add_root(name);
     if (argSlots) hao_gc_add_root(argSlots);
-    const HaoMethodMeta* mm = find_method(m, hao_str_cstr(name));
+    mm = find_method(m, hao_str_cstr(name));
     if (!mm || !mm->invoke) {
         if (argSlots) hao_gc_remove_root(argSlots);
         if (name) hao_gc_remove_root(name);
         if (obj) hao_gc_remove_root(obj);
         hao_panic_msg("reflect: method not found");
     }
-    /* 含 0 参：长度必须精确匹配，防 OOB / 多余槽被忽略 */
-    int64_t need = mm->paramCount;
-    int64_t got = argSlots ? hao_array_len(argSlots) : 0;
-    if (need > 0 && !argSlots) {
-        if (name) hao_gc_remove_root(name);
-        if (obj) hao_gc_remove_root(obj);
-        hao_panic_msg("reflect: null arg slots");
-    }
-    if (got != need) {
+    if (mode == 1 && !reflect_ret_is_raw_scalar(mm->retType)) {
         if (argSlots) hao_gc_remove_root(argSlots);
         if (name) hao_gc_remove_root(name);
         if (obj) hao_gc_remove_root(obj);
-        hao_panic_msg("reflect: arity mismatch");
+        hao_panic_msg(
+            "reflect: invoke():Long 仅用于非可空标量；"
+            "引用/可空/数组请用 invokeObj 或 invokeStr（对标 Java Method.invoke→Object）");
     }
-    HaoInvokeFn fn = (HaoInvokeFn)mm->invoke;
-    int64_t r = fn((int64_t)(intptr_t)obj, argSlots);
-    if (argSlots) hao_gc_remove_root(argSlots);
-    if (name) hao_gc_remove_root(name);
-    if (obj) hao_gc_remove_root(obj);
-    return r;
+    if (mode == 2 && reflect_ret_is_raw_scalar(mm->retType)) {
+        const char* t = mm->retType ? mm->retType : "";
+        if (strcmp(t, "Unit") != 0 && strcmp(t, "void") != 0) {
+            if (argSlots) hao_gc_remove_root(argSlots);
+            if (name) hao_gc_remove_root(name);
+            if (obj) hao_gc_remove_root(obj);
+            hao_panic_msg(
+                "reflect: invokeObj 用于引用返回；非可空标量请用 invoke()/invokeBool/…");
+        }
+        /* Unit/void：不调用亦可；仍调用以保留副作用，返回 0 */
+    }
+    /* 含 0 参：长度必须精确匹配，防 OOB / 多余槽被忽略 */
+    {
+        int64_t need = mm->paramCount;
+        int64_t got = argSlots ? hao_array_len(argSlots) : 0;
+        if (need > 0 && !argSlots) {
+            if (name) hao_gc_remove_root(name);
+            if (obj) hao_gc_remove_root(obj);
+            hao_panic_msg("reflect: null arg slots");
+        }
+        if (got != need) {
+            if (argSlots) hao_gc_remove_root(argSlots);
+            if (name) hao_gc_remove_root(name);
+            if (obj) hao_gc_remove_root(obj);
+            hao_panic_msg("reflect: arity mismatch");
+        }
+    }
+    {
+        HaoInvokeFn fn = (HaoInvokeFn)mm->invoke;
+        int64_t r = fn((int64_t)(intptr_t)obj, argSlots);
+        if (argSlots) hao_gc_remove_root(argSlots);
+        if (name) hao_gc_remove_root(name);
+        if (obj) hao_gc_remove_root(obj);
+        if (mode == 2) {
+            const char* t = mm->retType ? mm->retType : "";
+            if (strcmp(t, "Unit") == 0 || strcmp(t, "void") == 0) return 0;
+        }
+        return r;
+    }
 }
+
+int64_t hao_reflect_invoke(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
+    return reflect_invoke_core(meta, obj, name, argSlots, 1);
+}
+
+/* 对标 Java Method.invoke 的引用返回：ptr 由 Hao 调用约定挂 shadow 根 */
+void* hao_reflect_invoke_obj(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
+    return (void*)(intptr_t)reflect_invoke_core(meta, obj, name, argSlots, 2);
+}
+
 HaoString* hao_reflect_invoke_str(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
-    return (HaoString*)(intptr_t)hao_reflect_invoke(meta, obj, name, argSlots);
+    return (HaoString*)hao_reflect_invoke_obj(meta, obj, name, argSlots);
 }
 int8_t hao_reflect_invoke_bool(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
-    return (int8_t)hao_reflect_invoke(meta, obj, name, argSlots);
+    return (int8_t)reflect_invoke_core(meta, obj, name, argSlots, 0);
 }
 double hao_reflect_invoke_double(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
-    int64_t r = hao_reflect_invoke(meta, obj, name, argSlots);
+    int64_t r = reflect_invoke_core(meta, obj, name, argSlots, 0);
     double d; memcpy(&d, &r, 8); return d;
 }
 float hao_reflect_invoke_float(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
-    int64_t r = hao_reflect_invoke(meta, obj, name, argSlots);
+    int64_t r = reflect_invoke_core(meta, obj, name, argSlots, 0);
     int32_t bits = (int32_t)r;
     float f; memcpy(&f, &bits, 4); return f;
 }
 void hao_reflect_invoke_void(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
-    hao_reflect_invoke(meta, obj, name, argSlots);
+    reflect_invoke_core(meta, obj, name, argSlots, 0);
 }
 
 /* ---- 反射槽位转换助手：Int ↔ 具体类型（供构造 [Int] 实参/解释结果）---- */
 int64_t hao_reflect_ptrtoint(void* p) { return (int64_t)(intptr_t)p; }
-void*   hao_reflect_inttoptr(int64_t i) { return (void*)(intptr_t)i; }
+void*   hao_reflect_inttoptr(int64_t i) {
+    void* p = (void*)(intptr_t)i;
+    /* 无 safepoint：钉移交 Hao Object/String 局部根 */
+    hao_gc_refl_i64_unpin(p);
+    return p;
+}
 int64_t hao_reflect_dbl_bits(double d) { int64_t r; memcpy(&r, &d, 8); return r; }
 double  hao_reflect_bits_dbl(int64_t i) { double r; memcpy(&r, &i, 8); return r; }
 int64_t hao_reflect_flt_bits(float f) {

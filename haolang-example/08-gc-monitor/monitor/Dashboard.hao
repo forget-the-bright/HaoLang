@@ -32,6 +32,7 @@ class GcSnapshot {
     var markAbortCycles: Long = 0;   // 终止失败 abort MARK（v0.53.3）
     var markWorkerSteps: Long = 0;   // GC 私有 mark worker（v0.54）
     var remsetCount: Long = 0;       // 分代 remset 条目（v0.55.2；仅 minor）
+    var parkWatchdogTrips: Long = 0; // park 超时强行放行（v0.55.11）
 
     // ---- CPU / 线程 / 句柄 / 运行时长 ----
     var cpuPercent: Int = 0;         // 0～100；首次采样可能为 0
@@ -44,7 +45,7 @@ class GcSnapshot {
     var usagePct: Int = 0;
     var summary: String = "";
     var note: String = "";
-    var engine: String = "HaoLang GC v3（v0.55.3 while局部提升 + remset仅minor + 精确根）+ os.Process";
+    var engine: String = "HaoLang GC v3（v0.55.22 invokeObj对标Java Method.invoke）+ os.Process";
 
     constructor() {
         this.refresh();
@@ -85,17 +86,19 @@ class GcSnapshot {
         this.markAbortCycles = g.markAbortCycles;
         this.markWorkerSteps = g.markWorkerSteps;
         this.remsetCount = g.remsetCount;
+        this.parkWatchdogTrips = g.parkWatchdogTrips;
         this.gcThreads = g.registeredThreads;
         this.summary = $"GC[v3] live={this.liveBytes}B heap={this.heapBytes}B threshold={this.threshold}B"
             + $" allocatedSince={this.allocatedSinceGc}B blocks={this.blockCount}"
             + $" collects={this.collectCount} minor={this.minorCount} major={this.majorCount}"
             + $" stwIncomplete={this.stwIncomplete} concurrentMark={this.concurrentMarkCycles}"
             + $" markAssist={this.markAssistSteps} markAbort={this.markAbortCycles}"
-            + $" markWorker={this.markWorkerSteps} remset={this.remsetCount}";
+            + $" markWorker={this.markWorkerSteps} remset={this.remsetCount}"
+            + $" parkWd={this.parkWatchdogTrips}";
         if (this.note.length == 0) {
             this.note = "对标说明：工作集/专用内存来自 os.Process；"
                 + "heapBytes=当前堆压；liveBytes=上次成功 major 后存活；"
-                + "v0.55.3：while 内 var 只 push 一次；warmup 历史 List 在 major 后应收。";
+                + "stwIncomplete=未齐 park；markAbort=终止未齐 abort；详文 docs/IR与GC契约.md。";
         }
         var pct: Int = 0;
         if (this.threshold > 0) {
@@ -124,7 +127,7 @@ class CollectResult {
 class DashboardController {
     @GetMapping(path = "/")
     func index(req: HttpRequest): HttpResponse {
-        Html.setTemplateRoot("haolang-example/08-gc-monitor/templates");
+        Html.setTemplateRoot("./templates");
         // 预热 CPU 采样（首次 -1）
         os.Process.cpuPercent();
         val snap = new GcSnapshot();

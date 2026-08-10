@@ -54,8 +54,9 @@ int64_t hao_array_check(void* arr, int64_t idx) {
     return idx;
 }
 
-/* 取指针数组元素（esz=8）为 i64；越界 panic。供 json/Map.keys 等（v0.49） */
+/* 取指针数组元素（esz=8）为 i64；越界 panic。供旧路径；新代码请用 hao_array_get_obj */
 int64_t hao_array_get_ptr(void* arr, int64_t idx) {
+    void* elem;
     if (!arr) return 0;
     hao_array_check(arr, idx);
     int64_t esz = hao_array_esz(arr);
@@ -63,7 +64,21 @@ int64_t hao_array_get_ptr(void* arr, int64_t idx) {
         fputs("panic: hao_array_get_ptr 仅支持指针宽元素\n", stderr);
         exit(1);
     }
-    return (int64_t)(intptr_t)(*(void**)((char*)arr + (size_t)idx * 8));
+    elem = *(void**)((char*)arr + (size_t)idx * 8);
+    /* 皮带：i64 藏指针至 strOfInt/objOf（正道是 get_obj） */
+    hao_gc_refl_i64_pin(elem);
+    return (int64_t)(intptr_t)elem;
+}
+
+/* 指针数组元素 → 托管引用（对标 Java 数组元素是 Object 引用；由 Hao 挂根） */
+void* hao_array_get_obj(void* arr, int64_t idx) {
+    if (!arr) return NULL;
+    hao_array_check(arr, idx);
+    if (hao_array_esz(arr) != 8) {
+        fputs("panic: hao_array_get_obj 仅支持指针宽元素\n", stderr);
+        exit(1);
+    }
+    return *(void**)((char*)arr + (size_t)idx * 8);
 }
 
 void* hao_array_push(void* arr, int64_t val) {

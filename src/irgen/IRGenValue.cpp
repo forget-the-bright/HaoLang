@@ -702,16 +702,17 @@ void IRGen::unpinLoopSpillCheckpoint() {
 void IRGen::clearLoopSpillSlots() {
     if (loopSpillPools_.empty()) return;
     auto& pool = loopSpillPools_.back();
-    /* 只清本层作用域，禁止内层 while 误杀外层仍存活的 spill/局部 */
+    /* 只清本层作用域；sticky（条件根 / for.seq）跨迭代持有，禁止抹掉或 pop */
     size_t base = pool.scopeStack.empty() ? 0 : pool.scopeStack.back();
+    size_t target = base;
+    if (!pool.stickyStack.empty() && pool.stickyStack.back() > target)
+        target = pool.stickyStack.back();
     size_t lim = pool.highWater > pool.next ? pool.highWater : pool.next;
     if (lim > pool.slots.size()) lim = pool.slots.size();
-    for (size_t i = base; i < lim; ++i)
+    for (size_t i = target; i < lim; ++i)
         em_.emit("store ptr null, ptr " + pool.slots[i]);
-    pool.next = base;
-    pool.highWater = base;
-    while (!pool.stickyStack.empty() && pool.stickyStack.back() > base)
-        pool.stickyStack.pop_back();
+    pool.next = target;
+    if (pool.highWater > target) pool.highWater = target;
 }
 
 std::string IRGen::acquireLoopGcSlot(const std::string& nameHint) {

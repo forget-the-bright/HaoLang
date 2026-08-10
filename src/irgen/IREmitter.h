@@ -346,7 +346,7 @@ private:
     //  值装箱 / 拆箱（任意槽位类型 <-> i64）
     // ------------------------------------------------------------
     //  数组 push/pop、异常跨帧返回槽等统一按 8 字节 i64 存取。
-    //  v0.25：Int=i32 / Long=i64 / Float=f32 / Double=f64 / Short=i16 / Byte=i8
+    //  v0.25+：Int=i32 / Long=i64 / Float=f32 / Double=f64 / Short=i16 / Byte=u8（llvm i8）/ SByte=i8
     // 按真实 LLVM 类型装箱：Int?/String/Class 等 llvmType=ptr 必须 ptrtoint，
     // 不可只看 kind（否则 try 返回 Int? / [Int?] push 会 sext i32 %ptr）。
     std::string boxToI64(const std::string& ir, const TypePtr& t) {

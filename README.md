@@ -5,10 +5,10 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.55.10**（?. / ?? / 装箱根 + String/channel 皮带 + 块尾/spill/调用面 + remset 仅 minor + 精确根 + 诚实双轨 + 混合屏障 + mark worker；详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)）
-- 测试基线：`test/suite` **1011** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.55.10
+- 当前版本：**v0.55.22**（invokeObj 对标 Java；GC monitor 压测约 1 天稳定、峰值约 10MiB；详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)）
+- 测试基线：`test/suite` **1011** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.55.22
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
-- **下一批（默认）**：Netty NIO / select——见 [`记忆文档.md`](记忆文档.md) 第 **10** 章
+- **下一批（默认）**：架构方法论比对 → 优化方案 → 文档治理——见 [`记忆文档.md`](记忆文档.md) 第 **10** 章；方法论见 [`docs/方法论/`](docs/方法论/)
 
 ---
 
@@ -35,7 +35,7 @@
 
 - **原生 & 零依赖**：编译为原生机器码，静态链接，单文件分发，无运行时依赖。
 - **现代语法**：`val/var`、类型推断、空安全 `T?`、`when`、模板字符串、Lambda/闭包、泛型（单态化零开销）。
-- **自带 GC**：混合屏障 + Hao 精确根 + mark worker + 协作软 STW；详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)。
+- **自带 GC**：见抬头与 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)。
 - **自带系统库**：网络 `net`（含 Http/MVC + **`scan`/`scanWhere`/`registerNewArgs`**）、文件/路径 `os`、并发 `sync`、集合 `collections`（含 LinkedList/TreeMap/ConcurrentHashMap 等）、**`gc`**（手动回收与统计）、异常 `exception`、输出 `fmt`、基础包装 `lang`、`regex`/`json`、反射 **`findTypes*`/`newInstanceArgs`** 等。
 - **可交叉编译**：Windows 上直接产出 Linux（musl 静态链接）可执行文件。
 - **对接 C**：extern C 声明 + 链接外部库/系统库 + 直接写 C 源码。
@@ -58,7 +58,7 @@
 | 10 | 自举 | ⬜ 待开始 |
 
 **已完成的里程碑**（详见 [`docs/项目时间线/`](docs/项目时间线/索引.md)）：
-… → **v0.48.0** `HAO_REPO` → **v0.49.0** Web 补全（基线 **972**）。
+… → **v0.48.0** `HAO_REPO` → **v0.49.0** Web 补全（当时基线 **972**，历史；当前验收见抬头 **1011**）。
 
 ---
 
@@ -201,7 +201,7 @@ bash script/test.sh --rebuild-all   # 强制全量重编（改编译器/运行�
 powershell -ExecutionPolicy Bypass -File script\win\negcheck.ps1   # 反向：须 28/28 编译拒绝
 ```
 
-套件共 **972** 行 stdout，全部通过。改 stdlib / 语法后务必 `--rebuild-all`（增量不查 stdlib `.hao` mtime）。
+套件共 **1011** 行 stdout，全部通过。改 stdlib / 语法后务必 `--rebuild-all`（增量不查 stdlib `.hao` mtime）。
 
 **做新特性的工作流**：写单文件临时验证 → 合并进 `test/suite/` → 归档到 `test/oldcase/`。套件文件与覆盖面见目录 `test/suite/`（不必在 README 维护长表）。
 
@@ -271,7 +271,7 @@ hao build test\hello.hao --target linux-amd64 -o hello
 ├── haolang-example/        **用户向示例库**（hello / 特性 / 多文件 / Web / 项目 / 测试）
 ├── 记忆文档.md             AI 工作规则与设计决策（权威）
 ├── test/
-│   ├── suite/              多文件集成套件（基线 972 行；含 demo/web、corp 多包）
+│   ├── suite/              多文件集成套件（基线 1011 行；含 demo/web、corp 多包）
 │   ├── oldcase/            归档旧单文件（net.hao 等可专项冒烟）
 │   └── syntax.hao          语法解析覆盖（只 parse）
 ├── lib/                    外部依赖与工具链（LLVM/ANTLR/sysroot/win CRT）
@@ -322,7 +322,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 ## 十一、已知限制
 
 
-- GC 是 **v0.55.10**：混合屏障 + ?. /装箱/表达式面根 + 块尾/spill + remset **仅服务 minor** + shadow + C 皮带 + mark worker；**诚实双轨**。详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)。concurrent sweep 为停顿排期。
+- GC（**v0.55.10**）：可达性主路径已交付；concurrent sweep 为停顿排期。详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)。
 - 已有真正 **`Byte`（0～255）**、**`Char`（Unicode 码点 i32）** 与紧凑数组；String = `ptr`→`HaoString{len,cap,data[]}`，`.length`/`s[i]` 按码点。
 - **泛型接口已实现（v0.18.0）**：`Iterable<T>`/`Iterator<T>`；`toArray()` 仍作兜底。
 - **反射**：类型自省 + 字段读写 + 注解（含 value 等参数）+ **方法 invoke**（含 `invokeFloat`）已有；运行时动态定义类/成员需 VM，后续。
@@ -364,8 +364,8 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | **v0.55.10** ?. /装箱根 + String/channel 皮带 + continue/finally 假死修复（CE）；反向 28/28 |
-| 🔥 **下一批（默认开干）** | Netty NIO poll / select 真多路 wait |
-| 其后 | 自举（Stage 10） |
+| ✅ 已完成 | **v0.55.22** invokeObj 对标 Java Method.invoke（CF）；反向 28/28 |
+| 🔥 **下一批（默认开干）** | 架构方法论比对 → 优化方案 → 文档治理 |
+| 其后 | select 真多路 wait / 泛型 channel →（停顿）concurrent sweep → 自举 |
 
 实现步骤见 [`记忆文档.md` 第 10 章](记忆文档.md)；历史见 [`docs/项目时间线/`](docs/项目时间线/索引.md)。

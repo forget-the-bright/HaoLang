@@ -6,6 +6,8 @@ import monitor;
 import net;
 import collections.*;
 import thread.*;
+import gc;
+import time;
 
 func main() {
     val app = new net.HttpApp();
@@ -22,19 +24,30 @@ func main() {
 
     // v0.50.4 验收：4000 次保活分配会反复打满 nursery → 协作 STW；
     // 不得再靠把循环改回 40「假装修好」。/api/gc 应仍可在秒级响应。
+    // v0.55.11：STW 压力高时拉长休眠，避免并发 mark drain 活锁拖死 HTTP。
     val th1 = new Thread();
     th1.start({
         while (true) {
+            var timeBegin = time.now();
             var junk = new List<Object>();
             var i = 0;
             while (i < 4000) {
                 junk.add(String.valueOf("warm-" + Integer.toStr(i)));
                 i += 1;
             }
-            sleep(500);
+            var pause = 500;
+            val abort = gc.GC.markAbortCycles();
+            val inc = gc.GC.stwIncomplete();
+            if (abort > 32 || inc > 64) { pause = 2000; }
+            if (abort > 128 || inc > 256) { pause = 5000; }
+            sleep(pause);
+            var timeEnd = time.now();
+            fmt.println($"执行完一次循环造垃圾数据{pause}: 开始时间-{timeBegin.format("yyyy-MM-dd HH:mm:ss")}-结束时间-{timeEnd.format("yyyy-MM-dd HH:mm:ss")}");
         }
     });
 
     // boss 只 accept，worker 处理连接（避免与 STW 叠加抢 accept）
     app.serveBossWorkers(4);
+    /* 正常永不返回；若回到这里或进程直接消失，查 stderr / 仓库根 hao-crash.log */
+    fmt.println("错误：serveBossWorkers 已返回（服务循环不应结束）");
 }

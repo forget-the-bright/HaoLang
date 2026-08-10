@@ -1,24 +1,14 @@
 package gc;
 
 // ============================================================
-//  gc.GC —— 垃圾回收详情与手动回收（v0.37 · 多线程自动回收）
+//  gc.GC —— 垃圾回收详情与手动回收
 // ------------------------------------------------------------
-//  职责：让 .hao 代码查询 GC 运行状态，并显式触发一次 STW major 回收。
-//  能力（runtime v3+ / v0.55.4：while/for 局部提升 + remset 仅 minor + 精确根完备 + 诚实双轨 + 皮带成对）：
-//    - 精确堆扫描：块头 kind + 对象槽位图 / 数组 is_ptr；叶对象（String/box）不扫。
-//    - 非移动分代：nursery + old；**混合写屏障**（Yuasa shade old + Dijkstra shade new）。
-//    - 数组扩容：`hao_gc_array_copy_and_shade`（同锁 memcpy+shade，中间无 safepoint）。
-//    - **Hao 精确根**：shadow stack（`hao_gc_root_push/unwind`）；跨 safepoint 活指针须登记。
-//    - **诚实双轨**：始终扫 shadow；os_block/arm 或无 shadow → GPR+有界 C 叶；仅 Hao park → shadow-only。
-//    - **并发标记**：色纪元 + 软 STW + mutator assist + **GC 私有 mark worker**。
-//    - **可达性闭环**：终止须齐；失败 abort MARK；finalizer 完整复活。
-//    - 页索引 find_block；池/channel/fs/os/join `os_block_*`；Mutex 自旋 safepoint。
-//    - Win 不 SuspendThread；不用 LLVM stackmap（架构选择，shadow 替代）。
-//    - `GC.stats()` 一次持锁快照；看堆压用 heapBytes。
-//  详文：docs/IR与GC契约.md
-//  何时手动 collect：测试、压测、或确认刚丢掉大图后想立刻回收；
-//  平时依赖 nursery/全堆阈值自动触发即可。
-//  线程安全：各方法内部由 runtime 加锁；collect 会停止全世界。
+//  职责：查询 GC 运行状态，并显式触发一次 major 收集。
+//  能力（v0.55.10）：可达性主路径；详文 docs/IR与GC契约.md（混合屏障、shadow 精确根、
+//    诚实双轨、并发 mark + mark worker、remset 仅 minor 等）。
+//  看堆压用 heapBytes；liveBytes = 上次成功 major 后存活（可能为 0）。
+//  何时手动 collect：测试、压测、或刚丢掉大图后想立刻回收；平时靠阈值自动触发。
+//  线程安全：各方法内部由 runtime 加锁；勿在应用层锁内随意 collect。
 // ============================================================
 
 extern func gc_collect(): Unit = "gc_collect";
@@ -63,13 +53,14 @@ public class GcStats {
     var markAbortCycles: Long = 0; /* 终止失败 abort MARK（v0.53.3） */
     var markWorkerSteps: Long = 0; /* GC 私有 mark worker 推进量（v0.54） */
     var remsetCount: Long = 0; /* 分代 remset 条目数（v0.55.2；仅服务 minor） */
+    var parkWatchdogTrips: Long = 0; /* park_wait 超时强行放行（v0.55.11） */
 }
 
 extern func hao_gc_stats(dst: GcStats): Unit = "hao_gc_stats";
 
 class GC {
-    // 手动触发一次 major GC（stop-the-world：safepoint 握手、扫栈/寄存器、精确堆扫、清扫）。
-    // 复杂度：与堆规模相关 O(堆块数 + 栈扫描)
+    // 手动触发一次 major 收集（软 STW 根/终止 + 并发 mark + sweep；失败可 abort）。
+    // 复杂度：与堆规模相关 O(堆块数 + 根扫描)
     // 副作用：collectCount +1；可能运行 finalizer（锁外）；阈值按存活字节重算
     // 注意：勿在应用层锁内随意调用（防与业务锁交叉死锁）
     static func collect() {
@@ -223,6 +214,6 @@ class GC {
     // 复杂度：O(1)（单次 stats）
     static func summary(): String {
         val s = GC.stats();
-        return $"GC[v3] live={s.liveBytes}B heap={s.heapBytes}B threshold={s.threshold}B allocatedSince={s.allocatedSinceGc}B blocks={s.blockCount} collects={s.collectCount} minor={s.minorCount} major={s.majorCount} finalizerRuns={s.finalizerRuns} finalizerSets={s.finalizerSets} stwIncomplete={s.stwIncomplete} concurrentMark={s.concurrentMarkCycles} markAssist={s.markAssistSteps} markAbort={s.markAbortCycles} markWorker={s.markWorkerSteps} remset={s.remsetCount}";
+        return $"GC[v3] live={s.liveBytes}B heap={s.heapBytes}B threshold={s.threshold}B allocatedSince={s.allocatedSinceGc}B blocks={s.blockCount} collects={s.collectCount} minor={s.minorCount} major={s.majorCount} finalizerRuns={s.finalizerRuns} finalizerSets={s.finalizerSets} stwIncomplete={s.stwIncomplete} concurrentMark={s.concurrentMarkCycles} markAssist={s.markAssistSteps} markAbort={s.markAbortCycles} markWorker={s.markWorkerSteps} remset={s.remsetCount} parkWd={s.parkWatchdogTrips}";
     }
 }

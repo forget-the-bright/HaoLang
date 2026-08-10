@@ -168,10 +168,9 @@ public class Html {
             while (i < sz) {
                 var args: [Long] = [];
                 args += i;
-                val raw = t.invoke(obj, "get", args);
-                if (raw != 0) {
-                    val item = reflect.objOf(raw);
-                    out = out + Html.renderInner(inner, item, root);
+                val item = t.invokeObj(obj, "get", args);
+                if (item != null) {
+                    out = out + Html.renderInner(inner, item!!, root);
                 }
                 i += 1;
             }
@@ -261,9 +260,7 @@ public class Html {
         if (t.methodParamCount("keys") == 0 && t.methodParamCount("get") == 1) {
             var args: [Long] = [];
             args += reflect.ptrOfStr(key);
-            val raw = t.invoke(ctx, "get", args);
-            if (raw == 0) { return null; }
-            return reflect.objOf(raw);
+            return t.invokeObj(ctx, "get", args);
         }
         // Bean 字段
         val ft = Html.findFieldType(t, key);
