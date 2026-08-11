@@ -379,6 +379,23 @@ if ($LASTEXITCODE -eq 0) {
     $fail++
 }
 
+# U18: select inside catch body root smoke
+$out18 = & $hao run (Join-Path $Root "test\gc_try_select_in_catch_root_smoke.hao") 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0) {
+    $tc18 = ([regex]::Matches($out18, '(?m)^true\s*$')).Count
+    if ($tc18 -ge 8) {
+        Write-Host "OK   gc_try_select_in_catch_root_smoke true x8"
+    } else {
+        Write-Host "FAIL select-in-catch smoke true count=$tc18"
+        Write-Host $out18
+        $fail++
+    }
+} else {
+    Write-Host "FAIL gc_try_select_in_catch_root_smoke exit=$LASTEXITCODE"
+    Write-Host $out18
+    $fail++
+}
+
 # H1: HAO_GC_VERIFY=1 normal collect
 $prevVerify = $env:HAO_GC_VERIFY
 $env:HAO_GC_VERIFY = "1"
@@ -577,6 +594,22 @@ if ($traceEc5 -eq 0 -and
 } else {
     Write-Host "FAIL HAO_IRGEN_TRACE unwind/catch/gc_unwind"
     Write-Host $traceOut5
+    $fail++
+}
+
+# A14: note_block + unwind_gc prefixes
+$prevTrace6 = $env:HAO_IRGEN_TRACE
+$env:HAO_IRGEN_TRACE = "1"
+$traceOut6 = & $hao emit (Join-Path $Root "test\gc_try_select_in_catch_root_smoke.hao") -o (Join-Path $td "note_unwind_gc.ll") 2>&1 | Out-String
+$traceEc6 = $LASTEXITCODE
+if ($null -ne $prevTrace6) { $env:HAO_IRGEN_TRACE = $prevTrace6 } else { Remove-Item Env:HAO_IRGEN_TRACE -ErrorAction SilentlyContinue }
+if ($traceEc6 -eq 0 -and
+    $traceOut6 -match 'hao:irgen:note_block depth=' -and
+    $traceOut6 -match 'hao:irgen:unwind_gc ptr=') {
+    Write-Host "OK   HAO_IRGEN_TRACE note_block/unwind_gc prefix"
+} else {
+    Write-Host "FAIL HAO_IRGEN_TRACE note_block/unwind_gc"
+    Write-Host $traceOut6
     $fail++
 }
 

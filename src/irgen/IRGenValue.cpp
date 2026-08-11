@@ -531,6 +531,14 @@ void IRGen::emitPushUnwindGcRoot() {
 
 void IRGen::storeUnwindGcRootPtr(const std::string& ptrIr) {
     if (unwindGcRootAddr_.empty()) return;
+    /* A14：正路径可观测（默认关） */
+    {
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr, "hao:irgen:unwind_gc ptr=%s\n", ptrIr.c_str());
+            fflush(stderr);
+        }
+    }
     emitStore("ptr", ptrIr, unwindGcRootAddr_);
 }
 
@@ -571,6 +579,15 @@ void IRGen::endBlockGcScope() {
 
 void IRGen::noteBlockGcSlot(const std::string& slotAddr) {
     if (slotAddr.empty() || blockGcSlots_.empty()) return;
+    /* A14：正路径可观测（默认关） */
+    {
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr, "hao:irgen:note_block depth=%zu\n",
+                    blockGcSlots_.size());
+            fflush(stderr);
+        }
+    }
     blockGcSlots_.back().push_back(slotAddr);
 }
 

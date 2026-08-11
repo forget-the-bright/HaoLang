@@ -1,0 +1,36 @@
+// U18：catch 体内 select 接收绑定 + GC.collect 根存活（发现向；非全量 unwind）
+package main;
+
+import channel;
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var outer = new Box("outer");
+    var ch = channel.make(1);
+    ch.sendStr("payload");
+    try {
+        throw new Exception("boom");
+    } catch (e: Exception) {
+        var mid = new Box("mid");
+        select {
+            case s = ch.recvStr():
+                gc.GC.collect();
+                fmt.println(s!! == "payload");
+                fmt.println(mid.s == "mid");
+                fmt.println(outer.s == "outer");
+                fmt.println(e.getMessage().length > 0);
+            default:
+                fmt.println(false);
+        }
+        fmt.println(mid.s == "mid");
+        fmt.println(outer.s == "outer");
+    }
+    fmt.println(outer.s == "outer");
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

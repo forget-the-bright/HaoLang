@@ -478,19 +478,27 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
             std::string tv = emitLoad("ptr", fp);
             emitStore("ptr", tv, thisAddr_);
             emitGcRootPush(thisAddr_);
+            /* D16：capturesThis 薄 DI */
+            {
+                int pl = mi.ctx->getStart()
+                    ? static_cast<int>(mi.ctx->getStart()->getLine()) : 1;
+                emitDbgDeclareIf(thisAddr_, "this", pl, 1);
+                emitDbgValueIf("ptr", tv, "this", pl, 1);
+            }
             ++slot;
         }
         for (auto& cap : mi.captures) {
             std::string addr = "%" + cap.name + ".cap.addr";
             std::string fp = fieldPtr("%env.arg", (int)slot);
+            std::string cv;
             if (cap.boxed) {
                 emitAllocaAt(addr, "ptr");
-                std::string cv = emitLoad("ptr", fp);
+                cv = emitLoad("ptr", fp);
                 emitStore("ptr", cv, addr);
                 emitGcRootPush(addr);
             } else {
                 emitAllocaAt(addr, cap.type->llvmType());
-                std::string cv = emitLoad(cap.type->llvmType(), fp);
+                cv = emitLoad(cap.type->llvmType(), fp);
                 emitStore(cap.type->llvmType(), cv, addr);
                 if (isGcPointerType(cap.type))
                     emitGcRootPush(addr);
@@ -503,6 +511,14 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
             cs->irAddr = addr;
             cs->boxed = cap.boxed;
             syms_.declare(cs);
+            /* D16：捕获 unpack 薄 declare/value */
+            {
+                int pl = mi.ctx->getStart()
+                    ? static_cast<int>(mi.ctx->getStart()->getLine()) : 1;
+                emitDbgDeclareIf(addr, cap.name, pl, 0);
+                emitDbgValueIf(cap.boxed ? "ptr" : cap.type->llvmType(), cv,
+                               cap.name, pl, 0);
+            }
             ++slot;
         }
 

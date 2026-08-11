@@ -968,6 +968,32 @@ if ($okExt) {
     $fail++
 }
 
+# --- D16: -g lambda capture has declare/value ---
+@'
+func main() {
+    var outer = 7
+    val f: () -> Int = {
+        return outer + 1
+    }
+    fmt.println(f() == 8)
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_value_capture.hao")
+$llCap = Join-Path $td "dbg_value_capture.ll"
+& $hao emit -g (Join-Path $td "dbg_value_capture.hao") -o $llCap 2>&1 | Out-Null
+$okCap = $false
+if (Test-Path $llCap) {
+    $ctxt = Get-Content $llCap -Raw
+    if ($ctxt -match 'llvm\.dbg\.declare' -and $ctxt -match 'llvm\.dbg\.value' -and $ctxt -match 'DILocalVariable\(name: "outer"') {
+        $okCap = $true
+    }
+}
+if ($okCap) {
+    Write-Host "OK   -g lambda capture has dbg.declare/value for outer"
+} else {
+    Write-Host "FAIL -g lambda capture dbg"
+    $fail++
+}
+
 if ($fail -eq 0) {
     Write-Host "loc_smoke: ALL PASS"
     exit 0
