@@ -140,6 +140,8 @@ flowchart TD
 
 **字段复合 dbg.value / unpin·leave TRACE / C 叶毒针 / catch-only（v0.55.45）**：字段/静态复合写回薄 `dbg.value`。`HAO_IRGEN_TRACE` 增 `unpin_spill`/`leave_spill`。VERIFY C 叶**仅毒针**（`leaf_i=`；禁真实叶全扫）；`hao_debug_poison_c_leaf`。`gc_try_catch_only_root_smoke`。**非**跨线程/真实叶 VERIFY；**全量** Unwind 仍开。
 
+**pin·enter TRACE / for 迭代 dbg.value / ctor·静态 try（v0.55.46）**：`HAO_IRGEN_TRACE` 增 `pin_spill`/`enter_spill`。for 循环变量每轮迭代薄 `dbg.value`。`gc_try_ctor_finally_root_smoke`、`gc_try_static_method_finally_root_smoke`。**全量** Unwind 仍开。
+
 **后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口；真实 C 叶槽 VERIFY。
 
 ### 4.4 分配

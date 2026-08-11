@@ -1,0 +1,30 @@
+// U13：静态方法体内 try/finally GC 根存活（发现向；非全量 unwind）
+package main;
+
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+
+    public static func touch(outer: Box): Int {
+        var local = new Box("local");
+        try {
+            gc.GC.collect();
+            fmt.println(local.s == "local");
+            fmt.println(outer.s == "outer");
+            return 1;
+        } finally {
+            fmt.println(local.s == "local");
+            fmt.println(outer.s == "outer");
+        }
+    }
+}
+
+func main() {
+    var outer = new Box("outer");
+    fmt.println(Box.touch(outer) == 1);
+    fmt.println(outer.s == "outer");
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

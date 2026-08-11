@@ -567,6 +567,16 @@ void IRGen::enterLoopSpillScope() {
     }
     if (!loopSpillPools_.empty()) {
         auto& pool = loopSpillPools_.back();
+        /* A10：正路径可观测（默认关） */
+        {
+            const char* tr = getenv("HAO_IRGEN_TRACE");
+            if (tr && tr[0] && tr[0] != '0') {
+                fprintf(stderr,
+                        "hao:irgen:enter_spill depth=%d next=%zu slots=%zu\n",
+                        loopSpillDepth_, pool.next, pool.slots.size());
+                fflush(stderr);
+            }
+        }
         pool.scopeStack.push_back(pool.next);
         size_t enterSticky = pool.stickyStack.size();
         pool.stickyEnterStack.push_back(enterSticky);
@@ -618,7 +628,18 @@ void IRGen::leaveLoopSpillScope() {
 
 void IRGen::pinLoopSpillCheckpoint() {
     if (loopSpillPools_.empty()) return;
-    loopSpillPools_.back().stickyStack.push_back(loopSpillPools_.back().next);
+    auto& pool = loopSpillPools_.back();
+    /* A10：正路径可观测（默认关） */
+    {
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr,
+                    "hao:irgen:pin_spill next=%zu sticky_n=%zu\n",
+                    pool.next, pool.stickyStack.size());
+            fflush(stderr);
+        }
+    }
+    pool.stickyStack.push_back(pool.next);
 }
 
 void IRGen::markLoopSpillStickyFloor() {

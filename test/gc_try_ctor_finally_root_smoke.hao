@@ -1,0 +1,27 @@
+// U12：构造函数体内 try/finally GC 根存活（发现向；非全量 unwind）
+package main;
+
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) {
+        var local = "local";
+        try {
+            this.s = s;
+            gc.GC.collect();
+            fmt.println(local == "local");
+            fmt.println(this.s == s);
+        } finally {
+            fmt.println(local == "local");
+            fmt.println(this.s == s);
+        }
+    }
+}
+
+func main() {
+    var b = new Box("self");
+    fmt.println(b.s == "self");
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

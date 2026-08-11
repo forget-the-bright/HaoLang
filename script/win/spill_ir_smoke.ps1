@@ -277,6 +277,40 @@ if ($LASTEXITCODE -eq 0) {
     $fail++
 }
 
+# U12: constructor body try/finally root smoke
+$out12 = & $hao run (Join-Path $Root "test\gc_try_ctor_finally_root_smoke.hao") 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0) {
+    $tc12 = ([regex]::Matches($out12, '(?m)^true\s*$')).Count
+    if ($tc12 -ge 6) {
+        Write-Host "OK   gc_try_ctor_finally_root_smoke true x6"
+    } else {
+        Write-Host "FAIL ctor/finally smoke true count=$tc12"
+        Write-Host $out12
+        $fail++
+    }
+} else {
+    Write-Host "FAIL gc_try_ctor_finally_root_smoke exit=$LASTEXITCODE"
+    Write-Host $out12
+    $fail++
+}
+
+# U13: static method body try/finally root smoke
+$out13 = & $hao run (Join-Path $Root "test\gc_try_static_method_finally_root_smoke.hao") 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0) {
+    $tc13 = ([regex]::Matches($out13, '(?m)^true\s*$')).Count
+    if ($tc13 -ge 7) {
+        Write-Host "OK   gc_try_static_method_finally_root_smoke true x7"
+    } else {
+        Write-Host "FAIL static-method/finally smoke true count=$tc13"
+        Write-Host $out13
+        $fail++
+    }
+} else {
+    Write-Host "FAIL gc_try_static_method_finally_root_smoke exit=$LASTEXITCODE"
+    Write-Host $out13
+    $fail++
+}
+
 # H1: HAO_GC_VERIFY=1 normal collect
 $prevVerify = $env:HAO_GC_VERIFY
 $env:HAO_GC_VERIFY = "1"
@@ -383,6 +417,22 @@ if ($traceEc2 -eq 0 -and $traceOut2 -match 'hao:irgen:unpin_spill sticky=') {
     Write-Host "OK   HAO_IRGEN_TRACE unpin_spill prefix"
 } else {
     Write-Host "FAIL HAO_IRGEN_TRACE unpin_spill"
+    Write-Host $traceOut2
+    $fail++
+}
+
+# A10: pin_spill + enter_spill prefixes
+if ($traceEc -eq 0 -and $traceOut -match 'hao:irgen:enter_spill depth=') {
+    Write-Host "OK   HAO_IRGEN_TRACE enter_spill prefix"
+} else {
+    Write-Host "FAIL HAO_IRGEN_TRACE enter_spill"
+    Write-Host $traceOut
+    $fail++
+}
+if ($traceEc2 -eq 0 -and $traceOut2 -match 'hao:irgen:pin_spill next=') {
+    Write-Host "OK   HAO_IRGEN_TRACE pin_spill prefix"
+} else {
+    Write-Host "FAIL HAO_IRGEN_TRACE pin_spill"
     Write-Host $traceOut2
     $fail++
 }

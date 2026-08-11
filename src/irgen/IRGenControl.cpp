@@ -976,8 +976,10 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
         sym->isMutable = false;    // 循环变量不可赋值
         sym->irAddr = varAddr;
         syms_.declare(sym);
-        emitDbgDeclareIf(varAddr, varName,
-                         st->getStart() ? static_cast<int>(st->getStart()->getLine()) : 1, 0);
+        int forLine = st->getStart() ? static_cast<int>(st->getStart()->getLine()) : 1;
+        emitDbgDeclareIf(varAddr, varName, forLine, 0);
+        /* D11：每轮迭代写回薄 dbg.value */
+        emitDbgValueIf(elemType->llvmType(), elemVal, varName, forLine, 0);
 
         LoopContext flc;
         flc.breakLabel = endL;
@@ -1105,8 +1107,10 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
         sym->isMutable = false;    // 循环变量不可赋值
         sym->irAddr = varAddr;
         syms_.declare(sym);
-        emitDbgDeclareIf(varAddr, varName,
-                         st->getStart() ? static_cast<int>(st->getStart()->getLine()) : 1, 0);
+        int forLine = st->getStart() ? static_cast<int>(st->getStart()->getLine()) : 1;
+        emitDbgDeclareIf(varAddr, varName, forLine, 0);
+        /* D11：每轮迭代写回薄 dbg.value */
+        emitDbgValueIf(elemType->llvmType(), elemVal, varName, forLine, 0);
 
         LoopContext flc;
         flc.breakLabel = endL;

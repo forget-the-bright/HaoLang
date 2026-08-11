@@ -797,6 +797,30 @@ if ($okLeaf) {
     $fail++
 }
 
+# --- D11: -g for-iter has dbg.value ---
+@'
+func main() {
+    for (x in [1, 2]) {
+        fmt.println(x > 0)
+    }
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_value_for.hao")
+$llFor = Join-Path $td "dbg_value_for.ll"
+& $hao emit -g (Join-Path $td "dbg_value_for.hao") -o $llFor 2>&1 | Out-Null
+$okFor = $false
+if (Test-Path $llFor) {
+    $fortxt = Get-Content $llFor -Raw
+    if ($fortxt -match 'llvm\.dbg\.value' -and $fortxt -match 'DILocalVariable\(name: "x"') {
+        $okFor = $true
+    }
+}
+if ($okFor) {
+    Write-Host "OK   -g for-iter has dbg.value for x"
+} else {
+    Write-Host "FAIL -g for-iter dbg.value"
+    $fail++
+}
+
 if ($fail -eq 0) {
     Write-Host "loc_smoke: ALL PASS"
     exit 0
