@@ -278,6 +278,8 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                         Value out(reg, Type::makeString());
                         rootGcOperand(out);
                         emitGlobalGcStore(gptr, out.ir, Type::makeString());
+                        /* D10：静态字段复合薄 dbg.value */
+                        emitDbgValueIf(Type::makeString()->llvmType(), out.ir, fname, 0, 0);
                         return out;
                     }
                     if (sfi->type->kind == TypeKind::Array && op == "+=") {
@@ -294,6 +296,8 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                         std::string reg = emitCall("ptr", "@hao_array_push",
                                                    "ptr " + cur + ", i64 " + val64);
                         emitGlobalGcStore(gptr, reg, sfi->type);
+                        /* D10：静态字段复合薄 dbg.value */
+                        emitDbgValueIf(sfi->type->llvmType(), reg, fname, 0, 0);
                         return Value(reg, sfi->type);
                     }
                     if (!sfi->type->isNumeric() &&
@@ -369,6 +373,8 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                     Value out(reg, calcTy);
                     out = coerce(out, sfi->type, 0, 0);
                     emitStore(sfi->type->llvmType(), out.ir, gptr);
+                    /* D10：静态字段复合薄 dbg.value */
+                    emitDbgValueIf(sfi->type->llvmType(), out.ir, fname, 0, 0);
                     return out;
                 }
 
@@ -436,6 +442,8 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                     Value out(reg, Type::makeString());
                     rootGcOperand(out);
                     emitHeapStore(fp, out.ir, Type::makeString(), recv.ir);
+                    /* D10：实例字段复合薄 dbg.value */
+                    emitDbgValueIf(Type::makeString()->llvmType(), out.ir, fname, 0, 0);
                     return out;
                 }
 
@@ -454,6 +462,8 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                     std::string reg = emitCall("ptr", "@hao_array_push",
                                                "ptr " + cur + ", i64 " + val64);
                     emitHeapStore(fp, reg, fi->type, recv.ir);
+                    /* D10：实例字段复合薄 dbg.value */
+                    emitDbgValueIf(fi->type->llvmType(), reg, fname, 0, 0);
                     return Value(reg, fi->type);
                 }
 
@@ -530,6 +540,8 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                 Value out(reg, calcTy);
                 out = coerce(out, fi->type, 0, 0);
                 emitHeapStore(fp, out.ir, fi->type, recv.ir);
+                /* D10：实例字段复合薄 dbg.value */
+                emitDbgValueIf(fi->type->llvmType(), out.ir, fname, 0, 0);
                 return out;
             }
         }

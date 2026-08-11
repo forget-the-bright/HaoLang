@@ -733,6 +733,70 @@ if ($okGpr) {
     $fail++
 }
 
+# --- D10: -g field compound assign has dbg.value ---
+@'
+class Box {
+    public var n: Int = 0
+    public constructor() {}
+}
+func main() {
+    var b = new Box()
+    b.n += 1
+    fmt.println(b.n == 1)
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_value_field_compound.hao")
+$llFc = Join-Path $td "dbg_value_field_compound.ll"
+& $hao emit -g (Join-Path $td "dbg_value_field_compound.hao") -o $llFc 2>&1 | Out-Null
+$okFc = $false
+if (Test-Path $llFc) {
+    $fctxt = Get-Content $llFc -Raw
+    $nFc = ([regex]::Matches($fctxt, 'llvm\.dbg\.value')).Count
+    if ($nFc -ge 2 -and $fctxt -match 'DILocalVariable\(name: "n"') { $okFc = $true }
+}
+if ($okFc) {
+    Write-Host "OK   -g field compound assign has dbg.value for n"
+} else {
+    Write-Host "FAIL -g field compound dbg.value"
+    $fail++
+}
+
+# --- V10: VERIFY poison c_leaf has leaf_i= ---
+@'
+import gc
+
+extern func hao_debug_poison_c_leaf(): Unit = "hao_debug_poison_c_leaf";
+
+func main() {
+    hao_debug_poison_c_leaf();
+    gc.GC.collect();
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "verify_leaf.hao")
+Reset-CrashLog
+$prevVleaf = $env:HAO_GC_VERIFY
+$env:HAO_GC_VERIFY = "1"
+& $hao run (Join-Path $td "verify_leaf.hao") 2>&1 | Out-Null
+if ($null -ne $prevVleaf) { $env:HAO_GC_VERIFY = $prevVleaf } else { Remove-Item Env:HAO_GC_VERIFY -ErrorAction SilentlyContinue }
+$okLeaf = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    if ($txt -match "kind=gc_verify" -and
+        $txt -match "leaf_i=" -and
+        $txt -match "ptr=" -and
+        ($txt -match "src=.*verify_leaf\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_leaf\.hao:\d+")) {
+        $okLeaf = $true
+    }
+    if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_leaf\.hao") {
+        $okLeaf = $false
+    }
+}
+if ($okLeaf) {
+    Write-Host "OK   VERIFY poison c_leaf has leaf_i + verify_leaf.hao loc"
+} else {
+    Write-Host "FAIL VERIFY poison c_leaf loc"
+    if (Test-Path $log) { Get-Content $log }
+    $fail++
+}
+
 if ($fail -eq 0) {
     Write-Host "loc_smoke: ALL PASS"
     exit 0

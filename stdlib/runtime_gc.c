@@ -1637,7 +1637,7 @@ static int gc_verify_env_on(void) {
     return on;
 }
 
-/* V2/V6/V7/V8/V9：冒烟夹具用 TLS 毒槽（文件作用域；MSVC 函数内 TLS 不可靠） */
+/* V2/V6/V7/V8/V9/V10：冒烟夹具用 TLS 毒槽（文件作用域；MSVC 函数内 TLS 不可靠） */
 #ifdef _WIN32
 static __declspec(thread) void* g_verify_poison_cell;
 static __declspec(thread) void* g_verify_poison_pin;
@@ -1648,6 +1648,8 @@ static __declspec(thread) void* g_verify_poison_refl;
 static __declspec(thread) int g_verify_poison_refl_armed;
 static __declspec(thread) void* g_verify_poison_gpr;
 static __declspec(thread) int g_verify_poison_gpr_armed;
+static __declspec(thread) void* g_verify_poison_leaf;
+static __declspec(thread) int g_verify_poison_leaf_armed;
 #else
 static __thread void* g_verify_poison_cell;
 static __thread void* g_verify_poison_pin;
@@ -1658,6 +1660,8 @@ static __thread void* g_verify_poison_refl;
 static __thread int g_verify_poison_refl_armed;
 static __thread void* g_verify_poison_gpr;
 static __thread int g_verify_poison_gpr_armed;
+static __thread void* g_verify_poison_leaf;
+static __thread int g_verify_poison_leaf_armed;
 #endif
 
 static void gc_verify_shadow_roots(void) {
@@ -1795,12 +1799,29 @@ static void gc_verify_gpr_spill(void) {
     }
 }
 
+/* V10：C 叶 VERIFY 仅毒针（禁止真实保守叶全扫假阳）；fatal 含 leaf_i=/ptr= */
+static void gc_verify_c_leaf(void) {
+    if (!gc_verify_env_on()) return;
+    if (!g_verify_poison_leaf_armed) return;
+    {
+        void* p = g_verify_poison_leaf;
+        if (p && !gc_find_block_exact(p)) {
+            char detail[160];
+            snprintf(detail, sizeof(detail),
+                     "c leaf is not a live heap object leaf_i=%d ptr=%p",
+                     0, p);
+            hao_report_fatal("gc_verify", detail);
+        }
+    }
+}
+
 static void gc_verify_roots(void) {
     gc_verify_shadow_roots();
     gc_verify_scan_pins();
     gc_verify_remset();
     gc_verify_refl_i64_pins();
     gc_verify_gpr_spill();
+    gc_verify_c_leaf();
 }
 
 /* V2：冒烟/调试钩子——压入非堆指针，下一 VERIFY collect 应 fatal */
@@ -1833,6 +1854,12 @@ void hao_debug_poison_gpr(void) {
     g_verify_poison_gpr = (void*)(uintptr_t)0x8;
     g_verify_poison_gpr_armed = 1;
     ((void**)g_gpr_spill)[0] = g_verify_poison_gpr;
+}
+
+/* V10：武装 C 叶毒针（仅 armed 路径；不对真实叶全扫） */
+void hao_debug_poison_c_leaf(void) {
+    g_verify_poison_leaf = (void*)(uintptr_t)0x8;
+    g_verify_poison_leaf_armed = 1;
 }
 
 __attribute__((noinline))

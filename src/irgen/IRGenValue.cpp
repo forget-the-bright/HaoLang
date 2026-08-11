@@ -582,6 +582,16 @@ void IRGen::leaveLoopSpillScope() {
         auto& pool = loopSpillPools_.back();
         if (!pool.scopeStack.empty()) {
             size_t base = pool.scopeStack.back();
+            /* A9：正路径可观测（默认关） */
+            {
+                const char* tr = getenv("HAO_IRGEN_TRACE");
+                if (tr && tr[0] && tr[0] != '0') {
+                    fprintf(stderr,
+                            "hao:irgen:leave_spill base=%zu next=%zu high=%zu\n",
+                            base, pool.next, pool.highWater);
+                    fflush(stderr);
+                }
+            }
             size_t lim = pool.highWater > pool.next ? pool.highWater : pool.next;
             if (lim > pool.slots.size()) lim = pool.slots.size();
             for (size_t i = base; i < lim; ++i)
@@ -708,6 +718,16 @@ void IRGen::unpinLoopSpillCheckpoint() {
     auto& pool = loopSpillPools_.back();
     if (pool.stickyStack.empty()) return;
     size_t sticky = pool.stickyStack.back();
+    /* A9：正路径可观测（默认关） */
+    {
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr,
+                    "hao:irgen:unpin_spill sticky=%zu next=%zu\n",
+                    sticky, pool.next);
+            fflush(stderr);
+        }
+    }
     size_t lim = pool.next > sticky ? pool.next : sticky;
     for (size_t i = sticky; i < lim && i < pool.slots.size(); ++i)
         emitStore("ptr", "null", pool.slots[i]);

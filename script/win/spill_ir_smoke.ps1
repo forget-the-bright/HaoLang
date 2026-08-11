@@ -260,6 +260,23 @@ if ($LASTEXITCODE -eq 0) {
     $fail++
 }
 
+# U11: catch-only (no finally) root smoke
+$out11 = & $hao run (Join-Path $Root "test\gc_try_catch_only_root_smoke.hao") 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0) {
+    $tc11 = ([regex]::Matches($out11, '(?m)^true\s*$')).Count
+    if ($tc11 -ge 4) {
+        Write-Host "OK   gc_try_catch_only_root_smoke true x4"
+    } else {
+        Write-Host "FAIL catch-only smoke true count=$tc11"
+        Write-Host $out11
+        $fail++
+    }
+} else {
+    Write-Host "FAIL gc_try_catch_only_root_smoke exit=$LASTEXITCODE"
+    Write-Host $out11
+    $fail++
+}
+
 # H1: HAO_GC_VERIFY=1 normal collect
 $prevVerify = $env:HAO_GC_VERIFY
 $env:HAO_GC_VERIFY = "1"
@@ -350,6 +367,22 @@ if ($traceEc2 -eq 0 -and $traceOut2 -match 'hao:irgen:recycle_spill target=') {
     Write-Host "OK   HAO_IRGEN_TRACE recycle_spill prefix"
 } else {
     Write-Host "FAIL HAO_IRGEN_TRACE recycle_spill"
+    Write-Host $traceOut2
+    $fail++
+}
+
+# A9: unpin_spill + leave_spill prefixes
+if ($traceEc -eq 0 -and $traceOut -match 'hao:irgen:leave_spill base=') {
+    Write-Host "OK   HAO_IRGEN_TRACE leave_spill prefix"
+} else {
+    Write-Host "FAIL HAO_IRGEN_TRACE leave_spill"
+    Write-Host $traceOut
+    $fail++
+}
+if ($traceEc2 -eq 0 -and $traceOut2 -match 'hao:irgen:unpin_spill sticky=') {
+    Write-Host "OK   HAO_IRGEN_TRACE unpin_spill prefix"
+} else {
+    Write-Host "FAIL HAO_IRGEN_TRACE unpin_spill"
     Write-Host $traceOut2
     $fail++
 }

@@ -223,6 +223,7 @@ void hao_debug_poison_scan_pin(void);
 void hao_debug_poison_remset(void);
 void hao_debug_poison_refl_i64(void);
 void hao_debug_poison_gpr(void);
+void hao_debug_poison_c_leaf(void);
 /* V4：HAO_GC_VERIFY=1 时因 gc_collecting 跳过 collect 的次数 */
 int64_t hao_gc_verify_skip_reenter(void);
 /* R3：Metrics 表化（名称→getter）；不改变 GC.summary 语义 */

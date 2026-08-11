@@ -1,0 +1,33 @@
+// U11：catch-only（无 finally）GC 根存活（发现向；非全量 unwind）
+package main;
+
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var kept: Box? = null;
+    try {
+        var junk = new Box("catch-only");
+        kept = junk;
+        throw new Exception("x");
+    } catch (e: Exception) {
+        gc.GC.collect();
+        fmt.println(kept!!.s == "catch-only");
+        fmt.println(e.getMessage().length > 0);
+    }
+
+    var outer = new Box("outer");
+    try {
+        throw new Exception("y");
+    } catch (e: Exception) {
+        gc.GC.collect();
+        fmt.println(outer.s == "outer");
+    }
+
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}
