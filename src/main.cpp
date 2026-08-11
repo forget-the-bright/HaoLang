@@ -396,6 +396,8 @@ int main(int argc, char** argv) {
             opts.target = argv[++i];
         } else if (a == "--keep-ir") {
             opts.keepIR = true;
+        } else if (a == "-g") {
+            opts.emitDebug = true;
         } else if (a == "-v" || a == "--verbose") {
             opts.verbose = true;
         } else if (a == "--link" && i + 1 < argc) {

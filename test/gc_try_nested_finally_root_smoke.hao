@@ -1,0 +1,55 @@
+// U4：try×try×finally / for×try GC 根存活（发现向；非全量 unwind）
+package main;
+
+import collections.*;
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    // 1) 嵌套 try：throw 穿内层 finally → 外层 catch/finally，根仍可读
+    var outer = new List<Object>();
+    var held = new Box("held");
+    try {
+        try {
+            outer.add(new Box("inner"));
+            throw new Exception("nest");
+        } finally {
+            fmt.println(outer.size() == 1);
+            fmt.println((outer.get(0) as Box).s == "inner");
+            fmt.println(held.s == "held");
+        }
+    } catch (e: Exception) {
+        fmt.println(outer.size() == 1);
+        fmt.println(held.s == "held");
+    } finally {
+        fmt.println((outer.get(0) as Box).s == "inner");
+        fmt.println(held.s == "held");
+    }
+
+    // 2) for × try × continue 穿 finally：外层 keep 不被误 null
+    var keep = new Box("keep");
+    var xs = new List<Object>();
+    xs.add(new Box("a"));
+    xs.add(new Box("b"));
+    xs.add(new Box("c"));
+    var n = 0;
+    for (it in xs) {
+        try {
+            n += 1;
+            if (n == 2) {
+                continue;
+            }
+        } finally {
+            fmt.println(keep.s == "keep");
+        }
+        fmt.println((it as Box).s.length > 0);
+    }
+
+    fmt.println(n == 3);
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

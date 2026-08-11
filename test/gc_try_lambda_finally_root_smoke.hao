@@ -1,0 +1,29 @@
+// U6b：lambda 体 try/finally GC 根存活（发现向；非全量 unwind）
+package main;
+
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var outer = new Box("outer");
+    val run: () -> Int = {
+        var inner = new Box("inner");
+        try {
+            gc.GC.collect();
+            fmt.println(inner.s == "inner");
+            fmt.println(outer.s == "outer");
+            return 1;
+        } finally {
+            fmt.println(inner.s == "inner");
+            fmt.println(outer.s == "outer");
+        }
+    };
+    fmt.println(run() == 1);
+    fmt.println(outer.s == "outer");
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

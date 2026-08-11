@@ -7,6 +7,7 @@
 namespace hao {
 Value IRGen::genExpr(HaoLangParser::ExprContext* e) {
     if (!e) return Value();
+    setDebugLoc(e);
     return genAssign(e->assignExpr());
 }
 
@@ -121,8 +122,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
             }
 
             // 复合赋值 a[i] += v（窄整数/浮点先提升再写回 trunc）
-            std::string cur = em_.nextTemp();
-            em_.emit(cur + " = load " + elemType->llvmType() + ", ptr " + ptr);
+            std::string cur = emitLoad(elemType->llvmType(), ptr);
             Value curV(cur, elemType);
             if (!ensureNonNullOperand(curV, e, op) ||
                 !ensureNonNullOperand(rhs, e, op))
@@ -178,18 +178,14 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
             rhs = coerce(rhs, calcTy, 0, 0);
             if (op == "<<=" || op == ">>=") {
                 int mask = (1 << Type::shiftMaskBits(calcTy->kind)) - 1;
-                std::string masked = em_.nextTemp();
-                em_.emit(masked + " = and " + calcTy->llvmType() + " " + rhs.ir +
-                         ", " + std::to_string(mask));
+                std::string masked = emitBinOp("and", calcTy->llvmType(), rhs.ir, std::to_string(mask));
                 rhs = Value(masked, calcTy);
             }
             if (!isF && (op == "/=" || op == "%=")) {
                 emitIntDivZeroCheck(rhs);
                 if (!isU) rhs = emitSafeSignedDivisor(curV, rhs);
             }
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = " + irOp + " " + calcTy->llvmType() +
-                     " " + curV.ir + ", " + rhs.ir);
+            std::string reg = emitBinOp(irOp, calcTy->llvmType(), curV.ir, rhs.ir);
             Value out(reg, calcTy);
             out = coerce(out, elemType, 0, 0);
             emitHeapStore(ptr, out.ir, elemType, arr.ir);
@@ -253,8 +249,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                     }
 
                     // 复合赋值 Class.X op= v
-                    std::string cur = em_.nextTemp();
-                    em_.emit(cur + " = load " + sfi->type->llvmType() + ", ptr " + gptr);
+                    std::string cur = emitLoad(sfi->type->llvmType(), gptr);
 
                     if (sfi->type->kind == TypeKind::String && op == "+=") {
                         Value curV(cur, sfi->type);
@@ -269,9 +264,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                             return Value();
                         }
                         rootGcOperand(rs);
-                        std::string reg = em_.nextTemp();
-                        em_.emit(reg + " = call ptr @hao_str_concat(ptr " + curV.ir +
-                                 ", ptr " + rs.ir + ")");
+                        std::string reg = emitCall("ptr", "@hao_str_concat", "ptr " + curV.ir + ", ptr " + rs.ir);
                         Value out(reg, Type::makeString());
                         rootGcOperand(out);
                         emitGlobalGcStore(gptr, out.ir, Type::makeString());
@@ -288,9 +281,8 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                         }
                         rhs = coerce(rhs, elemType, 0, 0);
                         std::string val64 = em_.boxToI64(rhs.ir, elemType);
-                        std::string reg = em_.nextTemp();
-                        em_.emit(reg + " = call ptr @hao_array_push(ptr " + cur +
-                                 ", i64 " + val64 + ")");
+                        std::string reg = emitCall("ptr", "@hao_array_push",
+                                                   "ptr " + cur + ", i64 " + val64);
                         emitGlobalGcStore(gptr, reg, sfi->type);
                         return Value(reg, sfi->type);
                     }
@@ -356,22 +348,17 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                     rhs = coerce(rhs, calcTy, 0, 0);
                     if (op == "<<=" || op == ">>=") {
                         int mask = (1 << Type::shiftMaskBits(calcTy->kind)) - 1;
-                        std::string masked = em_.nextTemp();
-                        em_.emit(masked + " = and " + calcTy->llvmType() + " " +
-                                 rhs.ir + ", " + std::to_string(mask));
+                        std::string masked = emitBinOp("and", calcTy->llvmType(), rhs.ir, std::to_string(mask));
                         rhs = Value(masked, calcTy);
                     }
                     if (!isF && (op == "/=" || op == "%=")) {
                         emitIntDivZeroCheck(rhs);
                         if (!isU) rhs = emitSafeSignedDivisor(curV, rhs);
                     }
-                    std::string reg = em_.nextTemp();
-                    em_.emit(reg + " = " + irOp + " " + calcTy->llvmType() +
-                             " " + curV.ir + ", " + rhs.ir);
+                    std::string reg = emitBinOp(irOp, calcTy->llvmType(), curV.ir, rhs.ir);
                     Value out(reg, calcTy);
                     out = coerce(out, sfi->type, 0, 0);
-                    em_.emit("store " + sfi->type->llvmType() + " " + out.ir +
-                             ", ptr " + gptr);
+                    emitStore(sfi->type->llvmType(), out.ir, gptr);
                     return out;
                 }
 
@@ -417,8 +404,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                 }
 
                 // 复合赋值 obj.f += v
-                std::string cur = em_.nextTemp();
-                em_.emit(cur + " = load " + fi->type->llvmType() + ", ptr " + fp);
+                std::string cur = emitLoad(fi->type->llvmType(), fp);
 
                 // 字符串 += 走拼接（String? 字段须先 !!）
                 if (fi->type->kind == TypeKind::String && op == "+=") {
@@ -434,9 +420,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                         return Value();
                     }
                     rootGcOperand(rs);
-                    std::string reg = em_.nextTemp();
-                    em_.emit(reg + " = call ptr @hao_str_concat(ptr " + curV.ir +
-                             ", ptr " + rs.ir + ")");
+                    std::string reg = emitCall("ptr", "@hao_str_concat", "ptr " + curV.ir + ", ptr " + rs.ir);
                     Value out(reg, Type::makeString());
                     rootGcOperand(out);
                     emitHeapStore(fp, out.ir, Type::makeString(), recv.ir);
@@ -455,9 +439,8 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                     }
                     rhs = coerce(rhs, elemType, 0, 0);
                     std::string val64 = em_.boxToI64(rhs.ir, elemType);
-                    std::string reg = em_.nextTemp();
-                    em_.emit(reg + " = call ptr @hao_array_push(ptr " + cur +
-                             ", i64 " + val64 + ")");
+                    std::string reg = emitCall("ptr", "@hao_array_push",
+                                               "ptr " + cur + ", i64 " + val64);
                     emitHeapStore(fp, reg, fi->type, recv.ir);
                     return Value(reg, fi->type);
                 }
@@ -524,18 +507,14 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                 rhs = coerce(rhs, calcTy, 0, 0);
                 if (op == "<<=" || op == ">>=") {
                     int mask = (1 << Type::shiftMaskBits(calcTy->kind)) - 1;
-                    std::string masked = em_.nextTemp();
-                    em_.emit(masked + " = and " + calcTy->llvmType() + " " +
-                             rhs.ir + ", " + std::to_string(mask));
+                    std::string masked = emitBinOp("and", calcTy->llvmType(), rhs.ir, std::to_string(mask));
                     rhs = Value(masked, calcTy);
                 }
                 if (!isF && (op == "/=" || op == "%=")) {
                     emitIntDivZeroCheck(rhs);
                     if (!isU) rhs = emitSafeSignedDivisor(curV, rhs);
                 }
-                std::string reg = em_.nextTemp();
-                em_.emit(reg + " = " + irOp + " " + calcTy->llvmType() +
-                         " " + curV.ir + ", " + rhs.ir);
+                std::string reg = emitBinOp(irOp, calcTy->llvmType(), curV.ir, rhs.ir);
                 Value out(reg, calcTy);
                 out = coerce(out, fi->type, 0, 0);
                 emitHeapStore(fp, out.ir, fi->type, recv.ir);
@@ -579,8 +558,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                 return Value();
             }
             rootGcOperand(rs);
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_str_concat(ptr " + cur.ir + ", ptr " + rs.ir + ")");
+            std::string reg = emitCall("ptr", "@hao_str_concat", "ptr " + cur.ir + ", ptr " + rs.ir);
             Value out(reg, Type::makeString());
             rootGcOperand(out);
             emitVarStore(sym, Type::makeString(), out.ir);
@@ -601,9 +579,8 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
             // 把元素统一转成 i64 传入（任意 8 字节类型均可；可空/引用走 ptrtoint）
             std::string val64 = em_.boxToI64(rhs.ir, elemType);
 
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_array_push(ptr " + cur.ir +
-                     ", i64 " + val64 + ")");
+            std::string reg = emitCall("ptr", "@hao_array_push",
+                                       "ptr " + cur.ir + ", i64 " + val64);
             emitVarStore(sym, sym->type, reg);
             return Value(reg, sym->type);
         }
@@ -663,18 +640,14 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
         rhs = coerce(rhs, calcTy, 0, 0);
         if (op == "<<=" || op == ">>=") {
             int mask = (1 << Type::shiftMaskBits(calcTy->kind)) - 1;
-            std::string masked = em_.nextTemp();
-            em_.emit(masked + " = and " + calcTy->llvmType() + " " + rhs.ir +
-                     ", " + std::to_string(mask));
+            std::string masked = emitBinOp("and", calcTy->llvmType(), rhs.ir, std::to_string(mask));
             rhs = Value(masked, calcTy);
         }
         if (!isF && (op == "/=" || op == "%=")) {
             emitIntDivZeroCheck(rhs);
             if (!isU) rhs = emitSafeSignedDivisor(lhsV, rhs);
         }
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = " + irOp + " " + calcTy->llvmType() +
-                 " " + lhsV.ir + ", " + rhs.ir);
+        std::string reg = emitBinOp(irOp, calcTy->llvmType(), lhsV.ir, rhs.ir);
         Value out(reg, calcTy);
         out = coerce(out, sym->type, 0, 0);
         emitVarStore(sym, sym->type, out.ir);
@@ -696,6 +669,8 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
     }
     rhs = coerce(rhs, sym->type, 0, 0);
     emitVarStore(sym, sym->type, rhs.ir);
+    /* D6：-g 简单赋值薄 dbg.value（非全覆盖） */
+    emitDbgValueIf(sym->type->llvmType(), rhs.ir, varName, sym->line, 0);
     invalidateSmartCast(varName);
     return rhs;
 }
@@ -732,8 +707,7 @@ Value IRGen::genNullCoalesce(HaoLangParser::NullCoalesceExprContext* e) {
 
         std::string entryBlock = em_.currentBlock();
         std::string isNull = genNotNullCheck(acc);   // 1 表示非空
-        em_.emit("br i1 " + isNull + ", label %" + mergeL +
-                 ", label %" + rhsL);
+        emitCondBr(isNull, mergeL, rhsL);
 
         em_.emitLabel(rhsL);
         Value rhs = genOr(ors[i]);
@@ -779,12 +753,12 @@ Value IRGen::genNullCoalesce(HaoLangParser::NullCoalesceExprContext* e) {
         }
 
         std::string rhsBlock = em_.currentBlock();
-        em_.emit("br label %" + mergeL);
+        emitBr(mergeL);
 
         em_.emitLabel(mergeL);
-        std::string phi = em_.nextTemp();
-        em_.emit(phi + " = phi ptr [ " + acc.ir + ", %" + entryBlock +
-                 " ], [ " + rhsPtr.ir + ", %" + rhsBlock + " ]");
+        std::string phi = emitPhi("ptr",
+            "[ " + acc.ir + ", %" + entryBlock +
+            " ], [ " + rhsPtr.ir + ", %" + rhsBlock + " ]");
 
         // 底层是值类型且结果非可空：拆箱（窄整数先 wide 再 trunc）
         if (!resultType->nullable &&
@@ -793,41 +767,31 @@ Value IRGen::genNullCoalesce(HaoLangParser::NullCoalesceExprContext* e) {
             std::string unboxed;
             switch (resultType->kind) {
                 case TypeKind::Long: case TypeKind::ULong: case TypeKind::UIntPtr:
-                    unboxed = em_.nextTemp();
-                    em_.emit(unboxed + " = call i64 @hao_unbox_i64(ptr " + phi + ")");
+                    unboxed = emitCall("i64", "@hao_unbox_i64", "ptr " + phi);
                     break;
                 case TypeKind::Double:
-                    unboxed = em_.nextTemp();
-                    em_.emit(unboxed + " = call double @hao_unbox_f64(ptr " + phi + ")");
+                    unboxed = emitCall("double", "@hao_unbox_f64", "ptr " + phi);
                     break;
                 case TypeKind::Float:
-                    unboxed = em_.nextTemp();
-                    em_.emit(unboxed + " = call float @hao_unbox_f32(ptr " + phi + ")");
+                    unboxed = emitCall("float", "@hao_unbox_f32", "ptr " + phi);
                     break;
                 case TypeKind::Short: case TypeKind::UShort: {
-                    std::string wide = em_.nextTemp();
-                    em_.emit(wide + " = call i32 @hao_unbox_i32(ptr " + phi + ")");
-                    unboxed = em_.nextTemp();
-                    em_.emit(unboxed + " = trunc i32 " + wide + " to i16");
+                    std::string wide = emitCall("i32", "@hao_unbox_i32", "ptr " + phi);
+                    unboxed = emitCast("trunc", "i32", wide, "i16");
                     break;
                 }
                 case TypeKind::SByte: case TypeKind::Byte: {
-                    std::string wide = em_.nextTemp();
-                    em_.emit(wide + " = call i32 @hao_unbox_i32(ptr " + phi + ")");
-                    unboxed = em_.nextTemp();
-                    em_.emit(unboxed + " = trunc i32 " + wide + " to i8");
+                    std::string wide = emitCall("i32", "@hao_unbox_i32", "ptr " + phi);
+                    unboxed = emitCast("trunc", "i32", wide, "i8");
                     break;
                 }
                 case TypeKind::Bool: {
-                    std::string wide = em_.nextTemp();
-                    em_.emit(wide + " = call i32 @hao_unbox_i32(ptr " + phi + ")");
-                    unboxed = em_.nextTemp();
-                    em_.emit(unboxed + " = trunc i32 " + wide + " to i8");
+                    std::string wide = emitCall("i32", "@hao_unbox_i32", "ptr " + phi);
+                    unboxed = emitCast("trunc", "i32", wide, "i8");
                     break;
                 }
                 default: // Int / UInt / Char
-                    unboxed = em_.nextTemp();
-                    em_.emit(unboxed + " = call i32 @hao_unbox_i32(ptr " + phi + ")");
+                    unboxed = emitCall("i32", "@hao_unbox_i32", "ptr " + phi);
                     break;
             }
             acc = Value(unboxed, resultType);
@@ -859,7 +823,7 @@ Value IRGen::genOr(HaoLangParser::OrExprContext* e) {
 
         std::string lhsI1 = toI1(acc);
         std::string entryBlock = em_.currentBlock();   // phi 的短路前驱
-        em_.emit("br i1 " + lhsI1 + ", label %" + mergeL + ", label %" + rhsL);
+        emitCondBr(lhsI1, mergeL, rhsL);
 
         em_.emitLabel(rhsL);
         Value rhs = genAnd(ands[i]);
@@ -872,14 +836,13 @@ Value IRGen::genOr(HaoLangParser::OrExprContext* e) {
         std::string rhsI1 = toI1(rhs);
         // 右侧求值可能自身包含分支，其结束块以 currentBlock() 为准
         std::string rhsEndBlock = em_.currentBlock();
-        em_.emit("br label %" + mergeL);
+        emitBr(mergeL);
 
         em_.emitLabel(mergeL);
-        std::string phi = em_.nextTemp();
-        em_.emit(phi + " = phi i1 [ true, %" + entryBlock + " ], [ " +
-                 rhsI1 + ", %" + rhsEndBlock + " ]");
-        std::string ext = em_.nextTemp();
-        em_.emit(ext + " = zext i1 " + phi + " to i8");
+        std::string phi = emitPhi("i1",
+            "[ true, %" + entryBlock + " ], [ " +
+            rhsI1 + ", %" + rhsEndBlock + " ]");
+        std::string ext = emitCast("zext", "i1", phi, "i8");
         acc = Value(ext, Type::makeBool());
     }
     return acc;
@@ -905,7 +868,7 @@ Value IRGen::genAnd(HaoLangParser::AndExprContext* e) {
 
         std::string lhsI1 = toI1(acc);
         std::string entryBlock = em_.currentBlock();
-        em_.emit("br i1 " + lhsI1 + ", label %" + rhsL + ", label %" + mergeL);
+        emitCondBr(lhsI1, rhsL, mergeL);
 
         em_.emitLabel(rhsL);
         Value rhs = genBitOr(bits[i]);
@@ -917,14 +880,13 @@ Value IRGen::genAnd(HaoLangParser::AndExprContext* e) {
         if (!ensureNonNullOperand(rhs, bits[i], "&&")) return Value();
         std::string rhsI1 = toI1(rhs);
         std::string rhsEndBlock = em_.currentBlock();
-        em_.emit("br label %" + mergeL);
+        emitBr(mergeL);
 
         em_.emitLabel(mergeL);
-        std::string phi = em_.nextTemp();
-        em_.emit(phi + " = phi i1 [ false, %" + entryBlock + " ], [ " +
-                 rhsI1 + ", %" + rhsEndBlock + " ]");
-        std::string ext = em_.nextTemp();
-        em_.emit(ext + " = zext i1 " + phi + " to i8");
+        std::string phi = emitPhi("i1",
+            "[ false, %" + entryBlock + " ], [ " +
+            rhsI1 + ", %" + rhsEndBlock + " ]");
+        std::string ext = emitCast("zext", "i1", phi, "i8");
         acc = Value(ext, Type::makeBool());
     }
     return acc;
@@ -959,8 +921,7 @@ Value IRGen::genBitOr(HaoLangParser::BitOrExprContext* e) {
         }
         lhs = coerce(lhs, rt, 0, 0);
         rhs = coerce(rhs, rt, 0, 0);
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = or " + rt->llvmType() + " " + lhs.ir + ", " + rhs.ir);
+        std::string reg = emitBinOp("or", rt->llvmType(), lhs.ir, rhs.ir);
         lhs = Value(reg, rt);
     }
     return lhs;
@@ -995,8 +956,7 @@ Value IRGen::genBitXor(HaoLangParser::BitXorExprContext* e) {
         }
         lhs = coerce(lhs, rt, 0, 0);
         rhs = coerce(rhs, rt, 0, 0);
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = xor " + rt->llvmType() + " " + lhs.ir + ", " + rhs.ir);
+        std::string reg = emitBinOp("xor", rt->llvmType(), lhs.ir, rhs.ir);
         lhs = Value(reg, rt);
     }
     return lhs;
@@ -1031,8 +991,7 @@ Value IRGen::genBitAnd(HaoLangParser::BitAndExprContext* e) {
         }
         lhs = coerce(lhs, rt, 0, 0);
         rhs = coerce(rhs, rt, 0, 0);
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = and " + rt->llvmType() + " " + lhs.ir + ", " + rhs.ir);
+        std::string reg = emitBinOp("and", rt->llvmType(), lhs.ir, rhs.ir);
         lhs = Value(reg, rt);
     }
     return lhs;
@@ -1062,26 +1021,21 @@ Value IRGen::genEquality(HaoLangParser::EqualityExprContext* e) {
                            rhs.type->kind == TypeKind::String;
         // String? == null：指针与 null 比较
         if (bothStrings && eitherNull) {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = icmp " + (op == "==" ? "eq" : "ne") +
-                     " ptr " + lhs.ir + ", " + rhs.ir);
-            std::string ext = em_.nextTemp();
-            em_.emit(ext + " = zext i1 " + reg + " to i8");
+            std::string reg = emitICmp((op == "==" ? "eq" : "ne"), "ptr",
+                                       lhs.ir, rhs.ir);
+            std::string ext = emitCast("zext", "i1", reg, "i8");
             lhs = Value(ext, Type::makeBool());
             continue;
         }
 
         // String / String? 内容相等（hao_str_eq 已处理一侧/双侧 null）
         if (bothStrings) {
-            std::string eqr = em_.nextTemp();
-            em_.emit(eqr + " = call i8 @hao_str_eq(ptr " + lhs.ir + ", ptr " + rhs.ir + ")");
+            std::string eqr = emitCall("i8", "@hao_str_eq", "ptr " + lhs.ir + ", ptr " + rhs.ir);
             if (op == "==") {
                 lhs = Value(eqr, Type::makeBool());
             } else {
-                std::string i1r = em_.nextTemp();
-                em_.emit(i1r + " = icmp eq i8 " + eqr + ", 0");
-                std::string ext = em_.nextTemp();
-                em_.emit(ext + " = zext i1 " + i1r + " to i8");
+                std::string i1r = emitICmp("eq", "i8", eqr, "0");
+                std::string ext = emitCast("zext", "i1", i1r, "i8");
                 lhs = Value(ext, Type::makeBool());
             }
             continue;
@@ -1093,11 +1047,9 @@ Value IRGen::genEquality(HaoLangParser::EqualityExprContext* e) {
             Value ptrSide = lhs.type->isNull() ? rhs : lhs;
             std::string otherIR = lhs.type->isNull() ? rhs.ir : lhs.ir;
             (void)ptrSide;
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = icmp " + (op == "==" ? "eq" : "ne") +
-                     " ptr " + otherIR + ", null");
-            std::string ext = em_.nextTemp();
-            em_.emit(ext + " = zext i1 " + reg + " to i8");
+            std::string reg = emitICmp((op == "==" ? "eq" : "ne"), "ptr",
+                                       otherIR, "null");
+            std::string ext = emitCast("zext", "i1", reg, "i8");
             lhs = Value(ext, Type::makeBool());
             continue;
         }
@@ -1119,63 +1071,51 @@ Value IRGen::genEquality(HaoLangParser::EqualityExprContext* e) {
             std::string valL  = em_.nextLabel("eq.vals");
             std::string mergeL = em_.nextLabel("eq.merge");
 
-            std::string ln = em_.nextTemp();
-            em_.emit(ln + " = icmp eq ptr " + lhs.ir + ", null");
-            std::string rn = em_.nextTemp();
-            em_.emit(rn + " = icmp eq ptr " + rhs.ir + ", null");
-            std::string bothN = em_.nextTemp();
-            em_.emit(bothN + " = and i1 " + ln + ", " + rn);
-            std::string eitherN = em_.nextTemp();
-            em_.emit(eitherN + " = or i1 " + ln + ", " + rn);
+            std::string ln = emitICmp("eq", "ptr", lhs.ir, "null");
+            std::string rn = emitICmp("eq", "ptr", rhs.ir, "null");
+            std::string bothN = emitBinOp("and", "i1", ln, rn);
+            std::string eitherN = emitBinOp("or", "i1", ln, rn);
 
             std::string entryBlk = em_.currentBlock();
-            em_.emit("br i1 " + bothN + ", label %" + bothL + ", label %" + oneL);
+            emitCondBr(bothN, bothL, oneL);
 
             em_.emitLabel(bothL);
             // 双侧 null：== → true，!= → false
-            em_.emit("br label %" + mergeL);
+            emitBr(mergeL);
             std::string bothBlk = em_.currentBlock();
 
             em_.emitLabel(oneL);
             // 恰一侧 null → 不相等；否则比载荷
-            em_.emit("br i1 " + eitherN + ", label %" + mergeL + ", label %" + valL);
+            emitCondBr(eitherN, mergeL, valL);
             std::string oneBlk = em_.currentBlock();
 
             em_.emitLabel(valL);
             auto unboxSide = [&](const std::string& ptr) -> std::string {
                 switch (lhs.type->kind) {
                     case TypeKind::Long: case TypeKind::ULong: case TypeKind::UIntPtr: {
-                        std::string r = em_.nextTemp();
-                        em_.emit(r + " = call i64 @hao_unbox_i64(ptr " + ptr + ")");
+                        std::string r = emitCall("i64", "@hao_unbox_i64", "ptr " + ptr);
                         return r;
                     }
                     case TypeKind::Double: {
-                        std::string r = em_.nextTemp();
-                        em_.emit(r + " = call double @hao_unbox_f64(ptr " + ptr + ")");
+                        std::string r = emitCall("double", "@hao_unbox_f64", "ptr " + ptr);
                         return r;
                     }
                     case TypeKind::Float: {
-                        std::string r = em_.nextTemp();
-                        em_.emit(r + " = call float @hao_unbox_f32(ptr " + ptr + ")");
+                        std::string r = emitCall("float", "@hao_unbox_f32", "ptr " + ptr);
                         return r;
                     }
                     case TypeKind::Short: case TypeKind::UShort: {
-                        std::string w = em_.nextTemp();
-                        em_.emit(w + " = call i32 @hao_unbox_i32(ptr " + ptr + ")");
-                        std::string r = em_.nextTemp();
-                        em_.emit(r + " = trunc i32 " + w + " to i16");
+                        std::string w = emitCall("i32", "@hao_unbox_i32", "ptr " + ptr);
+                        std::string r = emitCast("trunc", "i32", w, "i16");
                         return r;
                     }
                     case TypeKind::SByte: case TypeKind::Byte: case TypeKind::Bool: {
-                        std::string w = em_.nextTemp();
-                        em_.emit(w + " = call i32 @hao_unbox_i32(ptr " + ptr + ")");
-                        std::string r = em_.nextTemp();
-                        em_.emit(r + " = trunc i32 " + w + " to i8");
+                        std::string w = emitCall("i32", "@hao_unbox_i32", "ptr " + ptr);
+                        std::string r = emitCast("trunc", "i32", w, "i8");
                         return r;
                     }
                     default: { // Int / UInt / Char
-                        std::string r = em_.nextTemp();
-                        em_.emit(r + " = call i32 @hao_unbox_i32(ptr " + ptr + ")");
+                        std::string r = emitCall("i32", "@hao_unbox_i32", "ptr " + ptr);
                         return r;
                     }
                 }
@@ -1183,32 +1123,30 @@ Value IRGen::genEquality(HaoLangParser::EqualityExprContext* e) {
             std::string lv = unboxSide(lhs.ir);
             std::string rv = unboxSide(rhs.ir);
             std::string lty = Type::makeOfKind(lhs.type->kind)->llvmType();
-            std::string vc = em_.nextTemp();
+            std::string vc;
             if (lhs.type->kind == TypeKind::Double || lhs.type->kind == TypeKind::Float) {
-                em_.emit(vc + " = fcmp oeq " + lty + " " + lv + ", " + rv);
+                vc = emitFCmp("oeq", lty, lv, rv);
             } else {
-                em_.emit(vc + " = icmp eq " + lty + " " + lv + ", " + rv);
+                vc = emitICmp("eq", lty, lv, rv);
             }
             // != 时在 vals 块内取反，再汇入 phi
             bool isEq = (op == "==");
             std::string valI1 = vc;
             if (!isEq) {
-                valI1 = em_.nextTemp();
-                em_.emit(valI1 + " = xor i1 " + vc + ", true");
+                valI1 = emitBinOp("xor", "i1", vc, "true");
             }
-            em_.emit("br label %" + mergeL);
+            emitBr(mergeL);
             std::string valBlk = em_.currentBlock();
 
             em_.emitLabel(mergeL);
             // bothnull: ==→true !=→false；onenull: ==→false !=→true；vals: valI1
-            std::string phi = em_.nextTemp();
-            em_.emit(phi + " = phi i1 [ " + std::string(isEq ? "true" : "false") +
-                     ", %" + bothBlk + " ], [ " +
-                     std::string(isEq ? "false" : "true") + ", %" + oneBlk +
-                     " ], [ " + valI1 + ", %" + valBlk + " ]");
+            std::string phi = emitPhi("i1",
+                "[ " + std::string(isEq ? "true" : "false") +
+                ", %" + bothBlk + " ], [ " +
+                std::string(isEq ? "false" : "true") + ", %" + oneBlk +
+                " ], [ " + valI1 + ", %" + valBlk + " ]");
             (void)entryBlk;
-            std::string ext = em_.nextTemp();
-            em_.emit(ext + " = zext i1 " + phi + " to i8");
+            std::string ext = emitCast("zext", "i1", phi, "i8");
             lhs = Value(ext, Type::makeBool());
             continue;
         }
@@ -1216,11 +1154,9 @@ Value IRGen::genEquality(HaoLangParser::EqualityExprContext* e) {
         // 引用可空（对象?/数组? 等）：指针身份相等
         if (eitherNullable && lhs.type->llvmType() == "ptr" &&
             rhs.type->llvmType() == "ptr") {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = icmp " + (op == "==" ? "eq" : "ne") +
-                     " ptr " + lhs.ir + ", " + rhs.ir);
-            std::string ext = em_.nextTemp();
-            em_.emit(ext + " = zext i1 " + reg + " to i8");
+            std::string reg = emitICmp((op == "==" ? "eq" : "ne"), "ptr",
+                                       lhs.ir, rhs.ir);
+            std::string ext = emitCast("zext", "i1", reg, "i8");
             lhs = Value(ext, Type::makeBool());
             continue;
         }
@@ -1250,16 +1186,15 @@ Value IRGen::genEquality(HaoLangParser::EqualityExprContext* e) {
             }
             lhs = coerce(lhs, rt, 0, 0);
             rhs = coerce(rhs, rt, 0, 0);
-            std::string reg = em_.nextTemp();
+            std::string reg;
             if (rt->isFloating()) {
-                em_.emit(reg + " = fcmp " + (op == "==" ? "oeq" : "one") +
-                         " " + rt->llvmType() + " " + lhs.ir + ", " + rhs.ir);
+                reg = emitFCmp((op == "==" ? "oeq" : "one"), rt->llvmType(),
+                               lhs.ir, rhs.ir);
             } else {
-                em_.emit(reg + " = icmp " + (op == "==" ? "eq" : "ne") +
-                         " " + rt->llvmType() + " " + lhs.ir + ", " + rhs.ir);
+                reg = emitICmp((op == "==" ? "eq" : "ne"), rt->llvmType(),
+                               lhs.ir, rhs.ir);
             }
-            std::string ext = em_.nextTemp();
-            em_.emit(ext + " = zext i1 " + reg + " to i8");
+            std::string ext = emitCast("zext", "i1", reg, "i8");
             lhs = Value(ext, Type::makeBool());
             continue;
         }
@@ -1273,11 +1208,8 @@ Value IRGen::genEquality(HaoLangParser::EqualityExprContext* e) {
         }
         {
             std::string ty = lhs.type->llvmType();
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = icmp " + (op == "==" ? "eq" : "ne") +
-                     " " + ty + " " + lhs.ir + ", " + rhs.ir);
-            std::string ext = em_.nextTemp();
-            em_.emit(ext + " = zext i1 " + reg + " to i8");
+            std::string reg = emitICmp((op == "==" ? "eq" : "ne"), ty, lhs.ir, rhs.ir);
+            std::string ext = emitCast("zext", "i1", reg, "i8");
             lhs = Value(ext, Type::makeBool());
         }
     }
@@ -1334,9 +1266,7 @@ Value IRGen::genRelational(HaoLangParser::RelationalExprContext* e) {
             return Value();
         }
 
-        std::string chk = em_.nextTemp();
-        em_.emit(chk + " = call i8 @hao_type_is(ptr " + obj.ir +
-                 ", ptr " + it->second + ")");
+        std::string chk = emitCall("i8", "@hao_type_is", "ptr " + obj.ir + ", ptr " + it->second);
 
         if (isIs) return Value(chk, Type::makeBool());
 
@@ -1344,13 +1274,13 @@ Value IRGen::genRelational(HaoLangParser::RelationalExprContext* e) {
         std::string okL   = em_.nextLabel("cast.ok");
         std::string failL = em_.nextLabel("cast.fail");
         std::string cond  = em_.nextTemp();
-        em_.emit(cond + " = icmp ne i8 " + chk + ", 0");
-        em_.emit("br i1 " + cond + ", label %" + okL + ", label %" + failL);
+        cond = emitICmp("ne", "i8", chk, "0");
+        emitCondBr(cond, okL, failL);
 
         em_.emitLabel(failL);
         std::string msg = em_.internString(target->toString());
-        em_.emit("call void @hao_panic_cast(ptr " + msg + ")");
-        em_.emit("unreachable");
+        emitCallVoid("@hao_panic_cast", "ptr " + msg);
+        emitUnreachable();
 
         em_.emitLabel(okL);
         blockTerminated_ = false;
@@ -1390,12 +1320,11 @@ Value IRGen::genRelational(HaoLangParser::RelationalExprContext* e) {
         }
         lhs = coerce(lhs, rt, 0, 0);
         rhs = coerce(rhs, rt, 0, 0);
-        std::string reg = em_.nextTemp();
+        std::string reg;
         if (rt->isFloating()) {
             std::string pred = (op == "<") ? "olt" : (op == ">") ? "ogt"
                              : (op == "<=") ? "ole" : "oge";
-            em_.emit(reg + " = fcmp " + pred + " " + rt->llvmType() +
-                     " " + lhs.ir + ", " + rhs.ir);
+            reg = emitFCmp(pred, rt->llvmType(), lhs.ir, rhs.ir);
         } else {
             bool un = rt->isUnsigned();
             std::string pred;
@@ -1403,11 +1332,9 @@ Value IRGen::genRelational(HaoLangParser::RelationalExprContext* e) {
             else if (op == ">")  pred = un ? "ugt" : "sgt";
             else if (op == "<=") pred = un ? "ule" : "sle";
             else                 pred = un ? "uge" : "sge";
-            em_.emit(reg + " = icmp " + pred + " " + rt->llvmType() +
-                     " " + lhs.ir + ", " + rhs.ir);
+            reg = emitICmp(pred, rt->llvmType(), lhs.ir, rhs.ir);
         }
-        std::string ext = em_.nextTemp();
-        em_.emit(ext + " = zext i1 " + reg + " to i8");
+        std::string ext = emitCast("zext", "i1", reg, "i8");
         lhs = Value(ext, Type::makeBool());
     }
     return lhs;
@@ -1463,15 +1390,11 @@ Value IRGen::genShift(HaoLangParser::ShiftExprContext* e) {
         rhs = coerce(rhs, rt, 0, 0);
         int maskBits = Type::shiftMaskBits(rt->kind);
         int mask = (1 << maskBits) - 1;
-        std::string masked = em_.nextTemp();
-        em_.emit(masked + " = and " + rt->llvmType() + " " + rhs.ir + ", " +
-                 std::to_string(mask));
+        std::string masked = emitBinOp("and", rt->llvmType(), rhs.ir, std::to_string(mask));
         std::string irOp;
         if (op == "<<") irOp = "shl";
         else irOp = rt->isUnsigned() ? "lshr" : "ashr";
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = " + irOp + " " + rt->llvmType() +
-                 " " + lhs.ir + ", " + masked);
+        std::string reg = emitBinOp(irOp, rt->llvmType(), lhs.ir, masked);
         lhs = Value(reg, rt);
         childIdx += 1; // 跳过本段右侧 additive
     }
@@ -1514,8 +1437,7 @@ Value IRGen::genAdditive(HaoLangParser::AdditiveExprContext* e) {
                 return Value();
             }
             rootGcOperand(rs);
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_str_concat(ptr " + ls.ir + ", ptr " + rs.ir + ")");
+            std::string reg = emitCall("ptr", "@hao_str_concat", "ptr " + ls.ir + ", ptr " + rs.ir);
             lhs = Value(reg, Type::makeString());
             rootGcOperand(lhs); /* 拼接结果跨后续右操作数/调用 */
             continue;
@@ -1545,9 +1467,7 @@ Value IRGen::genAdditive(HaoLangParser::AdditiveExprContext* e) {
         bool isF = rt->isFloating();
         std::string irOp = isF ? (op == "+" ? "fadd" : "fsub")
                                : (op == "+" ? "add"  : "sub");
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = " + irOp + " " + rt->llvmType() + " " +
-                 lhs.ir + ", " + rhs.ir);
+        std::string reg = emitBinOp(irOp, rt->llvmType(), lhs.ir, rhs.ir);
         lhs = Value(reg, rt);
     }
     return lhs;
@@ -1605,9 +1525,7 @@ Value IRGen::genMultiplicative(HaoLangParser::MultiplicativeExprContext* e) {
                 rhs = emitSafeSignedDivisor(lhs, rhs);
         }
 
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = " + irOp + " " + rt->llvmType() + " " +
-                 lhs.ir + ", " + rhs.ir);
+        std::string reg = emitBinOp(irOp, rt->llvmType(), lhs.ir, rhs.ir);
         lhs = Value(reg, rt);
     }
     return lhs;
@@ -1630,11 +1548,11 @@ Value IRGen::genUnary(HaoLangParser::UnaryExprContext* e) {
         // 窄整数一元取负至少升到 Int
         if (v.type->isInteger() && Type::bitWidthBits(v.type->kind) < 32)
             v = coerce(v, Type::makeInt(), 0, 0);
-        std::string reg = em_.nextTemp();
+        std::string reg;
         if (v.type->isFloating())
-            em_.emit(reg + " = fneg " + v.type->llvmType() + " " + v.ir);
+            reg = emitFNeg(v.type->llvmType(), v.ir);
         else
-            em_.emit(reg + " = sub " + v.type->llvmType() + " 0, " + v.ir);
+            reg = emitBinOp("sub", v.type->llvmType(), "0", v.ir);
         return Value(reg, v.type);
     }
 
@@ -1657,8 +1575,7 @@ Value IRGen::genUnary(HaoLangParser::UnaryExprContext* e) {
         if (!ensureNonNullOperand(v, e, "~")) return Value();
         if (Type::bitWidthBits(v.type->kind) < 32)
             v = coerce(v, Type::makeInt(), 0, 0);
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = xor " + v.type->llvmType() + " " + v.ir + ", -1");
+        std::string reg = emitBinOp("xor", v.type->llvmType(), v.ir, "-1");
         return Value(reg, v.type);
     }
 
@@ -1668,10 +1585,8 @@ Value IRGen::genUnary(HaoLangParser::UnaryExprContext* e) {
             return Value();
         }
         if (!ensureNonNullOperand(v, e, "!")) return Value();
-        std::string i1 = em_.nextTemp();
-        em_.emit(i1 + " = icmp eq i8 " + v.ir + ", 0");
-        std::string ext = em_.nextTemp();
-        em_.emit(ext + " = zext i1 " + i1 + " to i8");
+        std::string i1 = emitICmp("eq", "i8", v.ir, "0");
+        std::string ext = emitCast("zext", "i1", i1, "i8");
         return Value(ext, Type::makeBool());
     }
 
@@ -1703,19 +1618,15 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
         if (base.type->kind == TypeKind::String) {
             Value b = base;
             rootGcOperand(b);
-            std::string wide = em_.nextTemp();
-            em_.emit(wide + " = call i64 @hao_str_len(ptr " + b.ir + ")");
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = trunc i64 " + wide + " to i32");
+            std::string wide = emitCall("i64", "@hao_str_len", "ptr " + b.ir);
+            std::string reg = emitCast("trunc", "i64", wide, "i32");
             return Value(reg, Type::makeInt());
         }
         if (base.type->kind == TypeKind::Array) {
             Value b = base;
             rootGcOperand(b);
-            std::string wide = em_.nextTemp();
-            em_.emit(wide + " = call i64 @hao_array_len(ptr " + b.ir + ")");
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = trunc i64 " + wide + " to i32");
+            std::string wide = emitCall("i64", "@hao_array_len", "ptr " + b.ir);
+            std::string reg = emitCast("trunc", "i64", wide, "i32");
             return Value(reg, Type::makeInt());
         }
     }
@@ -1736,9 +1647,8 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
                 return Value();
             }
             emitStaticEnsureInit(ci);
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = load " + sfi->type->llvmType() +
-                     ", ptr @" + ci->name + "." + sfi->name);
+            std::string reg = emitLoad(sfi->type->llvmType(),
+                           "@" + ci->name + "." + sfi->name);
             return Value(reg, sfi->type);
         }
         if (const FieldInfo* fi = ci->findField(field)) {
@@ -1754,8 +1664,7 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
                 return Value();
             }
             std::string fp = fieldPtr(base.ir, fi->slot);
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = load " + fi->type->llvmType() + ", ptr " + fp);
+            std::string reg = emitLoad(fi->type->llvmType(), fp);
             return Value(reg, fi->type);
         }
         // 方法组转换（v0.19.0）：obj.method 作为函数值，绑定 this。
@@ -1776,10 +1685,9 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
             // slot0=fnptr 非 GC；slot1=this
             std::string env = emitObjectNew(2, 2);
             std::string envSlot = emitSpillGcRoot("mwrap.env", env);
-            env = em_.nextTemp();
-            em_.emit(env + " = load ptr, ptr " + envSlot);
+            env = emitLoad("ptr", envSlot);
             std::string fp0 = fieldPtr(env, 0);
-            em_.emit("store ptr " + wname + ", ptr " + fp0);
+            emitStore("ptr", wname, fp0);
             std::string fp1 = fieldPtr(env, 1);
             emitHeapStore(fp1, baseR.ir, baseR.type, env);
             return Value(env, Type::makeFunc(mmi->paramTypes, mmi->returnType));
@@ -1822,9 +1730,7 @@ Value IRGen::applyIndex(const Value& base, HaoLangParser::IndexOpContext* io,
         if (!ensureNonNullOperand(idx, io->expr(), "字符串下标")) return Value();
         // 与数组下标一致：保留 i64，避免 Long 经 Int 截断后静默错位
         std::string idx64 = indexAsI64(idx);
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call i32 @hao_str_char_at(ptr " + baseR.ir +
-                 ", i64 " + idx64 + ")");
+        std::string reg = emitCall("i32", "@hao_str_char_at", "ptr " + baseR.ir + ", i64 " + idx64);
         return Value(reg, Type::makeChar());
     }
 
@@ -1843,8 +1749,7 @@ Value IRGen::applyIndex(const Value& base, HaoLangParser::IndexOpContext* io,
     if (!ensureNonNullOperand(idx, io->expr(), "数组下标")) return Value();
 
     std::string ptr = arrayElemPtr(baseR, idx);
-    std::string reg = em_.nextTemp();
-    em_.emit(reg + " = load " + elemType->llvmType() + ", ptr " + ptr);
+    std::string reg = emitLoad(elemType->llvmType(), ptr);
     return Value(reg, elemType);
 }
 
@@ -1870,8 +1775,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                 return Value();
             }
             TypePtr elemType = recvR.type->elem ? recvR.type->elem : Type::makeInt();
-            std::string raw = em_.nextTemp();
-            em_.emit(raw + " = call i64 @hao_array_pop(ptr " + recvR.ir + ")");
+            std::string raw = emitCall("i64", "@hao_array_pop", "ptr " + recvR.ir);
             std::string reg = em_.unboxFromI64(raw, elemType);
             return Value(reg, elemType);
         }
@@ -1918,15 +1822,10 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
         }
 
         // 取虚表指针（对象槽位 0），再按槽位取函数指针
-        std::string vtp = em_.nextTemp();
-        em_.emit(vtp + " = getelementptr ptr, ptr " + recvR.ir + ", i64 0");
-        std::string vt = em_.nextTemp();
-        em_.emit(vt + " = load ptr, ptr " + vtp);
-        std::string mp = em_.nextTemp();
-        em_.emit(mp + " = getelementptr ptr, ptr " + vt + ", i64 " +
-                 std::to_string(im->vtableSlot));
-        std::string fp = em_.nextTemp();
-        em_.emit(fp + " = load ptr, ptr " + mp);
+        std::string vtp = emitGep("ptr", recvR.ir, "i64", "0");
+        std::string vt = emitLoad("ptr", vtp);
+        std::string mp = emitGep("ptr", vt, "i64", std::to_string(im->vtableSlot));
+        std::string fp = emitLoad("ptr", mp);
 
         std::string argStr = "ptr " + recvR.ir;
         std::string sigTypes = "ptr";
@@ -1942,14 +1841,14 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
             sigTypes += ", " + im->paramTypes[i]->llvmType();
         }
 
+        pinRuntimeCallSite(ctx);
         // 间接调用需显式写出函数类型
         std::string fnTy = im->returnType->llvmType() + " (" + sigTypes + ")";
         if (im->returnType->isUnit()) {
-            em_.emit("call " + fnTy + " " + fp + "(" + argStr + ")");
+            emitCallTyped(fnTy, fp, argStr);
             return Value("", Type::makeUnit());
         }
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call " + fnTy + " " + fp + "(" + argStr + ")");
+        std::string reg = emitCall(fnTy, fp, argStr);
         return Value(reg, im->returnType);
     }
 
@@ -2003,13 +1902,12 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                 if (k) argStr += ", ";
                 argStr += formatCallArg(smi->paramTypes[k], argExprs[k], args[k]);
             }
+            pinRuntimeCallSite(ctx);
             if (smi->returnType->isUnit()) {
-                em_.emit("call void " + smi->irName + "(" + argStr + ")");
+                emitCallVoid(smi->irName, argStr);
                 return Value("", Type::makeUnit());
             }
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call " + smi->returnType->llvmType() + " " +
-                     smi->irName + "(" + argStr + ")");
+            std::string reg = emitCall(smi->returnType->llvmType(), smi->irName, argStr);
             return Value(reg, smi->returnType);
         }
     }
@@ -2022,8 +1920,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                 return Value();
             }
             emitStaticEnsureInit(ci);
-            std::string fenv = em_.nextTemp();
-            em_.emit(fenv + " = load ptr, ptr @" + ci->name + "." + sff->name);
+            std::string fenv = emitLoad("ptr", "@" + ci->name + "." + sff->name);
             Value fenvV(fenv, sff->type);
             rootGcOperand(fenvV); /* Func env 跨实参求值 */
             fenv = fenvV.ir;
@@ -2047,8 +1944,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                 return Value();
             }
             std::string fpp = fieldPtr(fenv, 0);
-            std::string fp = em_.nextTemp();
-            em_.emit(fp + " = load ptr, ptr " + fpp);
+            std::string fp = emitLoad("ptr", fpp);
             std::string argStr = "ptr " + fenv;
             for (size_t k = 0; k < args.size(); ++k) {
                 if (!isAssignable(args[k].type, fnParams[k])) {
@@ -2063,12 +1959,10 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                 argStr += ", " + formatCallArg(fnParams[k], argExprs[k], args[k]);
             }
             if (fnRet->isUnit()) {
-                em_.emit("call void " + fp + "(" + argStr + ")");
+                emitCallVoid(fp, argStr);
                 return Value("", Type::makeUnit());
             }
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call " + fnRet->llvmType() + " " +
-                     fp + "(" + argStr + ")");
+            std::string reg = emitCall(fnRet->llvmType(), fp, argStr);
             return Value(reg, fnRet);
         }
     }
@@ -2096,8 +1990,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                     return Value();
                 }
                 std::string ffp = fieldPtr(recvR.ir, ffi->slot);
-                std::string fenv = em_.nextTemp();
-                em_.emit(fenv + " = load ptr, ptr " + ffp);
+                std::string fenv = emitLoad("ptr", ffp);
                 Value fenvV(fenv, ffi->type);
                 rootGcOperand(fenvV); /* Func env 跨实参求值 */
                 fenv = fenvV.ir;
@@ -2121,8 +2014,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                     return Value();
                 }
                 std::string fpp = fieldPtr(fenv, 0);
-                std::string fp = em_.nextTemp();
-                em_.emit(fp + " = load ptr, ptr " + fpp);
+                std::string fp = emitLoad("ptr", fpp);
                 std::string argStr = "ptr " + fenv;
                 for (size_t k = 0; k < args.size(); ++k) {
                     if (!isAssignable(args[k].type, fnParams[k])) {
@@ -2137,12 +2029,10 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                     argStr += ", " + formatCallArg(fnParams[k], argExprs[k], args[k]);
                 }
                 if (fnRet->isUnit()) {
-                    em_.emit("call void " + fp + "(" + argStr + ")");
+                    emitCallVoid(fp, argStr);
                     return Value("", Type::makeUnit());
                 }
-                std::string reg = em_.nextTemp();
-                em_.emit(reg + " = call " + fnRet->llvmType() + " " +
-                         fp + "(" + argStr + ")");
+                std::string reg = emitCall(fnRet->llvmType(), fp, argStr);
                 return Value(reg, fnRet);
             }
             error(ctx, "'" + method + "' 是字段而非方法，不能调用");
@@ -2222,38 +2112,32 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
         sigTypes += ", " + mi->paramTypes[i]->llvmType();
     }
 
+    pinRuntimeCallSite(ctx);
+
     // ---- 虚方法：经虚表分派 ----
     //  有虚表槽位说明该方法处在继承体系中且可能被覆写，必须动态分派，
     //  否则父类型引用会调到父类实现。super.m() 由专门分支处理。
     if (mi->vtableSlot >= 0 && ci->hasVTable) {
-        std::string vtp = em_.nextTemp();
-        em_.emit(vtp + " = getelementptr ptr, ptr " + recvR.ir + ", i64 0");
-        std::string vt = em_.nextTemp();
-        em_.emit(vt + " = load ptr, ptr " + vtp);
-        std::string mp = em_.nextTemp();
-        em_.emit(mp + " = getelementptr ptr, ptr " + vt + ", i64 " +
-                 std::to_string(mi->vtableSlot));
-        std::string fp = em_.nextTemp();
-        em_.emit(fp + " = load ptr, ptr " + mp);
+        std::string vtp = emitGep("ptr", recvR.ir, "i64", "0");
+        std::string vt = emitLoad("ptr", vtp);
+        std::string mp = emitGep("ptr", vt, "i64", std::to_string(mi->vtableSlot));
+        std::string fp = emitLoad("ptr", mp);
 
         std::string fnTy = mi->returnType->llvmType() + " (" + sigTypes + ")";
         if (mi->returnType->isUnit()) {
-            em_.emit("call " + fnTy + " " + fp + "(" + argStr + ")");
+            emitCallTyped(fnTy, fp, argStr);
             return Value("", Type::makeUnit());
         }
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call " + fnTy + " " + fp + "(" + argStr + ")");
+        std::string reg = emitCall(fnTy, fp, argStr);
         return Value(reg, mi->returnType);
     }
 
     // ---- 非虚方法：静态调用，零开销 ----
     if (mi->returnType->isUnit()) {
-        em_.emit("call void " + mi->irName + "(" + argStr + ")");
+        emitCallVoid(mi->irName, argStr);
         return Value("", Type::makeUnit());
     }
-    std::string reg = em_.nextTemp();
-    em_.emit(reg + " = call " + mi->returnType->llvmType() + " " +
-             mi->irName + "(" + argStr + ")");
+    std::string reg = emitCall(mi->returnType->llvmType(), mi->irName, argStr);
     return Value(reg, mi->returnType);
 }
 
@@ -2264,8 +2148,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
 // 生成对 ptr 非空性的 i1 检查（1 = 非空）。可空值类型已被装箱为 ptr，
 // 因此引用类型与值类型的空检查统一为指针与 0 比较。
 std::string IRGen::genNotNullCheck(const Value& v) {
-    std::string r = em_.nextTemp();
-    em_.emit(r + " = icmp ne ptr " + v.ir + ", null");
+    std::string r = emitICmp("ne", "ptr", v.ir, "null");
     return r;
 }
 
@@ -2284,14 +2167,14 @@ Value IRGen::applyNotNullAssert(const Value& base, antlr4::ParserRuleContext* ct
     std::string contL  = em_.nextLabel("nn.cont");
     std::string isNull = genNotNullCheck(base);
     std::string entryBlock = em_.currentBlock();
-    em_.emit("br i1 " + isNull + ", label %" + okL + ", label %" + panicL);
+    emitCondBr(isNull, okL, panicL);
 
     em_.emitLabel(panicL);
-    em_.emit("call void @hao_panic_null()");
-    em_.emit("unreachable");
+    emitCallVoid("@hao_panic_null", "");
+    emitUnreachable();
 
     em_.emitLabel(okL);
-    em_.emit("br label %" + contL);
+    emitBr(contL);
 
     em_.emitLabel(contL);
     (void)entryBlock;
@@ -2312,59 +2195,45 @@ Value IRGen::boxToNullable(const Value& v) {
     t->nullable = true;
     if (v.type->kind == TypeKind::Long || v.type->kind == TypeKind::ULong ||
         v.type->kind == TypeKind::UIntPtr) {
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call ptr @hao_box_i64(i64 " + v.ir + ")");
+        std::string reg = emitCall("ptr", "@hao_box_i64", "i64 " + v.ir);
         return Value(reg, t);
     }
     if (v.type->kind == TypeKind::Int || v.type->kind == TypeKind::UInt ||
         v.type->kind == TypeKind::Char) {
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call ptr @hao_box_i32(i32 " + v.ir + ")");
+        std::string reg = emitCall("ptr", "@hao_box_i32", "i32 " + v.ir);
         return Value(reg, t);
     }
     if (v.type->kind == TypeKind::Bool) {
-        std::string wide = em_.nextTemp();
-        em_.emit(wide + " = zext i8 " + v.ir + " to i32");
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call ptr @hao_box_i32(i32 " + wide + ")");
+        std::string wide = emitCast("zext", "i8", v.ir, "i32");
+        std::string reg = emitCall("ptr", "@hao_box_i32", "i32 " + wide);
         return Value(reg, t);
     }
     if (v.type->kind == TypeKind::Short) {
-        std::string wide = em_.nextTemp();
-        em_.emit(wide + " = sext i16 " + v.ir + " to i32");
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call ptr @hao_box_i32(i32 " + wide + ")");
+        std::string wide = emitCast("sext", "i16", v.ir, "i32");
+        std::string reg = emitCall("ptr", "@hao_box_i32", "i32 " + wide);
         return Value(reg, t);
     }
     if (v.type->kind == TypeKind::UShort) {
-        std::string wide = em_.nextTemp();
-        em_.emit(wide + " = zext i16 " + v.ir + " to i32");
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call ptr @hao_box_i32(i32 " + wide + ")");
+        std::string wide = emitCast("zext", "i16", v.ir, "i32");
+        std::string reg = emitCall("ptr", "@hao_box_i32", "i32 " + wide);
         return Value(reg, t);
     }
     if (v.type->kind == TypeKind::SByte) {
-        std::string wide = em_.nextTemp();
-        em_.emit(wide + " = sext i8 " + v.ir + " to i32");
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call ptr @hao_box_i32(i32 " + wide + ")");
+        std::string wide = emitCast("sext", "i8", v.ir, "i32");
+        std::string reg = emitCall("ptr", "@hao_box_i32", "i32 " + wide);
         return Value(reg, t);
     }
     if (v.type->kind == TypeKind::Byte) {
-        std::string wide = em_.nextTemp();
-        em_.emit(wide + " = zext i8 " + v.ir + " to i32");
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call ptr @hao_box_i32(i32 " + wide + ")");
+        std::string wide = emitCast("zext", "i8", v.ir, "i32");
+        std::string reg = emitCall("ptr", "@hao_box_i32", "i32 " + wide);
         return Value(reg, t);
     }
     if (v.type->kind == TypeKind::Double) {
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call ptr @hao_box_f64(double " + v.ir + ")");
+        std::string reg = emitCall("ptr", "@hao_box_f64", "double " + v.ir);
         return Value(reg, t);
     }
     if (v.type->kind == TypeKind::Float) {
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call ptr @hao_box_f32(float " + v.ir + ")");
+        std::string reg = emitCall("ptr", "@hao_box_f32", "float " + v.ir);
         return Value(reg, t);
     }
     return Value(v.ir, t);
@@ -2391,7 +2260,7 @@ Value IRGen::applySafeMemberAccess(const Value& base, const std::string& field,
     std::string nullL    = em_.nextLabel("smem.null");
     std::string contL    = em_.nextLabel("smem.cont");
     std::string isNull = genNotNullCheck(baseR);
-    em_.emit("br i1 " + isNull + ", label %" + nonNullL + ", label %" + nullL);
+    emitCondBr(isNull, nonNullL, nullL);
 
     // 非空分支：取成员并装箱
     em_.emitLabel(nonNullL);
@@ -2402,19 +2271,19 @@ Value IRGen::applySafeMemberAccess(const Value& base, const std::string& field,
     if (!member.valid()) return Value();
     Value boxed = boxToNullable(member);
     std::string nnBlock = em_.currentBlock();
-    if (!blockTerminated_) em_.emit("br label %" + contL);
+    if (!blockTerminated_) emitBr(contL);
 
     // 空分支：直接给 null
     em_.emitLabel(nullL);
     auto resultType = std::make_shared<Type>(*member.type);
     resultType->nullable = true;
     std::string nullBlock = em_.currentBlock();
-    em_.emit("br label %" + contL);
+    emitBr(contL);
 
     em_.emitLabel(contL);
-    std::string phi = em_.nextTemp();
-    em_.emit(phi + " = phi ptr [ " + boxed.ir + ", %" + nnBlock +
-             " ], [ null, %" + nullBlock + " ]");
+    std::string phi = emitPhi("ptr",
+        "[ " + boxed.ir + ", %" + nnBlock +
+        " ], [ null, %" + nullBlock + " ]");
     Value out(phi, resultType);
     rootGcOperand(out); /* phi 结果跨后续调用 */
     return out;
@@ -2434,7 +2303,7 @@ Value IRGen::applySafeMethodCall(const Value& base, const std::string& method,
     std::string nullL    = em_.nextLabel("scall.null");
     std::string contL    = em_.nextLabel("scall.cont");
     std::string isNull = genNotNullCheck(baseR);
-    em_.emit("br i1 " + isNull + ", label %" + nonNullL + ", label %" + nullL);
+    emitCondBr(isNull, nonNullL, nullL);
 
     em_.emitLabel(nonNullL);
     auto nonNullType = std::make_shared<Type>(*baseR.type);
@@ -2445,9 +2314,9 @@ Value IRGen::applySafeMethodCall(const Value& base, const std::string& method,
 
     // Unit 返回类型：空分支也是无值，合并后仍为 Unit（不可空）
     if (result.type->isUnit()) {
-        if (!blockTerminated_) em_.emit("br label %" + contL);
+        if (!blockTerminated_) emitBr(contL);
         em_.emitLabel(nullL);
-        em_.emit("br label %" + contL);
+        emitBr(contL);
         em_.emitLabel(contL);
         return Value("", Type::makeUnit());
     }
@@ -2458,16 +2327,16 @@ Value IRGen::applySafeMethodCall(const Value& base, const std::string& method,
     auto resultType = std::make_shared<Type>(*result.type);
     resultType->nullable = true;
     std::string nnBlock = em_.currentBlock();
-    if (!blockTerminated_) em_.emit("br label %" + contL);
+    if (!blockTerminated_) emitBr(contL);
 
     em_.emitLabel(nullL);
     std::string nullBlock = em_.currentBlock();
-    em_.emit("br label %" + contL);
+    emitBr(contL);
 
     em_.emitLabel(contL);
-    std::string phi = em_.nextTemp();
-    em_.emit(phi + " = phi ptr [ " + boxed.ir + ", %" + nnBlock +
-             " ], [ null, %" + nullBlock + " ]");
+    std::string phi = emitPhi("ptr",
+        "[ " + boxed.ir + ", %" + nnBlock +
+        " ], [ null, %" + nullBlock + " ]");
     Value out(phi, resultType);
     rootGcOperand(out);
     return out;
@@ -2537,12 +2406,10 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                                                         !chosen->isExtern);
                             }
                             if (chosen->returnType->isUnit()) {
-                                em_.emit("call void " + chosen->irName + "(" + argStr + ")");
+                                emitCallVoid(chosen->irName, argStr);
                                 return Value("", Type::makeUnit());
                             }
-                            std::string reg = em_.nextTemp();
-                            em_.emit(reg + " = call " + chosen->returnType->llvmType() +
-                                     " " + chosen->irName + "(" + argStr + ")");
+                            std::string reg = emitCall(chosen->returnType->llvmType(), chosen->irName, argStr);
                             return Value(reg, chosen->returnType);
                         }
 
@@ -2572,12 +2439,10 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                                                         al->arg(k)->expr(), args[k]);
                             }
                             if (inst->returnType->isUnit()) {
-                                em_.emit("call void " + inst->irName + "(" + argStr + ")");
+                                emitCallVoid(inst->irName, argStr);
                                 return Value("", Type::makeUnit());
                             }
-                            std::string reg = em_.nextTemp();
-                            em_.emit(reg + " = call " + inst->returnType->llvmType() +
-                                     " " + inst->irName + "(" + argStr + ")");
+                            std::string reg = emitCall(inst->returnType->llvmType(), inst->irName, argStr);
                             return Value(reg, inst->returnType);
                         }
 
@@ -2613,13 +2478,12 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                                                     al->arg(k)->expr(), args[k],
                                                     !sym->isExtern);
                         }
+                        pinRuntimeCallSite(e);
                         if (sym->returnType->isUnit()) {
-                            em_.emit("call void " + sym->irName + "(" + argStr + ")");
+                            emitCallVoid(sym->irName, argStr);
                             return Value("", Type::makeUnit());
                         }
-                        std::string reg = em_.nextTemp();
-                        em_.emit(reg + " = call " + sym->returnType->llvmType() +
-                                 " " + sym->irName + "(" + argStr + ")");
+                        std::string reg = emitCall(sym->returnType->llvmType(), sym->irName, argStr);
                         return Value(reg, sym->returnType);
                     } else if (sym->kind == SymbolKind::Function) {
                         error(e, "跨包函数 '" + alias + "." + member +
@@ -2673,8 +2537,7 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                            " 个参数，实际提供 " + std::to_string(args.size()) + " 个");
                 return Value();
             }
-            std::string thisReg = em_.nextTemp();
-            em_.emit(thisReg + " = load ptr, ptr " + thisAddr_);
+            std::string thisReg = emitLoad("ptr", thisAddr_);
             std::string argStr = "ptr " + thisReg;
             for (size_t i = 0; i < args.size(); ++i) {
                 if (!isAssignable(args[i].type, bc->ctorParamTypes[i])) {
@@ -2688,7 +2551,7 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                 argStr += ", " + formatCallArg(bc->ctorParamTypes[i], argExprs[i],
                                               args[i]);
             }
-            em_.emit("call void " + bc->ctorIRName + "(" + argStr + ")");
+            emitCallVoid(bc->ctorIRName, argStr);
             cur = Value("", Type::makeUnit());
             startOp = 1;
         } else {
@@ -2746,8 +2609,7 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
             return Value();
         }
 
-        std::string thisReg = em_.nextTemp();
-        em_.emit(thisReg + " = load ptr, ptr " + thisAddr_);
+        std::string thisReg = emitLoad("ptr", thisAddr_);
         std::string argStr = "ptr " + thisReg;
         for (size_t i = 0; i < args.size(); ++i) {
             if (!isAssignable(args[i].type, bm->paramTypes[i])) {
@@ -2762,12 +2624,10 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
 
         // 直接调用父类实现的符号名，绕过虚表
         if (bm->returnType->isUnit()) {
-            em_.emit("call void " + bm->irName + "(" + argStr + ")");
+            emitCallVoid(bm->irName, argStr);
             cur = Value("", Type::makeUnit());
         } else {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call " + bm->returnType->llvmType() + " " +
-                     bm->irName + "(" + argStr + ")");
+            std::string reg = emitCall(bm->returnType->llvmType(), bm->irName, argStr);
             cur = Value(reg, bm->returnType);
         }
         startOp = 2;   // 前两个后缀已消耗
@@ -2919,13 +2779,12 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                         if (callName.empty()) callName = "@" + fname;
                         if (callName[0] != '@') callName = "@" + callName;
 
+                        pinRuntimeCallSite(e);
                         if (sym->returnType->isUnit()) {
-                            em_.emit("call void " + callName + "(" + argStr + ")");
+                            emitCallVoid(callName, argStr);
                             cur = Value("", Type::makeUnit());
                         } else {
-                            std::string reg = em_.nextTemp();
-                            em_.emit(reg + " = call " + sym->returnType->llvmType() +
-                                     " " + callName + "(" + argStr + ")");
+                            std::string reg = emitCall(sym->returnType->llvmType(), callName, argStr);
                             cur = Value(reg, sym->returnType);
                         }
                         continue;
@@ -2950,8 +2809,7 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
 
             // 从 env 槽 0 取出函数指针
             std::string fpp = fieldPtr(cur.ir, 0);
-            std::string fp = em_.nextTemp();
-            em_.emit(fp + " = load ptr, ptr " + fpp);
+            std::string fp = emitLoad("ptr", fpp);
 
             std::string argStr = "ptr " + cur.ir;   // 首参为 env
             for (size_t k = 0; k < args.size(); ++k) {
@@ -2965,12 +2823,10 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
             }
 
             if (fnRet->isUnit()) {
-                em_.emit("call void " + fp + "(" + argStr + ")");
+                emitCallVoid(fp, argStr);
                 cur = Value("", Type::makeUnit());
             } else {
-                std::string reg = em_.nextTemp();
-                em_.emit(reg + " = call " + fnRet->llvmType() + " " +
-                         fp + "(" + argStr + ")");
+                std::string reg = emitCall(fnRet->llvmType(), fp, argStr);
                 cur = Value(reg, fnRet);
             }
             continue;
@@ -3037,10 +2893,9 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
             std::string wname = ensureFuncWrapper(sym);
             std::string envRaw = emitObjectNew(1, 0); // 仅 fnptr
             std::string envSlot = emitSpillGcRoot("fnval.env", envRaw);
-            std::string env = em_.nextTemp();
-            em_.emit(env + " = load ptr, ptr " + envSlot);
+            std::string env = emitLoad("ptr", envSlot);
             std::string sp = fieldPtr(env, 0);
-            em_.emit("store ptr " + wname + ", ptr " + sp);
+            emitStore("ptr", wname, sp);
             return Value(env, Type::makeFunc(sym->paramTypes, sym->returnType));
         }
 
@@ -3069,8 +2924,7 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
             error(e, "this 只能在类的方法或构造函数中使用");
             return Value();
         }
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = load ptr, ptr " + thisAddr_);
+        std::string reg = emitLoad("ptr", thisAddr_);
         return Value(reg, Type::makeClass(currentClass_->name));
     }
 
@@ -3157,8 +3011,7 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
                 if (!av.valid()) return Value();
                 if (isGcPointerType(av.type)) {
                     std::string slot = emitSpillGcRoot("new.arg", av.ir);
-                    std::string p = em_.nextTemp();
-                    em_.emit(p + " = load ptr, ptr " + slot);
+                    std::string p = emitLoad("ptr", slot);
                     av.ir = p;
                 }
                 args.push_back(av);
@@ -3170,14 +3023,12 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
         std::string objRaw = emitObjectNew(ci->slotCount(), objectPtrBitmap(ci.get()));
         // 字段默认 / ctor 求值可能 safepoint：obj 须进 shadow
         std::string objSlot = emitSpillGcRoot("new.obj", objRaw);
-        std::string obj = em_.nextTemp();
-        em_.emit(obj + " = load ptr, ptr " + objSlot);
+        std::string obj = emitLoad("ptr", objSlot);
 
         // 写入虚表指针，使该对象可通过接口动态分派
         if (ci->hasVTable) {
-            std::string vtp = em_.nextTemp();
-            em_.emit(vtp + " = getelementptr ptr, ptr " + obj + ", i64 0");
-            em_.emit("store ptr " + ci->vtableIRName + ", ptr " + vtp);
+            std::string vtp = emitGep("ptr", obj, "i64", "0");
+            emitStore("ptr", ci->vtableIRName, vtp);
         }
 
         // 字段默认值：在构造函数之前写入，语义同 Java / C#。
@@ -3186,8 +3037,7 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
         // Func 字段默认 lambda：须先 analyzeLambdas（默认值不在 new 所在函数体 AST 内）。
         for (const auto& f : ci->fields) {
             if (!f.defaultExpr) continue;
-            obj = em_.nextTemp();
-            em_.emit(obj + " = load ptr, ptr " + objSlot);
+            obj = emitLoad("ptr", objSlot);
             auto* dexpr = static_cast<HaoLangParser::ExprContext*>(f.defaultExpr);
             expectedTypes_.push_back(f.type);
             ExpectedTypeGuard eg{this};
@@ -3217,8 +3067,7 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
             }
         }
 
-        obj = em_.nextTemp();
-        em_.emit(obj + " = load ptr, ptr " + objSlot);
+        obj = emitLoad("ptr", objSlot);
 
         // 调用构造函数
         if (!ci->ctorIRName.empty()) {
@@ -3241,9 +3090,8 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
                 argStr += ", " + formatCallArg(ci->ctorParamTypes[i], argExprs[i],
                                               args[i]);
             }
-            em_.emit("call void " + ci->ctorIRName + "(" + argStr + ")");
-            obj = em_.nextTemp();
-            em_.emit(obj + " = load ptr, ptr " + objSlot);
+            emitCallVoid(ci->ctorIRName, argStr);
+            obj = emitLoad("ptr", objSlot);
         } else if (!args.empty()) {
             error(e, "类 '" + ci->name + "' 没有构造函数，不能传递参数");
             return Value();

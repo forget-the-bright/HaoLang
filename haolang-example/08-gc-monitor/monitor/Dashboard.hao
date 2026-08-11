@@ -127,7 +127,7 @@ class CollectResult {
 class DashboardController {
     @GetMapping(path = "/")
     func index(req: HttpRequest): HttpResponse {
-        Html.setTemplateRoot("./templates");
+        Html.setTemplateRoot("haolang-example/08-gc-monitor/templates");
         // 预热 CPU 采样（首次 -1）
         os.Process.cpuPercent();
         val snap = new GcSnapshot();

@@ -1,0 +1,37 @@
+// U2：try/catch/finally 单层 GC 根存活（发现向；非全量 unwind 证明）
+package main;
+
+import collections.*;
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    // 1) catch 后仍可读 try 内挂到外层的 List
+    var kept: List<Object>? = null;
+    try {
+        var junk = new List<Object>();
+        junk.add(new Box("a"));
+        kept = junk;
+        throw new Exception("x");
+    } catch (e: Exception) {
+        fmt.println(kept!!.size() == 1);
+        fmt.println((kept!!.get(0) as Box).s == "a");
+    }
+
+    // 2) finally 访问 try 前分配的对象；中间 collect 不得假死
+    var outer = new Box("outer");
+    try {
+        var tmp = new Box("tmp");
+        gc.GC.collect();
+        fmt.println(tmp.s == "tmp");
+    } finally {
+        fmt.println(outer.s == "outer");
+    }
+
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

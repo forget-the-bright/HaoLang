@@ -26,12 +26,18 @@ public:
     void syntaxError(antlr4::Recognizer*, antlr4::Token*,
                      size_t line, size_t col, const std::string& msg,
                      std::exception_ptr) override {
-        diags_.error(line, col, file_ + ": " + msg);
+        diags_.error(file_, line, col, msg);
     }
 private:
     DiagnosticEngine& diags_;
     std::string file_;
 };
+
+// P2：无源码行时仍带文件路径（空则 hao），禁止 ?:0:0 误伤
+void resolveError(DiagnosticEngine& diags, const std::string& file,
+                  const std::string& msg) {
+    diags.error(file.empty() ? "hao" : file, 0, 0, msg);
+}
 
 // 取语法树的 package 名；无 packageDecl 返回 ""
 std::string packageNameOf(HaoLangParser::CompilationUnitContext* tree) {
@@ -73,7 +79,7 @@ std::string PackageResolver::stdlibSrcDir() {
 
 bool PackageResolver::parseFile(ParsedFile& pf, DiagnosticEngine& diags) {
     if (!readFile(pf.path, pf.source)) {
-        diags.error(0, 0, "无法读取源文件 " + pf.path);
+        diags.error(pf.path, 0, 0, "无法读取源文件");
         return false;
     }
 
@@ -103,8 +109,7 @@ bool PackageResolver::loadPackageDir(const std::string& dir,
                                      bool includeTestFiles) {
     std::vector<std::string> haoFiles;
     if (!listHaoFiles(dir, haoFiles) || haoFiles.empty()) {
-        diags.error(0, 0,
-            (fromFile.empty() ? "" : fromFile + ": ") +
+        resolveError(diags, fromFile,
             "找不到包 '" + importPath + "'（目录 " + dir + " 中没有 .hao 文件）");
         return false;
     }
@@ -114,8 +119,7 @@ bool PackageResolver::loadPackageDir(const std::string& dir,
             if (!isHaoTestFile(f)) filtered.push_back(f);
         haoFiles.swap(filtered);
         if (haoFiles.empty()) {
-            diags.error(0, 0,
-                (fromFile.empty() ? "" : fromFile + ": ") +
+            resolveError(diags, fromFile,
                 "找不到包 '" + importPath + "'（目录仅有 *_test.hao，普通构建已排除）");
             return false;
         }
@@ -149,7 +153,8 @@ bool PackageResolver::loadPackageFiles(const std::vector<std::string>& haoFiles,
             if (!isHaoTestFile(f)) filtered.push_back(f);
         files.swap(filtered);
         if (files.empty()) {
-            diags.error(0, 0, "没有可编译的 .hao 文件（*_test.hao 仅由 hao test 编译）");
+            resolveError(diags, fromFile.empty() ? dirForDedup : fromFile,
+                "没有可编译的 .hao 文件（*_test.hao 仅由 hao test 编译）");
             return false;
         }
     }
@@ -164,8 +169,9 @@ bool PackageResolver::loadPackageFiles(const std::vector<std::string>& haoFiles,
 
         if (pkgName.empty()) pkgName = pf->packageName;
         else if (pf->packageName != pkgName) {
-            diags.error(0, 0, "包 '" + importPath + "' 的文件包名不一致：'" +
-                              pkgName + "' 与 '" + pf->packageName + "'（" + f + "）");
+            resolveError(diags, f,
+                "包 '" + importPath + "' 的文件包名不一致：'" +
+                pkgName + "' 与 '" + pf->packageName + "'");
             return false;
         }
         added.push_back(pf.get());
@@ -174,7 +180,8 @@ bool PackageResolver::loadPackageFiles(const std::vector<std::string>& haoFiles,
 
     // 非 main 包要求声明了 package
     if (!importPath.empty() && pkgName.empty()) {
-        diags.error(0, 0, "包 '" + importPath + "' 中的文件缺少 package 声明");
+        resolveError(diags, files.empty() ? fromFile : files[0],
+            "包 '" + importPath + "' 中的文件缺少 package 声明");
         return false;
     }
 
@@ -196,8 +203,8 @@ bool PackageResolver::loadPackageFiles(const std::vector<std::string>& haoFiles,
                     hint += joinPath(root, fsRel) + "；";
                 hint += joinPath(stdlibSrcDir(), fsRel);
                 hint += "（请保持 bin/ 与 stdlib/src/ 同级，勿只拷贝 hao.exe）";
-                diags.error(tok->getLine(), tok->getCharPositionInLine(),
-                            pf->path + ": 找不到包 '" + dotted + "'\n      " + hint);
+                diags.error(pf->path, tok->getLine(), tok->getCharPositionInLine(),
+                            "找不到包 '" + dotted + "'\n      " + hint);
                 return false;
             }
             // 与 IRGen 一致：importPath 存斜杠形式（demo.web → demo/web），
@@ -238,16 +245,19 @@ std::string PackageResolver::locatePackage(const std::string& dottedImport,
 bool PackageResolver::resolve(const std::vector<std::string>& inputs,
                               DiagnosticEngine& diags) {
     if (inputs.empty()) {
-        diags.error(0, 0, "没有输入文件");
+        resolveError(diags, "hao", "没有输入文件");
         return false;
     }
+
+    // P2：后续无文件上下文的回退用入口路径
+    diags.setDefaultFile(inputs[0]);
 
     std::vector<std::string> explicitFiles;
     std::string dirInput;
     for (const auto& in : inputs) {
         if (isDirectory(in)) {
             if (!dirInput.empty()) {
-                diags.error(0, 0, "一次只能指定一个入口目录");
+                resolveError(diags, in, "一次只能指定一个入口目录");
                 return false;
             }
             dirInput = in;
@@ -257,7 +267,7 @@ bool PackageResolver::resolve(const std::vector<std::string>& inputs,
     }
 
     if (!dirInput.empty() && !explicitFiles.empty()) {
-        diags.error(0, 0, "不能同时指定目录和文件作为入口");
+        resolveError(diags, inputs[0], "不能同时指定目录和文件作为入口");
         return false;
     }
 

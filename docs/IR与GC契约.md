@@ -112,7 +112,7 @@ flowchart TD
 | 函数 shadow | `root_push` 水位 | 仅 `root_unwind(wm)`（return / 帧退出） | 块级 `root_unwind` |
 | 块/分支局部 | `noteBlockGcSlot`（**非池** alloca） | `endBlockGcScope`（该 `{ }`/if/when/case 结束） | 把 **spill 池槽** 记入 noteBlock |
 | 循环 spill 池 | `scopeStack` / sticky | **本层** fallthrough/`condL`/`step`/`leave`；内层 clear 不得动外层 base 以下；**sticky（条件根/for.seq）clear 不得抹/pop**（v0.55.19） | 在 `emitUnwind`（穿 finally）**之前** clear/recycle |
-| while 条件 | 先卸上轮条件 sticky → `genExpr` 挂根 → `pin` → `safepoint`（v0.55.20） | 禁止先 safepoint 再求条件；禁止每轮只 pin 不卸（sticky 叠层） |
+| while 条件 | 先卸**本层** floor 以上条件 sticky（`stickyFloor`，v0.55.34）→ `genExpr` 挂根 → `pin` → `safepoint` | 禁止 `sticky.size()>1` 剥外层（嵌套 while 会把外层裸块 junk 池槽 `store null` 写进内层 cond）；禁止先 safepoint 再求条件；禁止每轮只 pin 不卸 |
 | catch 绑定 | try 设置时 acquire（循环内=池槽） | try **正常** end 清绑定；continue 穿 finally 后由 while `condL` / for `step` 清 | continue/break 入口抢先 clear |
 | select spill | `selSpillSlots` | select **end** 清 | 与池 sticky 混淆时 noteBlock |
 
@@ -124,7 +124,17 @@ flowchart TD
 
 **池槽 vs 块槽**：`emitSpillGcRoot` / `acquireLoopGcSlot` 的寿命由池管；`noteBlockGcSlot` 只登记「块拥有的独立 alloca」。混用 = 块尾误杀池 → 假死（CE 同类）。
 
-**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；多层 try×循环的专用 smoke；清槽与 `scopeStack` 的断言式自检。
+**非局部出口补记（v0.55.37）**：cleanup 在跳到 break/continue 目标前必须清 `unwindReason`（否则下一轮 try 正常落入 cleanup 仍按 reason=3 跳回 → 死循环）。`HAO_GC_VERIFY` 在 `gc_collect` / `gc_run_collect_locked`（trampoline **外**）collect 前/后扫 shadow；勿在裸垫片内调 CRT fatal。
+
+**控制面 / 清槽自检 / VERIFY 重入（v0.55.39）**：return / finally 内 throw / select×try / when×try 见 `gc_try_control_root_smoke`；finally 内 throw 后勿清 `blockTerminated_`（否则外层误 `br cleanup`）。清槽 `target < base` 打 `hao:irgen:clear_spill_underflow`；`HAO_IRGEN_STRICT=1` 记诊断。collect 重入跳过 VERIFY 时累加 `hao_gc_verify_skip_reenter`（metrics `verifySkipReenter`）。
+
+**盲区冒烟 / VERIFY 槽定位 / 清槽 TRACE（v0.55.40）**：`break` 穿 finally、`lambda`×try×finally 见 U6 两文件。VERIFY 坏根 fatal 含 `shadow_i=`/`ptr=`。`HAO_IRGEN_TRACE=1` 时 `clearLoopSpillSlots` 正路径打 `hao:irgen:clear_spill base=…`。
+
+**线程/再抛 / pin VERIFY / 薄 dbg.value（v0.55.41）**：`gc_try_thread_finally_root_smoke`、`gc_try_rethrow_multilayer_root_smoke`。VERIFY 亦扫 scan pin（`pin_i=`）；`hao_debug_poison_scan_pin`。`-g` 局部初值薄 `llvm.dbg.value`。
+
+**Unit-lambda ret / remset VERIFY / 赋值 dbg.value（v0.55.42）**：`emitLambdaImpl` 保存并清 `inMain_`（禁 Unit-lambda×try 误 `ret i32`）；`gc_try_unit_lambda_finally_root_smoke`。VERIFY 扫 remset（`remset_i=`）；`hao_debug_poison_remset`。简单局部赋值薄 `dbg.value`。
+
+**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖。
 
 ### 4.4 分配
 
@@ -257,6 +267,24 @@ hao run test/gc_call_arg_root_smoke.hao
 hao run test/gc_expr_surface_root_smoke.hao
 hao run test/gc_safe_nav_string_smoke.hao
 hao run test/gc_box_nullable_arg_smoke.hao
+# 定位/spill 门禁（v0.55.35+；v0.55.36 起 test.sh 自动跑）
+# powershell -File script/win/loc_smoke.ps1
+# powershell -File script/win/spill_ir_smoke.ps1
+# hao run test/gc_try_finally_root_smoke.hao
+# hao run test/gc_try_loop_finally_root_smoke.hao   # U3
+# hao run test/gc_try_nested_finally_root_smoke.hao # U4
+# hao run test/gc_try_control_root_smoke.hao         # U5
+# hao run test/gc_try_break_finally_root_smoke.hao   # U6a
+# hao run test/gc_try_lambda_finally_root_smoke.hao  # U6b
+# hao run test/gc_try_thread_finally_root_smoke.hao  # U7a
+# hao run test/gc_try_rethrow_multilayer_root_smoke.hao # U7b
+# hao run test/gc_try_unit_lambda_finally_root_smoke.hao # U8b
+# HAO_GC_VERIFY=1  # collect 前/后校验 shadow/pin/remset
+# HAO_IRGEN_STRICT=1  # 清槽 underflow → 诊断拒绝 emit（A5）
+# HAO_IRGEN_TRACE=1   # 清槽正路径 hao:irgen:clear_spill（A6）
+# hao emit -g … | findstr llvm.dbg.declare          # D3/D4 薄 declare
+# hao emit -g … | findstr llvm.dbg.value            # D5/D6 薄 dbg.value
+# hao emit -g … | findstr "switch i32"              # L5 select !dbg
 # 压测：for /L %i in (1,1,20) do target\test\cache\suite.exe
 ```
 

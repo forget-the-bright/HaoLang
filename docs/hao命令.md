@@ -40,6 +40,7 @@
   -o <file>            指定输出文件
   --target <平台>      交叉编译目标（win-amd64 / linux-amd64）
   --keep-ir            保留中间 .ll 文件
+  -g                   调试：.ll 挂 `!dbg`/DI 元数据；链接传 clang `-g`（默认关）
   -v, --verbose        显示执行的外部命令
   -l<name>             链接外部库（如 -lws2_32，可重复）
   -L<dir>              库搜索路径（可重复）
@@ -84,6 +85,7 @@ hao build app.hao -lws2_32 --link helper.c -v
 | `-o` | CLI | 输出路径；缺省由入口名推导 |
 | `--target` | CLI；清单 `project.target` 可作默认 | `win-amd64` / `linux-amd64` |
 | `--keep-ir` | CLI | 保留 `.ll` |
+| `-g` | CLI | `.ll` 附加 `!dbg`/DI；链接加 clang `-g`。默认关（Release 路径无开销）；需要断点时显式打开（方法论：可选调试元数据，非默认丢弃） |
 | `-l` / `-L` / `--link` | CLI | 与源码内 `@link(...)`、环境变量 `HAO_LDFLAGS` 一并参与链接 |
 | `--` | CLI | 仅影响 `run`/`test` 传参；`build` 通常无程序参数 |
 
@@ -109,6 +111,48 @@ hao run . -v
 ```
 
 **限制**：多入口/目录语义与 `build` 相同；若清单要求 `main` 字段，以驱动解析为准。目录/多文件时须能确定唯一 `main()`。
+
+### 2.2.1 编译诊断与 `hao-crash.log`（定位）
+
+**编译期**：语义/类型错误统一为：
+
+```text
+路径.hao:行:列: 错误: …
+```
+
+驱动/链接类无源码位错误形如 `hao:0:0: 错误: …`（经 `DiagnosticEngine`）。
+
+**运行期**：`!!` / 除零 / OOM / 未处理崩溃会写当前目录 `hao-crash.log`（并 stderr 打 `FATAL`）。关键字段：
+
+| 字段 | 含义 |
+|------|------|
+| `kind=` / `msg=` | fatal 类别与消息 |
+| `src=file:line:col` | 最近**用户**语句/调用点（TLS；调用前钉调用点；**不依赖** `-g`）。若 TLS 漂到 `stdlib/`/`native.hao`，打印时回退到 stack 上最近用户帧 |
+| `src=?` | 尚无源码位（如极早运行时） |
+| `stack:` + `#N file:line:col` | Hao 级调用帧（函数入口 push / 出口 pop；自上而下最新在 `#0`）；路径含 `stdlib/` 或 `native.hao` 时后缀 ` [lib]` |
+| `access=` / `av_addr=` | Win UEF 访问违例（`---- crash ----` 段） |
+| `gc_snapshot:` | 无锁堆摘要（phase/heap/…） |
+
+**读法（优先序，CU 类坑）**
+
+1. `stack:` 里带业务路径的 `#N …你的.hao:行:列`（跳过带 `[lib]` 的帧）  
+2. 再看 `src=`（可能曾误指 `native.hao` 末行；现已回退用户帧 / 忽略 native 更新）  
+3. 再看 `gc_snapshot` / Win 原生栈  
+
+**固定冒烟（定位门禁 · 三人同命令；亦由 `bash script/test.sh` 在 Win 上自动跑）**
+
+```powershell
+# 仓库根；须已有 output\hao.exe；勿残留 HAO_GC_TRACE
+powershell -NoProfile -ExecutionPolicy Bypass -File script\win\loc_smoke.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File script\win\spill_ir_smoke.ps1
+hao run test\gc_block_scope_root_smoke.hao       # 期望三行 true
+hao run test\gc_try_finally_root_smoke.hao     # U2：期望五行 true
+# 可选：HAO_IRGEN_TRACE=1 时 clearLoopSpill target<base 打 stderr
+# 可选：HAO_GC_VERIFY=1 时 collect 前校验 shadow 根（坏根 → fatal+src=/stack=）
+```
+
+`loc_smoke.ps1`：编译错路径、panic/`src=`、跨函数 `stack:`、`hao:0:0`、调用点不漂 `native.hao`、`[lib]`、AV、`throw`、子线程 TLS 栈。  
+`spill_ir_smoke.ps1`：嵌套 while IR 反模式 + block smoke + try/finally 根 + `HAO_GC_VERIFY=1` collect。
 
 ### 2.3 `hao emit`
 

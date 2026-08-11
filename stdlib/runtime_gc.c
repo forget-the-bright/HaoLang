@@ -282,6 +282,7 @@ static void gc_park_wait(void) {
 
 void hao_gc_safepoint(void) {
     if (!__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) return;
+    hao_trace("gc", "safepoint park");
     gc_spill_gprs_to(g_gpr_spill);
     gc_park_wait();
 }
@@ -971,6 +972,23 @@ int64_t hao_gc_heap_bytes(void) {
     return n;
 }
 
+/* fatal/崩溃路径：无锁尽力读；禁止再抢 GC 锁（防死锁） */
+void hao_gc_fprint_debug_snapshot(FILE* f) {
+    if (!f) return;
+    int phase = __atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE);
+    const char* pname = (phase == GC_PHASE_MARK) ? "MARK"
+                        : (phase == GC_PHASE_IDLE) ? "IDLE" : "?";
+    fprintf(f,
+            "gc_snapshot: phase=%s(%d) heapBytes=%lld live=%lld blocks=%lld "
+            "collects=%lld minor=%lld major=%lld remset=%lld threads=%lld\n",
+            pname, phase,
+            (long long)gc_heap_bytes, (long long)gc_live, (long long)gc_num_blocks,
+            (long long)gc_collect_count, (long long)gc_minor_count,
+            (long long)gc_major_count, (long long)gc_remset_count,
+            (long long)gc_thread_count);
+    fflush(f);
+}
+
 int64_t hao_gc_mark_assist_steps(void) {
     int64_t n;
     gc_lock_coop();
@@ -1606,6 +1624,134 @@ static void gc_collect_trampoline(void) {
 static void gc_collect_trampoline(void) { gc_collect_inner(0, 0); }
 #endif
 
+/* H1：HAO_GC_VERIFY=1 时 collect 前校验本线程 shadow 根（持锁内，精确堆指针） */
+static int gc_verify_env_on(void) {
+    static int inited, on;
+    const char* v;
+    if (inited) return on;
+    inited = 1;
+    v = getenv("HAO_GC_VERIFY");
+    on = (v && v[0] && !(v[0] == '0' && v[1] == '\0') &&
+          !((v[0] == 'n' || v[0] == 'N') && (v[1] == 'o' || v[1] == 'O') &&
+            v[2] == '\0'));
+    return on;
+}
+
+/* V2/V6/V7：冒烟夹具用 TLS 毒槽（文件作用域；MSVC 函数内 TLS 不可靠） */
+#ifdef _WIN32
+static __declspec(thread) void* g_verify_poison_cell;
+static __declspec(thread) void* g_verify_poison_pin;
+static __declspec(thread) int g_verify_poison_pin_armed;
+static __declspec(thread) void* g_verify_poison_remset;
+static __declspec(thread) int g_verify_poison_remset_armed;
+#else
+static __thread void* g_verify_poison_cell;
+static __thread void* g_verify_poison_pin;
+static __thread int g_verify_poison_pin_armed;
+static __thread void* g_verify_poison_remset;
+static __thread int g_verify_poison_remset_armed;
+#endif
+
+static void gc_verify_shadow_roots(void) {
+    size_t i;
+    if (!gc_verify_env_on()) return;
+    for (i = 0; i < g_shadow_n; ++i) {
+        void** slot = g_shadow ? g_shadow[i] : NULL;
+        void* p;
+        if (!slot) continue;
+        p = *slot;
+        if (!p) continue;
+        if (!gc_find_block_exact(p)) {
+            /* 持锁内 fatal：进程退出，不 unlock；V5：带槽下标与指针便于定位 */
+            char detail[160];
+            snprintf(detail, sizeof(detail),
+                     "shadow root is not a live heap object shadow_i=%zu ptr=%p",
+                     i, p);
+            hao_report_fatal("gc_verify", detail);
+        }
+    }
+}
+
+/* V6：校验本线程 scan pin + 武装毒针；坏槽 fatal 含 pin_i=/ptr= */
+static void gc_verify_scan_pins(void) {
+    int i;
+    if (!gc_verify_env_on()) return;
+    for (i = 0; i < g_scan_pin_n && i < GC_SCAN_PINS; ++i) {
+        void* p = g_scan_pins[i];
+        if (!p) continue;
+        if (!gc_find_block_exact(p)) {
+            char detail[160];
+            snprintf(detail, sizeof(detail),
+                     "scan pin is not a live heap object pin_i=%d ptr=%p",
+                     i, p);
+            hao_report_fatal("gc_verify", detail);
+        }
+    }
+    /* 毒针不依赖易被 clear 的 g_scan_pins 寿命；合成 pin_i=0 便于门禁 */
+    if (g_verify_poison_pin_armed) {
+        void* p = g_verify_poison_pin;
+        if (p && !gc_find_block_exact(p)) {
+            char detail[160];
+            snprintf(detail, sizeof(detail),
+                     "scan pin is not a live heap object pin_i=%d ptr=%p",
+                     0, p);
+            hao_report_fatal("gc_verify", detail);
+        }
+    }
+}
+
+/* V7：校验 remset 条目为活堆对象；毒针合成 remset_i=0 */
+static void gc_verify_remset(void) {
+    size_t i;
+    if (!gc_verify_env_on()) return;
+    for (i = 0; i < gc_remset_count; ++i) {
+        void* p = gc_remset[i];
+        if (!p) continue;
+        if (!gc_find_block_exact(p)) {
+            char detail[160];
+            snprintf(detail, sizeof(detail),
+                     "remset entry is not a live heap object remset_i=%zu ptr=%p",
+                     i, p);
+            hao_report_fatal("gc_verify", detail);
+        }
+    }
+    if (g_verify_poison_remset_armed) {
+        void* p = g_verify_poison_remset;
+        if (p && !gc_find_block_exact(p)) {
+            char detail[160];
+            snprintf(detail, sizeof(detail),
+                     "remset entry is not a live heap object remset_i=%zu ptr=%p",
+                     (size_t)0, p);
+            hao_report_fatal("gc_verify", detail);
+        }
+    }
+}
+
+static void gc_verify_roots(void) {
+    gc_verify_shadow_roots();
+    gc_verify_scan_pins();
+    gc_verify_remset();
+}
+
+/* V2：冒烟/调试钩子——压入非堆指针，下一 VERIFY collect 应 fatal */
+void hao_debug_poison_shadow_root(void) {
+    /* 低地址非堆；null 会被 verify 跳过，故用 0x8 */
+    g_verify_poison_cell = (void*)(uintptr_t)0x8;
+    hao_gc_root_push(&g_verify_poison_cell);
+}
+
+/* V6：武装 pin 毒槽 */
+void hao_debug_poison_scan_pin(void) {
+    g_verify_poison_pin = (void*)(uintptr_t)0x8;
+    g_verify_poison_pin_armed = 1;
+}
+
+/* V7：武装 remset 毒槽 */
+void hao_debug_poison_remset(void) {
+    g_verify_poison_remset = (void*)(uintptr_t)0x8;
+    g_verify_poison_remset_armed = 1;
+}
+
 __attribute__((noinline))
 void gc_collect_inner(char* regs, size_t regs_size) {
     /*
@@ -1620,6 +1766,9 @@ void gc_collect_inner(char* regs, size_t regs_size) {
     int continuing =
         (__atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_MARK);
     int major;
+
+    /* VERIFY 在 gc_collect（trampoline 外）执行：裸垫片栈未 16 对齐时
+     * CRT fprintf/fopen 可能 AV，导致坏根无法落到 hao-crash.log */
 
     if (!continuing) {
         /* ---- Mark Setup：色纪元 O(1) + 先开屏障 ---- */
@@ -1810,16 +1959,34 @@ static void hao_gc_unlock(void) { pthread_mutex_unlock(&gc_mutex_obj); }
 #endif
 
 static int gc_collecting = 0;
+/* V4：VERIFY 开启时重入跳过计数（不改变跳过语义） */
+static volatile int64_t g_verify_skip_reenter = 0;
+
+int64_t hao_gc_verify_skip_reenter(void) {
+    return __atomic_load_n(&g_verify_skip_reenter, __ATOMIC_RELAXED);
+}
+
+static void gc_note_verify_skip_reenter(void) {
+    if (!gc_verify_env_on()) return;
+    __atomic_fetch_add(&g_verify_skip_reenter, 1, __ATOMIC_RELAXED);
+    hao_trace("gc", "verify skip reenter collect");
+}
 
 static void gc_run_collect_locked(int major) {
-    if (gc_collecting) return; /* 防 STW 放锁窗口内嵌套收集 */
+    if (gc_collecting) {
+        gc_note_verify_skip_reenter();
+        return; /* 防 STW 放锁窗口内嵌套收集 */
+    }
     char frame;
     char* prev_c_hi = g_collect_c_hi;
     /* 取更靠近 stack_top 的 C 边界（栈向下长） */
     if (!prev_c_hi || &frame > prev_c_hi) g_collect_c_hi = &frame;
     gc_collecting = 1;
     g_collect_want_major = major ? 1 : 0;
+    /* V3：与 gc_collect 同口径——trampoline 外 VERIFY（禁垫片内 CRT fatal） */
+    gc_verify_roots();
     gc_collect_trampoline();
+    gc_verify_roots();
     gc_collecting = 0;
     g_collect_c_hi = prev_c_hi;
 }
@@ -1828,6 +1995,7 @@ void gc_collect(void) {
     char collect_frame;
     char* prev_c_hi = g_collect_c_hi;
     g_collect_c_hi = &collect_frame;
+    hao_trace("gc", "collect enter");
     /* 持锁外启动 worker，避免 create_thread→register 与持锁 collect 死锁 */
     gc_ensure_mark_workers();
     for (;;) {
@@ -1842,13 +2010,17 @@ void gc_collect(void) {
     /* STW 放锁窗口内禁止重入 collect_inner（否则与协助线程交叉死锁） */
     if (gc_collecting) {
         g_collect_want_major = 1;
+        gc_note_verify_skip_reenter();
         hao_gc_unlock();
         g_collect_c_hi = prev_c_hi;
         return;
     }
     gc_collecting = 1;
     g_collect_want_major = 1;
+    /* V2：collect 前/后 VERIFY（trampoline 外，避免裸垫片栈对齐坑） */
+    gc_verify_roots();
     gc_collect_trampoline();
+    gc_verify_roots();
     gc_collecting = 0;
     hao_gc_unlock();
     gc_drain_finalizers();
@@ -2129,8 +2301,7 @@ void* gc_alloc_ex(size_t n, uint8_t kind, uint64_t meta) {
     if (n == 0) n = 1;
     if (n > SIZE_MAX - GC_HEADER - GC_ALIGN) {
         hao_gc_unlock();
-        fputs("panic: 内存分配过大\n", stderr);
-        exit(1);
+        hao_report_fatal("oom", "内存分配过大（超出可表示尺寸）");
     }
     size_t need = (n + GC_ALIGN - 1) & ~(size_t)(GC_ALIGN - 1);
 
@@ -2179,7 +2350,12 @@ void* gc_alloc_ex(size_t n, uint8_t kind, uint64_t meta) {
         gc_run_collect_locked(1);
         hao_gc_unlock();
         b = (GCBlock*)calloc(1, total);
-        if (!b) { fputs("panic: 内存分配失败\n", stderr); exit(1); }
+        if (!b) {
+            char buf[160];
+            snprintf(buf, sizeof(buf),
+                     "内存分配失败（请求 %zu 字节用户区 + 头）", need);
+            hao_report_fatal("oom", buf);
+        }
     }
     for (;;) {
         hao_gc_safepoint();

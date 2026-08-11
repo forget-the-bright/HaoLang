@@ -49,15 +49,15 @@ void IRGen::hoistVarDeclsInLoopBody(HaoLangParser::StatementContext* body) {
                     h.boxed = boxed;
                     h.addr = em_.nextNamed(name + ".addr");
                     if (boxed) {
-                        em_.emit(h.addr + " = alloca ptr");
+                        emitAllocaAt(h.addr, "ptr");
                         int64_t cbm = isGcPointerType(type) ? 1 : 0;
                         std::string cell = emitObjectNew(1, cbm);
-                        em_.emit("store ptr " + cell + ", ptr " + h.addr);
+                        emitStore("ptr", cell, h.addr);
                         emitGcRootPush(h.addr);
                     } else {
-                        em_.emit(h.addr + " = alloca " + type->llvmType());
+                        emitAllocaAt(h.addr, type->llvmType());
                         if (isGcPointerType(type)) {
-                            em_.emit("store ptr null, ptr " + h.addr);
+                            emitStore("ptr", "null", h.addr);
                             emitGcRootPush(h.addr);
                         }
                     }
@@ -81,7 +81,7 @@ void IRGen::clearHoistedGcSince(
     for (auto& kv : loopHoisted_) {
         if (saved.count(kv.first)) continue;
         if (kv.second.boxed || isGcPointerType(kv.second.type))
-            em_.emit("store ptr null, ptr " + kv.second.addr);
+            emitStore("ptr", "null", kv.second.addr);
     }
 }
 
@@ -99,6 +99,8 @@ void IRGen::genBlock(HaoLangParser::BlockContext* blk, bool newScope) {
 
 void IRGen::genStatement(HaoLangParser::StatementContext* st) {
     if (!st) return;
+    setDebugLoc(st);
+    emitRuntimeSrcLoc(locFrom(st));
 
     // 已终结的基本块后面的语句不可达，跳过以保证 IR 合法
     if (blockTerminated_) return;
@@ -121,7 +123,7 @@ void IRGen::genStatement(HaoLangParser::StatementContext* st) {
         if (loops_.empty()) { error(st, "break 只能出现在循环内部"); return; }
         if (!tryStack_.empty()) { emitUnwind(2); return; }
         /* 无 try：end 标签 leaveLoopSpillScope 负责清槽 */
-        em_.emit("br label %" + loops_.back().breakLabel);
+        emitBr(loops_.back().breakLabel);
         blockTerminated_ = true;
         return;
     }
@@ -133,7 +135,7 @@ void IRGen::genStatement(HaoLangParser::StatementContext* st) {
             clearLoopSpillSlots();
         else
             recycleLoopSpillSlots();
-        em_.emit("br label %" + loops_.back().continueLabel);
+        emitBr(loops_.back().continueLabel);
         blockTerminated_ = true;
         return;
     }
@@ -158,8 +160,7 @@ void IRGen::genHaoroutine(HaoLangParser::HaoroutineStmtContext* st) {
     if (!env.valid()) return;
     rootGcOperand(env); /* env 跨 thread_start（内含 alloc/safepoint） */
     // 必须接住返回值：裸 call i64 仍占用 SSA 编号，否则后续 %N 冲突
-    std::string h = em_.nextTemp();
-    em_.emit(h + " = call i64 @hao_thread_start(ptr " + env.ir + ")");
+    (void)emitCall("i64", "@hao_thread_start", "ptr " + env.ir);
 }
 
 // select { case x = ch.recv(): ... case ch.send(v): ... default: ... }
@@ -266,17 +267,15 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         }
         if (!ensureNonNullOperand(ch, ci.chExpr, "select channel")) return;
         std::string fp = fieldPtr(ch.ir, hSlot);
-        std::string hLoaded = em_.nextTemp();
-        em_.emit(hLoaded + " = load ptr, ptr " + fp);
+        std::string hLoaded = emitLoad("ptr", fp);
         // 句柄盒跨 select 循环 safepoint：spill 进 shadow
         std::string hSlotAddr = emitSpillGcRoot("sel.h", hLoaded);
         selSpillSlots.push_back(hSlotAddr);
-        ci.hPtr = em_.nextTemp();
-        em_.emit(ci.hPtr + " = load ptr, ptr " + hSlotAddr);
+        ci.hPtr = emitLoad("ptr", hSlotAddr);
 
         if (ci.isRecv) {
             ci.outAlloca = em_.nextNamed("sel.out");
-            em_.emit(ci.outAlloca + " = alloca i64");
+            emitAllocaAt(ci.outAlloca, "i64");
         } else {
             Value arg = genExpr(ci.sendArg);
             if (!arg.valid()) return;
@@ -289,10 +288,9 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
                 // String 跨循环 safepoint：先 spill 再 ptrtoint
                 std::string strSlot = emitSpillGcRoot("sel.sstr", arg.ir);
                 selSpillSlots.push_back(strSlot);
-                std::string sp = em_.nextTemp();
-                em_.emit(sp + " = load ptr, ptr " + strSlot);
+                std::string sp = emitLoad("ptr", strSlot);
                 ci.sendBits = em_.nextTemp();
-                em_.emit(ci.sendBits + " = ptrtoint ptr " + sp + " to i64");
+                ci.sendBits = emitPtrToInt("i64", sp);
             } else if (ci.method == "sendInt") {
                 if (!arg.type || arg.type->kind != TypeKind::Int) {
                     error(ci.sendArg, "sendInt 需要 Int");
@@ -319,8 +317,8 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
     }
 
     std::string rot = em_.nextNamed("sel.rot");
-    em_.emit(rot + " = alloca i32");
-    em_.emit("store i32 0, ptr " + rot);
+    emitAllocaAt(rot, "i32");
+    emitStore("i32", "0", rot);
 
     std::string loopL = em_.nextLabel("sel.loop");
     std::string endL = em_.nextLabel("sel.end");
@@ -335,21 +333,18 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         if (ci.isDefault) { defaultL = ci.bodyLabel; break; }
     std::string sleepL = em_.nextLabel("sel.sleep");
 
-    em_.emit("br label %" + loopL);
+    emitBr(loopL);
     em_.emitLabel(loopL);
     blockTerminated_ = false;
-    em_.emit("call void @hao_gc_safepoint()");
+    emitSafepoint();
 
     // 公平轮转起点
-    std::string startV = em_.nextTemp();
-    em_.emit(startV + " = load i32, ptr " + rot);
+    std::string startV = emitLoad("i32", rot);
     if (nComm > 0) {
-        std::string startMod = em_.nextTemp();
-        em_.emit(startMod + " = srem i32 " + startV + ", " + std::to_string(nComm));
+        std::string startMod = emitBinOp("srem", "i32", startV, std::to_string(nComm));
         // 更新 rot
-        std::string nextRot = em_.nextTemp();
-        em_.emit(nextRot + " = add i32 " + startV + ", 1");
-        em_.emit("store i32 " + nextRot + ", ptr " + rot);
+        std::string nextRot = emitBinOp("add", "i32", startV, "1");
+        emitStore("i32", nextRot, rot);
 
         // 按 (start+k)%nComm 顺序尝试通信 case（跳过 default）
         std::vector<int> commIdx;
@@ -360,16 +355,17 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         // 简化：顺序尝试所有 comm，rot 仅作扰动记录；仍保证有进展
         (void)startMod;
         std::string firstTry = infos[commIdx[0]].nextTryLabel;
-        // 用 switch on startMod 跳到不同起点
+        // 用 switch on startMod 跳到不同起点（L5：整条 switch 附 !dbg）
         std::string swDef = em_.nextLabel("sel.sw.def");
-        em_.emit("switch i32 " + startMod + ", label %" + swDef + " [");
+        std::string sw = "switch i32 " + startMod + ", label %" + swDef + " [";
         for (int k = 0; k < (int)commIdx.size(); ++k) {
-            em_.emit("  i32 " + std::to_string(k) + ", label %" +
-                     infos[commIdx[k]].nextTryLabel);
+            sw += " i32 " + std::to_string(k) + ", label %" +
+                  infos[commIdx[k]].nextTryLabel;
         }
-        em_.emit("]");
+        sw += " ]" + ops_.dbgSuffix();
+        em_.emit(sw);
         em_.emitLabel(swDef);
-        em_.emit("br label %" + firstTry);
+        emitBr(firstTry);
 
         for (int k = 0; k < (int)commIdx.size(); ++k) {
             int idx = commIdx[k];
@@ -378,21 +374,21 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
             auto& ci = infos[idx];
             em_.emitLabel(ci.nextTryLabel);
             blockTerminated_ = false;
-            std::string ok = em_.nextTemp();
+            std::string ok;
             if (ci.isRecv) {
-                em_.emit(ok + " = call i32 @hao_chan_try_recv(ptr " + ci.hPtr +
-                         ", ptr " + ci.outAlloca + ")");
+                ok = emitCall("i32", "@hao_chan_try_recv",
+                              "ptr " + ci.hPtr + ", ptr " + ci.outAlloca);
             } else {
-                em_.emit(ok + " = call i32 @hao_chan_try_send(ptr " + ci.hPtr +
-                         ", i64 " + ci.sendBits + ")");
+                ok = emitCall("i32", "@hao_chan_try_send",
+                              "ptr " + ci.hPtr + ", i64 " + ci.sendBits);
                 // try_send: 0 成功，非 0 失败 —— 与 recv 相反！
                 // recv: 1 成功 0 失败；send: 0 成功 1 失败
             }
-            std::string ready = em_.nextTemp();
+            std::string ready;
             if (ci.isRecv) {
-                em_.emit(ready + " = icmp ne i32 " + ok + ", 0");
+                ready = emitICmp("ne", "i32", ok, "0");
             } else {
-                em_.emit(ready + " = icmp eq i32 " + ok + ", 0");
+                ready = emitICmp("eq", "i32", ok, "0");
             }
             std::string failL = last
                 ? (defaultL.empty() ? sleepL : defaultL)
@@ -404,8 +400,7 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
             else
                 failL = infos[commIdx[k + 1]].nextTryLabel;
 
-            em_.emit("br i1 " + ready + ", label %" + ci.bodyLabel +
-                     ", label %" + failL);
+            emitCondBr(ready, ci.bodyLabel, failL);
         }
     } else {
         // 只有 default
@@ -413,7 +408,7 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
             error(st, "select 没有可通信的 case");
             return;
         }
-        em_.emit("br label %" + defaultL);
+        emitBr(defaultL);
     }
 
     if (!defaultL.empty() && nComm > 0) {
@@ -422,13 +417,13 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
     em_.emitLabel(sleepL);
     blockTerminated_ = false;
     if (defaultL.empty()) {
-        em_.emit("call void @hao_thread_sleep_ms(i32 1)");
-        em_.emit("br label %" + loopL);
+        emitCallVoid("@hao_thread_sleep_ms", "i32 1");
+        emitBr(loopL);
     } else if (nComm == 0) {
-        em_.emit("br label %" + defaultL);
+        emitBr(defaultL);
     } else {
         // 有 default 时失败路径已直接进 default，sleep 不可达；占位
-        em_.emit("br label %" + endL);
+        emitBr(endL);
     }
 
     // ---- 各 case 体 ----
@@ -439,27 +434,24 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         SymbolTable::Guard g(syms_);
         beginBlockGcScope();
         if (!ci.isDefault && ci.isRecv) {
-            std::string bits = em_.nextTemp();
-            em_.emit(bits + " = load i64, ptr " + ci.outAlloca);
+            std::string bits = emitLoad("i64", ci.outAlloca);
             std::string addr;
             bool poolBind = isGcPointerType(ci.bindType) && inLoopSpillPool();
             if (poolBind)
                 addr = acquireLoopGcSlot(ci.bindName + ".addr");
             else {
                 addr = em_.nextNamed(ci.bindName + ".addr");
-                em_.emit(addr + " = alloca " + ci.bindType->llvmType());
+                emitAllocaAt(addr, ci.bindType->llvmType());
             }
             if (ci.method == "recv") {
-                em_.emit("store i64 " + bits + ", ptr " + addr);
+                emitStore("i64", bits, addr);
             } else if (ci.method == "recvInt") {
-                std::string tr = em_.nextTemp();
-                em_.emit(tr + " = trunc i64 " + bits + " to i32");
-                em_.emit("store i32 " + tr + ", ptr " + addr);
+                std::string tr = emitCast("trunc", "i64", bits, "i32");
+                emitStore("i32", tr, addr);
             } else {
                 // recvStr → String?
-                std::string p = em_.nextTemp();
-                em_.emit(p + " = inttoptr i64 " + bits + " to ptr");
-                em_.emit("store ptr " + p + ", ptr " + addr);
+                std::string p = emitIntToPtr("i64", bits);
+                emitStore("ptr", p, addr);
             }
             if (isGcPointerType(ci.bindType) && !poolBind) {
                 emitGcRootPush(addr);
@@ -477,13 +469,13 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         }
         for (auto* s : ci.body) genStatement(s);
         endBlockGcScope();
-        if (!blockTerminated_) em_.emit("br label %" + endL);
+        if (!blockTerminated_) emitBr(endL);
     }
 
     em_.emitLabel(endL);
     blockTerminated_ = false;
     for (const auto& slot : selSpillSlots)
-        em_.emit("store ptr null, ptr " + slot);
+        emitStore("ptr", "null", slot);
 }
 
 void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
@@ -549,14 +541,13 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
     if (hit != loopHoisted_.end()) {
         const HoistedLocal& h = hit->second;
         if (h.boxed) {
-            std::string cell = em_.nextTemp();
-            em_.emit(cell + " = load ptr, ptr " + h.addr);
+            std::string cell = emitLoad("ptr", h.addr);
             if (hasInit)
                 emitHeapStore(cell, init.ir, type, cell);
         } else if (hasInit) {
-            em_.emit("store " + type->llvmType() + " " + init.ir + ", ptr " + h.addr);
+            emitStore(type->llvmType(), init.ir, h.addr);
         } else if (isGcPointerType(type)) {
-            em_.emit("store ptr null, ptr " + h.addr);
+            emitStore("ptr", "null", h.addr);
         }
         auto sym = std::make_shared<Symbol>();
         sym->kind = SymbolKind::Variable;
@@ -567,6 +558,9 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
         sym->boxed = h.boxed;
         sym->line = vd->getStart()->getLine();
         syms_.declare(sym);
+        emitDbgDeclareIf(h.addr, name, sym->line, 0);
+        if (hasInit)
+            emitDbgValueIf(type->llvmType(), init.ir, name, sym->line, 0);
         return;
     }
 
@@ -575,9 +569,9 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
     if (!boxed && isGcPointerType(type) && inLoopSpillPool()) {
         std::string addr = acquireLoopGcSlot(name + ".addr");
         if (hasInit)
-            em_.emit("store " + type->llvmType() + " " + init.ir + ", ptr " + addr);
+            emitStore(type->llvmType(), init.ir, addr);
         else
-            em_.emit("store ptr null, ptr " + addr);
+            emitStore("ptr", "null", addr);
         /* 池槽勿 noteBlockGcSlot：块尾 null 会误杀 spill 池（与 continue 清槽同类） */
         auto sym = std::make_shared<Symbol>();
         sym->kind = SymbolKind::Variable;
@@ -588,6 +582,9 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
         sym->boxed = false;
         sym->line = vd->getStart()->getLine();
         syms_.declare(sym);
+        emitDbgDeclareIf(addr, name, sym->line, 0);
+        if (hasInit)
+            emitDbgValueIf(type->llvmType(), init.ir, name, sym->line, 0);
         return;
     }
 
@@ -596,18 +593,18 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
     // 被 lambda 捕获的可变 var 装箱到堆 cell，与闭包共享；
     // val 不可变，按值捕获即可，无需装箱。
     if (boxed) {
-        em_.emit(addr + " = alloca ptr");
+        emitAllocaAt(addr, "ptr");
         int64_t cbm = isGcPointerType(type) ? 1 : 0;
         std::string cell = emitObjectNew(1, cbm);
         if (hasInit)
             emitHeapStore(cell, init.ir, type, cell);
-        em_.emit("store ptr " + cell + ", ptr " + addr);
+        emitStore("ptr", cell, addr);
         emitGcRootPush(addr);
         noteBlockGcSlot(addr);
     } else {
-        em_.emit(addr + " = alloca " + type->llvmType());
+        emitAllocaAt(addr, type->llvmType());
         if (hasInit) {
-            em_.emit("store " + type->llvmType() + " " + init.ir + ", ptr " + addr);
+            emitStore(type->llvmType(), init.ir, addr);
         }
         if (isGcPointerType(type)) {
             emitGcRootPush(addr);
@@ -624,6 +621,9 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
     sym->boxed = boxed;
     sym->line = vd->getStart()->getLine();
     syms_.declare(sym);
+    emitDbgDeclareIf(addr, name, sym->line, 0);
+    if (hasInit && !boxed)
+        emitDbgValueIf(type->llvmType(), init.ir, name, sym->line, 0);
 }
 
 void IRGen::genIf(HaoLangParser::IfStmtContext* st) {
@@ -652,8 +652,7 @@ void IRGen::genIf(HaoLangParser::IfStmtContext* st) {
     std::string elseL = hasElse ? em_.nextLabel("if.else") : "";
     std::string endL  = em_.nextLabel("if.end");
 
-    em_.emit("br i1 " + i1 + ", label %" + thenL +
-             ", label %" + (hasElse ? elseL : endL));
+    emitCondBr(i1, thenL, hasElse ? elseL : endL);
 
     // ---- then 分支 ----
     em_.emitLabel(thenL);
@@ -668,7 +667,7 @@ void IRGen::genIf(HaoLangParser::IfStmtContext* st) {
     }
     bool thenTerm = blockTerminated_;
     popSmartCastFrame();
-    if (!thenTerm) em_.emit("br label %" + endL);
+    if (!thenTerm) emitBr(endL);
 
     // ---- else 分支 ----
     bool elseTerm = false;
@@ -687,14 +686,14 @@ void IRGen::genIf(HaoLangParser::IfStmtContext* st) {
         }
         elseTerm = blockTerminated_;
         popSmartCastFrame();
-        if (!elseTerm) em_.emit("br label %" + endL);
+        if (!elseTerm) emitBr(endL);
     }
 
     // 两条分支都返回了，if.end 不可达；但仍需发射标签以保证 IR 结构合法，
     // 并追加 unreachable 让 LLVM 知道此处不可达。
     em_.emitLabel(endL);
     if (hasElse && thenTerm && elseTerm) {
-        em_.emit("unreachable");
+        emitUnreachable();
         blockTerminated_ = true;
     } else {
         blockTerminated_ = false;
@@ -715,20 +714,27 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
     hoistVarDeclsInLoopBody(st->statement());
     /* 保护提升槽：cond clear 不得抹 hoist */
     pinLoopSpillCheckpoint();
+    markLoopSpillStickyFloor();
 
-    em_.emit("br label %" + condL);
+    emitBr(condL);
 
     // ---- 条件：先求值（挂 GC 根）再 safepoint；条件 spill sticky 至循环结束 ----
     em_.emitLabel(condL);
     blockTerminated_ = false;
     /*
      * sticky 层：enter 时 pin 保护 hoist；每轮再 pin 条件根。
-     * 若每轮只 pin 不 unpin，sticky 叠层 → 池只增不减；且旧条件槽假活。
-     * size>1 时先卸掉上一轮条件层，只留 hoist。
+     * 只卸本层 floor 以上的条件 pin，保留 hoist + 外层 sticky。
+     * 旧逻辑 size>1 会在嵌套 while 生成期剥掉外层，把块内 junk 池槽
+     * store null 写进内层 cond（每轮杀 List → add AV）。
      */
-    while (!loopSpillPools_.empty() &&
-           loopSpillPools_.back().stickyStack.size() > 1)
-        unpinLoopSpillCheckpoint();
+    if (!loopSpillPools_.empty()) {
+        auto& pool = loopSpillPools_.back();
+        size_t floor = pool.stickyFloorStack.empty()
+            ? 1
+            : pool.stickyFloorStack.back();
+        while (pool.stickyStack.size() > floor)
+            unpinLoopSpillCheckpoint();
+    }
     /* continue 穿过 finally 会跳过 body 尾 clear；在此补清本层非 sticky spill */
     clearLoopSpillSlots();
     Value cond = genExpr(st->expr());
@@ -753,8 +759,8 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
     }
     /* 条件 rootGcOperand spill 钉住（如 while (i < s.length) 的 s） */
     pinLoopSpillCheckpoint();
-    em_.emit("call void @hao_gc_safepoint()");
-    em_.emit("br i1 " + toI1(cond) + ", label %" + bodyL + ", label %" + endL);
+    emitSafepoint();
+    emitCondBr(toI1(cond), bodyL, endL);
 
     // ---- 循环体 ----
     // continue 回到条件判断，break 跳出循环
@@ -780,7 +786,7 @@ void IRGen::genWhile(HaoLangParser::WhileStmtContext* st) {
     if (!blockTerminated_) {
         /* 本轮合成根 / 未提升局部槽清 null，下轮复用（不 root_push） */
         clearLoopSpillSlots();
-        em_.emit("br label %" + condL);
+        emitBr(condL);
     }
     loops_.pop_back();
 
@@ -872,21 +878,14 @@ void IRGen::genFor(HaoLangParser::ForStmtContext* st) {
             rootGcOperand(seqRoot);
             std::string argStr = "ptr " + seqRoot.ir;
             if (mi->vtableSlot >= 0 && ci->hasVTable) {
-                std::string vtp = em_.nextTemp();
-                em_.emit(vtp + " = getelementptr ptr, ptr " + seqRoot.ir + ", i64 0");
-                std::string vt = em_.nextTemp();
-                em_.emit(vt + " = load ptr, ptr " + vtp);
-                std::string mp = em_.nextTemp();
-                em_.emit(mp + " = getelementptr ptr, ptr " + vt + ", i64 " +
-                         std::to_string(mi->vtableSlot));
-                std::string fp = em_.nextTemp();
-                em_.emit(fp + " = load ptr, ptr " + mp);
-                std::string reg = em_.nextTemp();
-                em_.emit(reg + " = call ptr " + fp + "(" + argStr + ")");
+                std::string vtp = emitGep("ptr", seqRoot.ir, "i64", "0");
+                std::string vt = emitLoad("ptr", vtp);
+                std::string mp = emitGep("ptr", vt, "i64", std::to_string(mi->vtableSlot));
+                std::string fp = emitLoad("ptr", mp);
+                std::string reg = emitCall("ptr", fp, argStr);
                 genForArray(st, varName, Value(reg, mi->returnType));
             } else {
-                std::string reg = em_.nextTemp();
-                em_.emit(reg + " = call ptr " + mi->irName + "(" + argStr + ")");
+                std::string reg = emitCall("ptr", mi->irName, argStr);
                 genForArray(st, varName, Value(reg, mi->returnType));
             }
             return;
@@ -909,16 +908,15 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
     pinLoopSpillCheckpoint();
 
     // 长度也只求一次
-    std::string lenReg = em_.nextTemp();
-    em_.emit(lenReg + " = call i64 @hao_array_len(ptr " + seq.ir + ")");
+    std::string lenReg = emitCall("i64", "@hao_array_len", "ptr " + seq.ir);
     std::string lenAddr = em_.nextNamed("for.len");
-    em_.emit(lenAddr + " = alloca i64");
-    em_.emit("store i64 " + lenReg + ", ptr " + lenAddr);
+    emitAllocaAt(lenAddr, "i64");
+    emitStore("i64", lenReg, lenAddr);
 
     // 索引变量
     std::string idxAddr = em_.nextNamed("for.idx");
-    em_.emit(idxAddr + " = alloca i64");
-    em_.emit("store i64 0, ptr " + idxAddr);
+    emitAllocaAt(idxAddr, "i64");
+    emitStore("i64", "0", idxAddr);
 
     /* 循环变量：池内复用 / 池外一次 push */
     std::string varAddr;
@@ -927,9 +925,9 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
         pinLoopSpillCheckpoint(); /* 保护 seq+var，体 spill 可 recycle */
     } else {
         varAddr = em_.nextNamed(varName + ".addr");
-        em_.emit(varAddr + " = alloca " + elemType->llvmType());
+        emitAllocaAt(varAddr, elemType->llvmType());
         if (isGcPointerType(elemType)) {
-            em_.emit("store ptr null, ptr " + varAddr);
+            emitStore("ptr", "null", varAddr);
             emitGcRootPush(varAddr);
         }
     }
@@ -943,19 +941,16 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
     std::string stepL = em_.nextLabel("for.step");
     std::string endL  = em_.nextLabel("for.end");
 
-    em_.emit("br label %" + condL);
+    emitBr(condL);
 
     // ---- 条件：idx < len；seq 已在 sticky，safepoint 在判定之后 ----
     em_.emitLabel(condL);
     blockTerminated_ = false;
-    std::string iv = em_.nextTemp();
-    em_.emit(iv + " = load i64, ptr " + idxAddr);
-    std::string lv = em_.nextTemp();
-    em_.emit(lv + " = load i64, ptr " + lenAddr);
-    std::string cmp = em_.nextTemp();
-    em_.emit(cmp + " = icmp slt i64 " + iv + ", " + lv);
-    em_.emit("call void @hao_gc_safepoint()");
-    em_.emit("br i1 " + cmp + ", label %" + bodyL + ", label %" + endL);
+    std::string iv = emitLoad("i64", idxAddr);
+    std::string lv = emitLoad("i64", lenAddr);
+    std::string cmp = emitICmp("slt", "i64", iv, lv);
+    emitSafepoint();
+    emitCondBr(cmp, bodyL, endL);
 
     // ---- 循环体 ----
     em_.emitLabel(bodyL);
@@ -964,20 +959,15 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
         // 循环变量作用域限定在循环体内，每轮重新绑定
         SymbolTable::Guard g(syms_);
 
-        std::string iv2 = em_.nextTemp();
-        em_.emit(iv2 + " = load i64, ptr " + idxAddr);
-        std::string seqv = em_.nextTemp();
-        em_.emit(seqv + " = load ptr, ptr " + seqAddr);
+        std::string iv2 = emitLoad("i64", idxAddr);
+        std::string seqv = emitLoad("ptr", seqAddr);
 
         // 索引已由 cond 保证在范围内，无需再做边界检查
         std::string gepTy = elemType->arrayGepType();
-        std::string elemPtr = em_.nextTemp();
-        em_.emit(elemPtr + " = getelementptr " + gepTy + ", ptr " + seqv +
-                 ", i64 " + iv2);
-        std::string elemVal = em_.nextTemp();
-        em_.emit(elemVal + " = load " + elemType->llvmType() + ", ptr " + elemPtr);
+        std::string elemPtr = emitGep(gepTy, seqv, "i64", iv2);
+        std::string elemVal = emitLoad(elemType->llvmType(), elemPtr);
 
-        em_.emit("store " + elemType->llvmType() + " " + elemVal + ", ptr " + varAddr);
+        emitStore(elemType->llvmType(), elemVal, varAddr);
 
         auto sym = std::make_shared<Symbol>();
         sym->kind = SymbolKind::Variable;
@@ -986,6 +976,8 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
         sym->isMutable = false;    // 循环变量不可赋值
         sym->irAddr = varAddr;
         syms_.declare(sym);
+        emitDbgDeclareIf(varAddr, varName,
+                         st->getStart() ? static_cast<int>(st->getStart()->getLine()) : 1, 0);
 
         LoopContext flc;
         flc.breakLabel = endL;
@@ -996,24 +988,22 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
         genStatement(st->statement());
         loops_.pop_back();
     }
-    if (!blockTerminated_) em_.emit("br label %" + stepL);
+    if (!blockTerminated_) emitBr(stepL);
 
     // ---- 递增（continue 亦入此；回收体 spill，保护 seq/var）----
     em_.emitLabel(stepL);
     blockTerminated_ = false;
     recycleLoopSpillSlots();
-    std::string iv3 = em_.nextTemp();
-    em_.emit(iv3 + " = load i64, ptr " + idxAddr);
-    std::string inc = em_.nextTemp();
-    em_.emit(inc + " = add i64 " + iv3 + ", 1");
-    em_.emit("store i64 " + inc + ", ptr " + idxAddr);
-    em_.emit("br label %" + condL);
+    std::string iv3 = emitLoad("i64", idxAddr);
+    std::string inc = emitBinOp("add", "i64", iv3, "1");
+    emitStore("i64", inc, idxAddr);
+    emitBr(condL);
 
     em_.emitLabel(endL);
     blockTerminated_ = false;
     if (isGcPointerType(elemType))
-        em_.emit("store ptr null, ptr " + varAddr);
-    em_.emit("store ptr null, ptr " + seqAddr);
+        emitStore("ptr", "null", varAddr);
+    emitStore("ptr", "null", seqAddr);
     if (isGcPointerType(elemType))
         unpinLoopSpillCheckpoint(); /* var 保护层 */
     unpinLoopSpillCheckpoint();     /* seq 保护层 */
@@ -1049,17 +1039,11 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
     // 虚表分派：seq.iterator() -> Iterator<X>
     auto dispatch = [&](const std::string& recv, InterfaceInfoPtr ii, const MethodInfo* m,
                         const std::string& retType) -> std::string {
-        std::string vtp = em_.nextTemp();
-        em_.emit(vtp + " = getelementptr ptr, ptr " + recv + ", i64 0");
-        std::string vt = em_.nextTemp();
-        em_.emit(vt + " = load ptr, ptr " + vtp);
-        std::string mp = em_.nextTemp();
-        em_.emit(mp + " = getelementptr ptr, ptr " + vt + ", i64 " +
-                 std::to_string(m->vtableSlot));
-        std::string fp = em_.nextTemp();
-        em_.emit(fp + " = load ptr, ptr " + mp);
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call " + retType + " " + fp + "(ptr " + recv + ")");
+        std::string vtp = emitGep("ptr", recv, "i64", "0");
+        std::string vt = emitLoad("ptr", vtp);
+        std::string mp = emitGep("ptr", vt, "i64", std::to_string(m->vtableSlot));
+        std::string fp = emitLoad("ptr", mp);
+        std::string reg = emitCall(retType, fp, "ptr " + recv);
         return reg;
     };
 
@@ -1078,9 +1062,9 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
         pinLoopSpillCheckpoint();
     } else {
         varAddr = em_.nextNamed(varName + ".addr");
-        em_.emit(varAddr + " = alloca " + elemType->llvmType());
+        emitAllocaAt(varAddr, elemType->llvmType());
         if (isGcPointerType(elemType)) {
-            em_.emit("store ptr null, ptr " + varAddr);
+            emitStore("ptr", "null", varAddr);
             emitGcRootPush(varAddr);
         }
     }
@@ -1092,18 +1076,16 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
     std::string bodyL = em_.nextLabel("for.body");
     std::string stepL = em_.nextLabel("for.step");
     std::string endL  = em_.nextLabel("for.end");
-    em_.emit("br label %" + condL);
+    emitBr(condL);
 
     // ---- 条件：先 load iter（sticky 根）再 hasNext，然后 safepoint ----
     em_.emitLabel(condL);
     blockTerminated_ = false;
-    std::string itv = em_.nextTemp();
-    em_.emit(itv + " = load ptr, ptr " + iterAddr);
+    std::string itv = emitLoad("ptr", iterAddr);
     std::string hn = dispatch(itv, itfI, hmi, "i8");
-    std::string cmp = em_.nextTemp();
-    em_.emit(cmp + " = icmp ne i8 " + hn + ", 0");
-    em_.emit("call void @hao_gc_safepoint()");
-    em_.emit("br i1 " + cmp + ", label %" + bodyL + ", label %" + endL);
+    std::string cmp = emitICmp("ne", "i8", hn, "0");
+    emitSafepoint();
+    emitCondBr(cmp, bodyL, endL);
 
     // ---- 循环体：x = iter.next() ----
     em_.emitLabel(bodyL);
@@ -1111,11 +1093,10 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
     {
         SymbolTable::Guard g(syms_);
 
-        std::string itv2 = em_.nextTemp();
-        em_.emit(itv2 + " = load ptr, ptr " + iterAddr);
+        std::string itv2 = emitLoad("ptr", iterAddr);
         std::string elemVal = dispatch(itv2, itfI, nmi, elemType->llvmType());
 
-        em_.emit("store " + elemType->llvmType() + " " + elemVal + ", ptr " + varAddr);
+        emitStore(elemType->llvmType(), elemVal, varAddr);
 
         auto sym = std::make_shared<Symbol>();
         sym->kind = SymbolKind::Variable;
@@ -1124,6 +1105,8 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
         sym->isMutable = false;    // 循环变量不可赋值
         sym->irAddr = varAddr;
         syms_.declare(sym);
+        emitDbgDeclareIf(varAddr, varName,
+                         st->getStart() ? static_cast<int>(st->getStart()->getLine()) : 1, 0);
 
         LoopContext flc;
         flc.breakLabel = endL;
@@ -1134,19 +1117,19 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
         genStatement(st->statement());
         loops_.pop_back();
     }
-    if (!blockTerminated_) em_.emit("br label %" + stepL);
+    if (!blockTerminated_) emitBr(stepL);
 
     // ---- 步进：回到条件（hasNext 每次重新判定）----
     em_.emitLabel(stepL);
     blockTerminated_ = false;
     recycleLoopSpillSlots();
-    em_.emit("br label %" + condL);
+    emitBr(condL);
 
     em_.emitLabel(endL);
     blockTerminated_ = false;
     if (isGcPointerType(elemType))
-        em_.emit("store ptr null, ptr " + varAddr);
-    em_.emit("store ptr null, ptr " + iterAddr);
+        emitStore("ptr", "null", varAddr);
+    emitStore("ptr", "null", iterAddr);
     if (isGcPointerType(elemType))
         unpinLoopSpillCheckpoint();
     unpinLoopSpillCheckpoint();
@@ -1182,13 +1165,11 @@ void IRGen::genWhenStmt(HaoLangParser::WhenStmtContext* st) {
         // 存入临时变量，避免每个分支重复求值；循环内走 spill 池
         if (isGcPointerType(subjType) && inLoopSpillPool()) {
             subjAddr = acquireLoopGcSlot("when.subj");
-            em_.emit("store " + subjType->llvmType() + " " + subject.ir +
-                     ", ptr " + subjAddr);
+            emitStore(subjType->llvmType(), subject.ir, subjAddr);
         } else {
             subjAddr = em_.nextNamed("when.subj");
-            em_.emit(subjAddr + " = alloca " + subjType->llvmType());
-            em_.emit("store " + subjType->llvmType() + " " + subject.ir +
-                     ", ptr " + subjAddr);
+            emitAllocaAt(subjAddr, subjType->llvmType());
+            emitStore(subjType->llvmType(), subject.ir, subjAddr);
             if (isGcPointerType(subjType))
                 emitGcRootPush(subjAddr);
         }
@@ -1208,7 +1189,7 @@ void IRGen::genWhenStmt(HaoLangParser::WhenStmtContext* st) {
         if (br->ELSE()) {
             if (auto* blk = br->block()) genBlock(blk);
             else if (auto* ex = br->expr()) genExpr(ex);
-            if (!blockTerminated_) em_.emit("br label %" + endL);
+            if (!blockTerminated_) emitBr(endL);
             blockTerminated_ = true;      // 当前块已终结
             allBranchesJumped = true;
             continue;
@@ -1234,8 +1215,7 @@ void IRGen::genWhenStmt(HaoLangParser::WhenStmtContext* st) {
                     return;
                 }
                 // 与主体比较相等
-                std::string sv = em_.nextTemp();
-                em_.emit(sv + " = load " + subjType->llvmType() + ", ptr " + subjAddr);
+                std::string sv = emitLoad(subjType->llvmType(), subjAddr);
 
                 if (subjType->kind == TypeKind::String) {
                     if (cv.type->kind != TypeKind::String) {
@@ -1243,11 +1223,10 @@ void IRGen::genWhenStmt(HaoLangParser::WhenStmtContext* st) {
                                          " 与主体类型 String 不匹配");
                         return;
                     }
-                    std::string eqr = em_.nextTemp();
-                    em_.emit(eqr + " = call i8 @hao_str_eq(ptr " + sv +
-                             ", ptr " + cv.ir + ")");
-                    condI1 = em_.nextTemp();
-                    em_.emit(condI1 + " = icmp ne i8 " + eqr + ", 0");
+                    std::string eqr = emitCall(
+                        "i8", "@hao_str_eq",
+                        "ptr " + sv + ", ptr " + cv.ir);
+                    condI1 = emitICmp("ne", "i8", eqr, "0");
                 } else if (subjType->isFloating() || cv.type->isFloating()) {
                     // Float/Double：须 fcmp（icmp float 非法 LLVM）
                     TypePtr ft = (subjType->kind == TypeKind::Double ||
@@ -1256,9 +1235,7 @@ void IRGen::genWhenStmt(HaoLangParser::WhenStmtContext* st) {
                     Value sdv(sv, subjType);
                     sdv = coerce(sdv, ft, 0, 0);
                     cv  = coerce(cv,  ft, 0, 0);
-                    condI1 = em_.nextTemp();
-                    em_.emit(condI1 + " = fcmp oeq " + ft->llvmType() + " " +
-                             sdv.ir + ", " + cv.ir);
+                    condI1 = emitFCmp("oeq", ft->llvmType(), sdv.ir, cv.ir);
                 } else {
                     if (!isAssignable(cv.type, subjType) &&
                         !isAssignable(subjType, cv.type)) {
@@ -1282,9 +1259,7 @@ void IRGen::genWhenStmt(HaoLangParser::WhenStmtContext* st) {
                     Value sdv(sv, subjType);
                     sdv = coerce(sdv, ct, 0, 0);
                     cv  = coerce(cv,  ct, 0, 0);
-                    condI1 = em_.nextTemp();
-                    em_.emit(condI1 + " = icmp eq " + ct->llvmType() +
-                             " " + sdv.ir + ", " + cv.ir);
+                    condI1 = emitICmp("eq", ct->llvmType(), sdv.ir, cv.ir);
                 }
             } else {
                 // 无主体：分支条件本身是 Bool
@@ -1300,7 +1275,7 @@ void IRGen::genWhenStmt(HaoLangParser::WhenStmtContext* st) {
             // 命中即执行分支体；否则继续检查下一个值
             bool lastValue = (ei + 1 == exprs.size());
             std::string failL = lastValue ? nextL : em_.nextLabel("when.or");
-            em_.emit("br i1 " + condI1 + ", label %" + bodyL + ", label %" + failL);
+            emitCondBr(condI1, bodyL, failL);
             if (!lastValue) {
                 em_.emitLabel(failL);
                 blockTerminated_ = false;
@@ -1314,7 +1289,7 @@ void IRGen::genWhenStmt(HaoLangParser::WhenStmtContext* st) {
         if (auto* blk = br->block()) genBlock(blk);
         else if (auto* ex = br->expr()) genExpr(ex);
         endBlockGcScope();
-        if (!blockTerminated_) em_.emit("br label %" + endL);
+        if (!blockTerminated_) emitBr(endL);
 
         em_.emitLabel(nextL);
         blockTerminated_ = false;
@@ -1323,12 +1298,12 @@ void IRGen::genWhenStmt(HaoLangParser::WhenStmtContext* st) {
     // 无 else 且所有分支都不匹配时，直接落到 end。
     // blockTerminated_ 为真说明当前块已有终结指令，不能再发射 br
     // （一个基本块只允许一个终结指令）。
-    if (!blockTerminated_) em_.emit("br label %" + endL);
+    if (!blockTerminated_) emitBr(endL);
 
     em_.emitLabel(endL);
     blockTerminated_ = false;
     if (hasSubject && isGcPointerType(subjType) && !subjAddr.empty())
-        em_.emit("store ptr null, ptr " + subjAddr);
+        emitStore("ptr", "null", subjAddr);
     (void)allBranchesJumped;
 }
 

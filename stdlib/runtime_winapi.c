@@ -165,6 +165,8 @@ static long __stdcall hao_crash_uef(void* ep) {
             fprintf(f, "exception=0x%08X flags=0x%X addr=%p rva=0x%llx base=%p tid=%u\n",
                     (unsigned)code, (unsigned)flags, at, (unsigned long long)rva,
                     base, (unsigned)tid);
+            hao_dbg_fprint_src_loc(f);
+            hao_dbg_fprint_stack(f);
             if (code == 0xC0000005u) {
                 fprintf(f, "access=%s av_addr=%p\n",
                         info0 ? "write" : "read", (void*)info1);
@@ -199,6 +201,7 @@ static long __stdcall hao_crash_uef(void* ep) {
                 else
                     fprintf(f, "  #%d %p rva=?\n", i, fp);
             }
+            hao_gc_fprint_debug_snapshot(f);
             fprintf(f, "---- end ----\n");
             fflush(f);
             fclose(f);

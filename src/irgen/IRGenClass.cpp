@@ -1203,25 +1203,22 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
     beginFunctionGcRoots();
     emitPushUnwindGcRoot();
     /* v0.53.5：反射工厂入口 safepoint（根已就绪） */
-    em_.emit("call void @hao_gc_safepoint()");
+    emitSafepoint();
 
     // 与普通 new 一致：先跑静态初始化（v0.30 $new0 曾漏，会导致静态字段未就绪）
     if (ci->hasStaticInit)
-        em_.emit("call void @" + ci->name + ".ensureInit()");
+        emitCallVoid("@" + ci->name + ".ensureInit", "");
 
     std::string objRaw = emitObjectNew(ci->slotCount(), objectPtrBitmap(ci.get()));
     std::string objSlot = emitSpillGcRoot("new.obj", objRaw);
-    std::string obj = em_.nextTemp();
-    em_.emit(obj + " = load ptr, ptr " + objSlot);
-    std::string vtp = em_.nextTemp();
-    em_.emit(vtp + " = getelementptr ptr, ptr " + obj + ", i64 0");
-    em_.emit("store ptr " + ci->vtableIRName + ", ptr " + vtp);
+    std::string obj = emitLoad("ptr", objSlot);
+    std::string vtp = emitGep("ptr", obj, "i64", "0");
+    emitStore("ptr", ci->vtableIRName, vtp);
 
     // 字段默认值：与语言 new 同路径（genExpr + coerce），覆盖 Int?/对象/lambda 等
     for (const auto& f : ci->fields) {
         if (!f.defaultExpr) continue;
-        obj = em_.nextTemp();
-        em_.emit(obj + " = load ptr, ptr " + objSlot);
+        obj = emitLoad("ptr", objSlot);
         auto* dexpr = static_cast<HaoLangParser::ExprContext*>(f.defaultExpr);
         expectedTypes_.push_back(f.type);
         ExpectedTypeGuard eg{this};
@@ -1242,44 +1239,33 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
         emitHeapStore(fp, dv.ir, f.type, obj);
     }
 
-    obj = em_.nextTemp();
-    em_.emit(obj + " = load ptr, ptr " + objSlot);
+    obj = emitLoad("ptr", objSlot);
 
     // 从 [Long] 槽按构造器真实 LLVM 类型解包（与 emitInvokeThunk 同约定）
     std::string argStr = "ptr " + obj;
     for (size_t i = 0; i < ci->ctorParamTypes.size(); ++i) {
         std::string lt = ci->ctorParamTypes[i]->llvmType();
-        std::string cs = em_.nextTemp();
-        em_.emit(cs + " = getelementptr ptr, ptr %argslots, i64 " +
-                 std::to_string(i));
-        std::string ca = em_.nextTemp();
-        em_.emit(ca + " = load i64, ptr " + cs);
+        std::string cs = emitGep("ptr", "%argslots", "i64", std::to_string(i));
+        std::string ca = emitLoad("i64", cs);
         std::string pv;
         if (lt == "double") {
-            std::string cp = em_.nextTemp();
-            em_.emit(cp + " = bitcast i64 " + ca + " to double");
+            std::string cp = emitCast("bitcast", "i64", ca, "double");
             pv = cp;
         } else if (lt == "float") {
-            std::string ct = em_.nextTemp();
-            em_.emit(ct + " = trunc i64 " + ca + " to i32");
-            std::string cp = em_.nextTemp();
-            em_.emit(cp + " = bitcast i32 " + ct + " to float");
+            std::string ct = emitCast("trunc", "i64", ca, "i32");
+            std::string cp = emitCast("bitcast", "i32", ct, "float");
             pv = cp;
         } else if (lt == "i32") {
-            std::string cp = em_.nextTemp();
-            em_.emit(cp + " = trunc i64 " + ca + " to i32");
+            std::string cp = emitCast("trunc", "i64", ca, "i32");
             pv = cp;
         } else if (lt == "i16") {
-            std::string cp = em_.nextTemp();
-            em_.emit(cp + " = trunc i64 " + ca + " to i16");
+            std::string cp = emitCast("trunc", "i64", ca, "i16");
             pv = cp;
         } else if (lt == "i8") {
-            std::string cp = em_.nextTemp();
-            em_.emit(cp + " = trunc i64 " + ca + " to i8");
+            std::string cp = emitCast("trunc", "i64", ca, "i8");
             pv = cp;
         } else if (lt == "ptr") {
-            std::string cp = em_.nextTemp();
-            em_.emit(cp + " = inttoptr i64 " + ca + " to ptr");
+            std::string cp = emitIntToPtr("i64", ca);
             pv = cp;
         } else { // i64
             pv = ca;
@@ -1288,12 +1274,11 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
     }
 
     if (!ci->ctorIRName.empty())
-        em_.emit("call void " + ci->ctorIRName + "(" + argStr + ")");
+        emitCallVoid(ci->ctorIRName, argStr);
     if (!blockTerminated_) {
-        obj = em_.nextTemp();
-        em_.emit(obj + " = load ptr, ptr " + objSlot);
+        obj = emitLoad("ptr", objSlot);
         emitGcRootUnwind();
-        em_.emit("ret ptr " + obj);
+        emitRet("ptr", obj);
     }
     em_.flushEntryAllocas();
     em_.emitRaw("}");
@@ -2023,13 +2008,11 @@ void IRGen::genEnum(HaoLangParser::EnumDeclContext* ed, const ClassInfoPtr& ci) 
                 "(ptr %this.arg, ptr %_name.arg, i32 %_ordinal.arg) {");
     em_.emitLabel("entry");
     {
-        std::string n1 = em_.nextTemp();
-        em_.emit(n1 + " = getelementptr ptr, ptr %this.arg, i64 " + std::to_string(nameSlot));
+        std::string n1 = emitGep("ptr", "%this.arg", "i64", std::to_string(nameSlot));
         emitHeapStore(n1, "%_name.arg", Type::makeString(), "%this.arg");
-        std::string n2 = em_.nextTemp();
-        em_.emit(n2 + " = getelementptr ptr, ptr %this.arg, i64 " + std::to_string(ordSlot));
-        em_.emit("store i32 %_ordinal.arg, ptr " + n2);
-        em_.emit("ret void");
+        std::string n2 = emitGep("ptr", "%this.arg", "i64", std::to_string(ordSlot));
+        emitStore("i32", "%_ordinal.arg", n2);
+        emitRetVoid();
     }
     em_.emitRaw("}");
     currentClass_ = nullptr; thisAddr_.clear();
@@ -2044,11 +2027,9 @@ void IRGen::genEnum(HaoLangParser::EnumDeclContext* ed, const ClassInfoPtr& ci) 
         em_.emitRaw("define " + ret->llvmType() + " @" + ci->name + "." +
                     mname + "(ptr %this.arg) {");
         em_.emitLabel("entry");
-        std::string fp = em_.nextTemp();
-        em_.emit(fp + " = getelementptr ptr, ptr %this.arg, i64 " + std::to_string(slot));
-        std::string v = em_.nextTemp();
-        em_.emit(v + " = load " + ret->llvmType() + ", ptr " + fp);
-        em_.emit("ret " + ret->llvmType() + " " + v);
+        std::string fp = emitGep("ptr", "%this.arg", "i64", std::to_string(slot));
+        std::string v = emitLoad(ret->llvmType(), fp);
+        emitRet(ret->llvmType(), v);
         em_.emitRaw("}");
         currentClass_ = nullptr; thisAddr_.clear();
     };
@@ -2100,6 +2081,7 @@ void IRGen::genMethod(HaoLangParser::FuncDeclContext* fn, const ClassInfoPtr& ci
     em_.emitBlank();
     em_.emitRaw(sig);
     em_.emitLabel("entry");
+    beginDebugFunction(fn, ci->name + "." + mname);
 
     genFunctionBody(fn->block(), mi->paramNames, mi->paramTypes,
                     mi->returnType, /*isMain=*/false, hasThis, ci->name,
@@ -2130,6 +2112,7 @@ void IRGen::genConstructor(HaoLangParser::ConstructorDeclContext* ctor,
     em_.emitBlank();
     em_.emitRaw(sig);
     em_.emitLabel("entry");
+    beginDebugFunction(ctor, ci->name + ".<init>");
 
     genFunctionBody(ctor->block(), ci->ctorParamNames, ci->ctorParamTypes,
                     Type::makeUnit(), /*isMain=*/false, /*hasThis=*/true, ci->name,
@@ -2320,12 +2303,10 @@ Value IRGen::callGenericMethod(const Value& recv, const ClassInfoPtr& ci,
         argStr += ", " + formatCallArg(mi->paramTypes[k], aex, args[k]);
     }
     if (mi->returnType->isUnit()) {
-        em_.emit("call void " + mi->irName + "(" + argStr + ")");
+        emitCallVoid(mi->irName, argStr);
         return Value("", Type::makeUnit());
     }
-    std::string reg = em_.nextTemp();
-    em_.emit(reg + " = call " + mi->returnType->llvmType() + " " +
-             mi->irName + "(" + argStr + ")");
+    std::string reg = emitCall(mi->returnType->llvmType(), mi->irName, argStr);
     return Value(reg, mi->returnType);
 }
 
@@ -2395,6 +2376,7 @@ void IRGen::genMethodBodyFromMI(HaoLangParser::FuncDeclContext* fn,
     em_.emitBlank();
     em_.emitRaw(sig);
     em_.emitLabel("entry");
+    beginDebugFunction(fn, ci->name + "." + mi.name);
     genFunctionBody(fn->block(), mi.paramNames, mi.paramTypes,
                     mi.returnType, /*isMain=*/false, /*hasThis=*/true, ci->name,
                     fn, "方法 '" + ci->name + "." + mi.name + "'");
@@ -2520,9 +2502,10 @@ void IRGen::emitStaticGcRootRegistration() {
     em_.emitBlank();
     em_.emitRaw("define void @hao.registerStaticRoots() {");
     em_.emitLabel("entry");
+    clearDebugLoc();
     for (const auto& g : uniq)
-        em_.emit("call void @hao_gc_add_root_slot(ptr " + g + ")");
-    em_.emit("ret void");
+        emitCallVoid("@hao_gc_add_root_slot", "ptr " + g);
+    emitRetVoid();
     em_.emitRaw("}");
 }
 
@@ -2640,13 +2623,13 @@ void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
     em_.emitRaw("define void @" + ci->name + ".staticinit() {");
     em_.emitLabel("entry");
     /* v0.53.5：入口 safepoint（分配密集的静态/枚举初始化也能握手） */
-    em_.emit("call void @hao_gc_safepoint()");
+    clearDebugLoc();
+    emitSafepoint();
 
     // 合成 TypeName.Class ← classOfMeta(@T.meta)（枚举/普通类共用）
     if (hasClassToken) {
-        std::string tok = em_.nextTemp();
-        em_.emit(tok + " = call ptr @reflect$classOfMeta(ptr @" + ci->name +
-                 ".meta)");
+        std::string tok = emitCall("ptr", "@reflect$classOfMeta",
+                                   "ptr @" + ci->name + ".meta");
         emitGlobalGcStore("@" + ci->name + ".Class", tok,
                           Type::makeClass("reflect$Class"));
     }
@@ -2659,19 +2642,17 @@ void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
         for (auto* ec : ed->enumConstant()) {
             std::string cname = ec->IDENT()->getText();
             std::string obj = emitObjectNew(ci->slotCount(), objectPtrBitmap(ci.get()));
-            std::string vtp = em_.nextTemp();
-            em_.emit(vtp + " = getelementptr ptr, ptr " + obj + ", i64 0");
-            em_.emit("store ptr " + ci->vtableIRName + ", ptr " + vtp);
+            std::string vtp = emitGep("ptr", obj, "i64", "0");
+            emitStore("ptr", ci->vtableIRName, vtp);
             std::string nameC = em_.internString(cname);
-            std::string nameS = em_.nextTemp();
-            em_.emit(nameS + " = call ptr @hao_str_from_cstr(ptr " + nameC + ")");
-            em_.emit("call void " + ci->ctorIRName + "(ptr " + obj +
-                     ", ptr " + nameS + ", i32 " +
-                     std::to_string(ord) + ")");
+            std::string nameS = emitCall("ptr", "@hao_str_from_cstr", "ptr " + nameC);
+            emitCallVoid(ci->ctorIRName,
+                         "ptr " + obj + ", ptr " + nameS + ", i32 " +
+                         std::to_string(ord));
             emitGlobalGcStore("@" + ci->name + "." + cname, obj, enumTy);
             ++ord;
         }
-        em_.emit("ret void");
+        emitRetVoid();
     } else {
     // 非常量静态字段运行时初始化（声明顺序）
     for (const auto& f : ci->staticFields) {
@@ -2699,11 +2680,12 @@ void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
     // 显式静态构造器体
     if (hasCtor) {
         auto* sc = static_cast<HaoLangParser::StaticCtorDeclContext*>(ci->staticCtorNode);
+        beginDebugFunction(sc, ci->name + ".<clinit>");
         genFunctionBody(sc->block(), {}, {}, Type::makeUnit(),
                         /*isMain=*/false, /*hasThis=*/false, ci->name, sc,
                         "静态构造器 '" + ci->name + "'");
     } else if (!blockTerminated_) {
-        em_.emit("ret void");
+        emitRetVoid();
     }
     }
     em_.flushEntryAllocas();
@@ -2713,27 +2695,26 @@ void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
 
     // ---- @Class.ensureInit ----
     em_.resetFunctionState();
-    std::string g = em_.nextTemp();
-    std::string n = em_.nextTemp();
     std::string initL = em_.nextLabel("q.init");
     std::string doneL = em_.nextLabel("q.done");
     em_.emitRaw("define void @" + ci->name + ".ensureInit() {");
     em_.emitLabel("entry");
-    em_.emit(g + " = load i32, ptr @" + ci->name + ".initguard");
-    em_.emit(n + " = icmp eq i32 " + g + ", 0");
-    em_.emit("br i1 " + n + ", label %" + initL + ", label %" + doneL);
+    clearDebugLoc();
+    std::string g = emitLoad("i32", "@" + ci->name + ".initguard");
+    std::string n = emitICmp("eq", "i32", g, "0");
+    emitCondBr(n, initL, doneL);
     em_.emitLabel(initL);
-    em_.emit("store i32 1, ptr @" + ci->name + ".initguard");
-    em_.emit("call void @" + ci->name + ".staticinit()");
-    em_.emit("store i32 2, ptr @" + ci->name + ".initguard");
-    em_.emit("br label %" + doneL);
+    emitStore("i32", "1", "@" + ci->name + ".initguard");
+    emitCallVoid("@" + ci->name + ".staticinit", "");
+    emitStore("i32", "2", "@" + ci->name + ".initguard");
+    emitBr(doneL);
     em_.emitLabel(doneL);
-    em_.emit("ret void");
+    emitRetVoid();
     em_.emitRaw("}");
 }
 
 void IRGen::emitStaticEnsureInit(const ClassInfoPtr& ci) {
     if (ci->hasStaticInit)
-        em_.emit("call void @" + ci->name + ".ensureInit()");
+        emitCallVoid("@" + ci->name + ".ensureInit", "");
 }
 } // namespace hao

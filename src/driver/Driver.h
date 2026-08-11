@@ -21,6 +21,7 @@ struct BuildOptions {
     std::string target;          // 交叉编译目标，如 linux-amd64；空则用宿主平台
     bool keepIR = false;         // 保留中间 .ll
     bool emitIROnly = false;     // 只生成 .ll，不编译
+    bool emitDebug = false;      // I0/I3/I4：.ll 挂 !dbg；链接传 clang -g
     bool verbose = false;        // 打印执行的外部命令
     bool quiet = false;          // 抑制「编译成功」等提示（hao test 用）
     bool testMode = false;       // v0.42：纳入 *_test.hao；跳过业务 main；加载 testing

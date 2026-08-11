@@ -1,0 +1,32 @@
+// U7a：线程 × try/finally GC 根存活（发现向；非全量 unwind）
+package main;
+
+import thread;
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func worker(shared: Box, done: Box) {
+    try {
+        gc.GC.collect();
+        fmt.println(shared.s == "live");
+    } finally {
+        fmt.println(shared.s == "live");
+        done.s = "1";
+    }
+}
+
+func main() {
+    var shared = new Box("live");
+    var done = new Box("0");
+    val t = new thread.Thread();
+    t.start({ worker(shared, done); });
+    t.join();
+    fmt.println(shared.s == "live");
+    fmt.println(done.s == "1");
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

@@ -13,6 +13,7 @@
 
 #include "HaoVersion.h"
 #include "mod/HaoProject.h"
+#include "sema/Diagnostic.h"
 #include "util/FileUtil.h"
 #include "util/PathUtil.h"
 
@@ -60,7 +61,8 @@ bool mergeExternLibs(BuildOptions& linkOpts,
     for (auto& lb : externLibs) {
         if (isLibraryPath(lb)) {
             if (!fileExists(lb)) {
-                std::cerr << "错误: 未能找到 @link 声明的文件 '" << lb << "'\n";
+                DiagnosticEngine::toolError(
+                    "未能找到 @link 声明的文件 '" + lb + "'");
                 return false;
             }
             if (std::find(linkOpts.linkFiles.begin(), linkOpts.linkFiles.end(), lb)
@@ -84,7 +86,7 @@ int Driver::build(const BuildOptions& opts) {
     BuildOptions o = opts;
     std::string projErr;
     if (!applyHaoProjectToOptions(o, projErr)) {
-        std::cerr << "错误: " << projErr << "\n";
+        DiagnosticEngine::toolError(projErr);
         return 1;
     }
 
@@ -129,15 +131,15 @@ int Driver::run(const BuildOptions& opts) {
     BuildOptions o = opts;
     std::string projErr;
     if (!applyHaoProjectToOptions(o, projErr)) {
-        std::cerr << "错误: " << projErr << "\n";
+        DiagnosticEngine::toolError(projErr);
         return 1;
     }
 
     // 为其他平台编译的产物无法在本机执行
     if (!o.target.empty() && o.target != platformName(hostPlatform())) {
-        std::cerr << "错误: 无法运行为 " << o.target << " 编译的程序"
-                  << "（当前平台 " << platformName(hostPlatform()) << "）\n"
-                  << "      请改用 hao build\n";
+        DiagnosticEngine::toolError(
+            "无法运行为 " + o.target + " 编译的程序（当前平台 " +
+            platformName(hostPlatform()) + "）；请改用 hao build");
         return 1;
     }
 

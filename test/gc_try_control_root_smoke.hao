@@ -1,0 +1,75 @@
+// U5：return/throw-from-finally / select×try / when×try GC 根（发现向）
+package main;
+
+import channel;
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+// return 穿 finally：finally 内仍可读外层 GC；返回值存活
+func retThrough(outer: Box): Box {
+    try {
+        return outer;
+    } finally {
+        fmt.println(outer.s == "live");
+    }
+}
+
+func main() {
+    // 1) return × finally
+    var live = new Box("live");
+    var got = retThrough(live);
+    fmt.println(got.s == "live");
+    fmt.println(live.s == "live");
+
+    // 2) finally 内 throw：外层 catch 后外层根仍可读
+    var held = new Box("held");
+    try {
+        try {
+            var tmp = new Box("tmp");
+        } finally {
+            throw new Exception("from-fin");
+        }
+    } catch (e: Exception) {
+        fmt.println(held.s == "held");
+        fmt.println(e.getMessage().length > 0);
+    }
+
+    // 3) select × try/finally
+    var sel = new Box("sel");
+    var ch = channel.make(1);
+    ch.sendStr("x");
+    select {
+        case s = ch.recvStr():
+            try {
+                gc.GC.collect();
+                fmt.println(s!! == "x");
+            } finally {
+                fmt.println(sel.s == "sel");
+            }
+        default:
+            fmt.println(false);
+    }
+
+    // 4) when × try/finally
+    var wbox = new Box("when");
+    var n = 1;
+    when (n) {
+        1 -> {
+            try {
+                throw new Exception("w");
+            } catch (e: Exception) {
+                fmt.println(wbox.s == "when");
+            } finally {
+                fmt.println(wbox.s == "when");
+            }
+        }
+        else -> fmt.println(false);
+    }
+
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

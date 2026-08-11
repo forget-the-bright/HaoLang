@@ -1,0 +1,29 @@
+// U6a：break 穿 try/finally GC 根存活（发现向；非全量 unwind）
+package main;
+
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var keep = new Box("keep");
+    var i = 0;
+    while (i < 5) {
+        try {
+            if (i == 2) {
+                break;
+            }
+        } finally {
+            // break 到达前 finally 须仍可读外层 GC 根
+            fmt.println(keep.s == "keep");
+        }
+        i += 1;
+    }
+    fmt.println(i == 2);
+    fmt.println(keep.s == "keep");
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

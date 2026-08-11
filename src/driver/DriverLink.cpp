@@ -8,6 +8,7 @@
 
 #include "driver/Driver.h"
 #include "HaoVersion.h"
+#include "sema/Diagnostic.h"
 #include "util/PathUtil.h"
 
 #include <algorithm>
@@ -25,9 +26,10 @@ bool Driver::linkExecutable(const BuildOptions& opts,
     // 先校验目标平台，避免因平台名拼错而报出令人困惑的"运行时库缺失"
     Platform p = opts.target.empty() ? hostPlatform() : platformFromName(opts.target);
     if (!p.os) {
-        std::cerr << "错误: 未知的目标平台 '" << opts.target << "'\n"
-                  << "      支持: win-amd64, win-arm64, linux-amd64, "
-                     "linux-arm64, darwin-amd64, darwin-arm64\n";
+        DiagnosticEngine::toolError(
+            "未知的目标平台 '" + opts.target +
+            "'；支持: win-amd64, win-arm64, linux-amd64, "
+            "linux-arm64, darwin-amd64, darwin-arm64");
         return false;
     }
 
@@ -35,14 +37,14 @@ bool Driver::linkExecutable(const BuildOptions& opts,
     std::string rt = findRuntimeLib(opts.target);
 
     if (rt.empty()) {
-        std::cerr << "错误: 未找到 HaoLang 运行时库";
+        std::string msg = "未找到 HaoLang 运行时库";
         if (!opts.target.empty())
-            std::cerr << " libhaort-" << opts.target << ".a\n"
-                      << "      交叉编译需要目标平台的运行时库，请先执行:\n"
-                      << "        script\\build_runtime.ps1 -Target " << opts.target << "\n";
+            msg += " libhaort-" + opts.target +
+                   ".a；交叉编译请先: script\\build_runtime.ps1 -Target " +
+                   opts.target;
         else
-            std::cerr << " libhaort.a\n"
-                      << "      请先执行: script\\build_runtime.ps1\n";
+            msg += " libhaort.a；请先执行: script\\build_runtime.ps1";
+        DiagnosticEngine::toolError(msg);
         return false;
     }
 
@@ -51,6 +53,8 @@ bool Driver::linkExecutable(const BuildOptions& opts,
     std::string cmd = quote(clang) + " " + quote(llPath) + " " + quote(rt)
                     + " -o " + quote(exePath)
                     + " -O2 -Wno-override-module";
+    if (opts.emitDebug)
+        cmd += " -g";
 
     // ---- 外部 C 库链接（v0.10.0）：-L<dir> / --link <file> / -l<name> ----
     // 追加到命令末尾（-o 之后），clang 会按需编译 .c 源码、链接 .lib/.a/.o。
@@ -99,11 +103,10 @@ bool Driver::linkExecutable(const BuildOptions& opts,
         if (std::string(p.os) != "win") {
             std::string sysroot = findSysroot(opts.target);
             if (sysroot.empty()) {
-                std::cerr << "错误: 交叉编译到 " << opts.target
-                          << " 需要 sysroot（目标系统的 libc 头文件与库）\n"
-                          << "      这些文件不属于 LLVM，需单独准备。\n"
-                          << "      请执行: script\\fetch_sysroot.ps1 -Target "
-                          << opts.target << "\n";
+                DiagnosticEngine::toolError(
+                    "交叉编译到 " + opts.target +
+                    " 需要 sysroot（目标 libc）；请执行: "
+                    "script\\fetch_sysroot.ps1 -Target " + opts.target);
                 return false;
             }
             cmd += " --sysroot=" + quote(sysroot);
@@ -117,7 +120,8 @@ bool Driver::linkExecutable(const BuildOptions& opts,
 
     int rc = std::system(cmd.c_str());
     if (rc != 0) {
-        std::cerr << "错误: 链接失败（clang 返回 " << rc << "）\n";
+        DiagnosticEngine::toolError(
+            "链接失败（clang 返回 " + std::to_string(rc) + "）");
         return false;
     }
     return true;

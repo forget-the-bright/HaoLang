@@ -18,11 +18,63 @@ namespace hao {
 
 void IRGen::error(antlr4::ParserRuleContext* ctx, const std::string& msg) {
     auto* tok = ctx->getStart();
-    diags_.error(tok->getLine(), tok->getCharPositionInLine(), msg);
+    diags_.error(currentUnitPath_, tok->getLine(),
+                 tok->getCharPositionInLine(), msg);
 }
 
 void IRGen::error(antlr4::Token* tok, const std::string& msg) {
-    diags_.error(tok->getLine(), tok->getCharPositionInLine(), msg);
+    diags_.error(currentUnitPath_, tok->getLine(),
+                 tok->getCharPositionInLine(), msg);
+}
+
+SourceLoc IRGen::locFrom(antlr4::ParserRuleContext* ctx) const {
+    SourceLoc loc;
+    loc.file = currentUnitPath_;
+    if (!ctx) return loc;
+    auto* tok = ctx->getStart();
+    if (!tok) return loc;
+    loc.line = static_cast<unsigned>(tok->getLine());
+    loc.col = static_cast<unsigned>(tok->getCharPositionInLine() + 1);
+    return loc;
+}
+
+SourceLoc IRGen::locFrom(antlr4::Token* tok) const {
+    SourceLoc loc;
+    loc.file = currentUnitPath_;
+    if (!tok) return loc;
+    loc.line = static_cast<unsigned>(tok->getLine());
+    loc.col = static_cast<unsigned>(tok->getCharPositionInLine() + 1);
+    return loc;
+}
+
+void IRGen::emitRuntimeSrcLoc(const SourceLoc& loc) {
+    if (!loc.valid()) {
+        emitCallVoid("@hao_dbg_clear_src_loc", "");
+        return;
+    }
+    std::string fileC = em_.internString(loc.file.empty() ? "?" : loc.file);
+    emitCallVoid("@hao_dbg_set_src_loc",
+                 "ptr " + fileC + ", i32 " + std::to_string((int)loc.line) +
+                     ", i32 " + std::to_string((int)loc.col));
+}
+
+void IRGen::pinRuntimeCallSite(antlr4::ParserRuleContext* ctx) {
+    if (!ctx) return;
+    emitRuntimeSrcLoc(locFrom(ctx));
+}
+
+void IRGen::emitRuntimePushFrame(const SourceLoc& loc) {
+    std::string fileC =
+        em_.internString(loc.valid() && !loc.file.empty() ? loc.file : "?");
+    int line = loc.valid() ? (int)loc.line : 0;
+    int col = loc.valid() ? (int)loc.col : 0;
+    emitCallVoid("@hao_dbg_push_frame",
+                 "ptr " + fileC + ", i32 " + std::to_string(line) + ", i32 " +
+                     std::to_string(col));
+}
+
+void IRGen::emitRuntimePopFrame() {
+    emitCallVoid("@hao_dbg_pop_frame", "");
 }
 
 // ============================================================
@@ -295,6 +347,12 @@ void IRGen::setCurrentUnit(const SourceUnit& u, const std::vector<Import>& imp) 
     currentImportPath_  = u.importPath;
     currentUnitPath_    = u.path;
     currentImports_     = imp;
+    diags_.setDefaultFile(u.path);
+    if (!u.path.empty() && em_.debugEnabled()) {
+        // 仅首次设定：入口单元路径作为模块 DIFile（后续包切换不覆盖）
+        // setDebugFile 内部若已有值则保留——见 IREmitter
+        em_.setDebugFileIfEmpty(u.path);
+    }
     // 确保每个包都有导出表条目（即便没有 public 成员），
     // 这样解析限定名时能区分"包未导入"与"成员不存在/私有"
     pkgExports_[u.importPath];
@@ -553,6 +611,10 @@ std::string IRGen::overloadSuffix(const TypePtr& t) {
 }
 
 std::string IRGen::generate(const std::vector<SourceUnit>& units) {
+    // I3：模块 DIFile 钉入口单元（后续 setCurrentUnit 不覆盖）
+    if (!units.empty() && !units[0].path.empty())
+        em_.setDebugFileIfEmpty(units[0].path);
+
     // 预先为每个单元解析 imports（生成阶段也要用）
     std::vector<std::vector<Import>> allImports;
     allImports.reserve(units.size());
@@ -656,7 +718,8 @@ std::string IRGen::generate(const std::vector<SourceUnit>& units) {
     // 必须有 main（main 包不加前缀，故仍查 "main"）
     auto mainSym = syms_.global()->lookup("main");
     if (!mainSym || mainSym->kind != SymbolKind::Function) {
-        diags_.error(1, 0, "未找到程序入口函数 main()");
+        diags_.error(currentUnitPath_.empty() ? std::string("?") : currentUnitPath_,
+                     1, 0, "未找到程序入口函数 main()");
     }
 
     if (diags_.hasErrors()) return {};
@@ -1321,12 +1384,10 @@ Value IRGen::callGenericFunction(const std::string& tplName,
         argStr += formatCallArg(sym->paramTypes[k], al->arg(k)->expr(), args[k]);
     }
     if (sym->returnType->isUnit()) {
-        em_.emit("call void " + sym->irName + "(" + argStr + ")");
+        emitCallVoid(sym->irName, argStr);
         return Value("", Type::makeUnit());
     }
-    std::string reg = em_.nextTemp();
-    em_.emit(reg + " = call " + sym->returnType->llvmType() + " " +
-             sym->irName + "(" + argStr + ")");
+    std::string reg = emitCall(sym->returnType->llvmType(), sym->irName, argStr);
     return Value(reg, sym->returnType);
 }
 
@@ -1393,10 +1454,14 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
     emitPushUnwindGcRoot();
 
     // ---- 隐式 this ----
+    unsigned dbgArgBase = 0;
+    int dbgLine = (declCtx && declCtx->getStart())
+                      ? static_cast<int>(declCtx->getStart()->getLine())
+                      : 1;
     if (hasThis) {
         thisAddr_ = "%this.addr";
-        em_.emit(thisAddr_ + " = alloca ptr");
-        em_.emit("store ptr %this.arg, ptr " + thisAddr_);
+        emitAllocaAt(thisAddr_, "ptr");
+        emitStore("ptr", "%this.arg", thisAddr_);
         emitGcRootPush(thisAddr_);
 
         auto ts = std::make_shared<Symbol>();
@@ -1406,6 +1471,8 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
         ts->isMutable = false;
         ts->irAddr = thisAddr_;
         syms_.declare(ts);
+        dbgArgBase = 1;
+        emitDbgDeclareIf(thisAddr_, "this", dbgLine, 1);
     }
 
     // ---- 参数：拷贝到栈上 ----
@@ -1440,37 +1507,37 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
             emitGcRootPush(argSrc);
         } else if (boxed) {
             /* GC 形参：先把 .arg 挂进 shadow，再 object_new（分配可 safepoint） */
-            em_.emit(addr + " = alloca ptr");
+            emitAllocaAt(addr, "ptr");
             if (isGcPointerType(ptype)) {
-                em_.emit("store ptr " + argSrc + ", ptr " + addr);
+                emitStore("ptr", argSrc, addr);
                 emitGcRootPush(addr);
-                std::string held = em_.nextTemp();
-                em_.emit(held + " = load ptr, ptr " + addr);
+                std::string held = emitLoad("ptr", addr);
                 std::string cell = emitObjectNew(1, 1);
                 emitHeapStore(cell, held, ptype, cell);
-                em_.emit("store ptr " + cell + ", ptr " + addr);
+                emitStore("ptr", cell, addr);
             } else {
                 std::string cell = emitObjectNew(1, 0);
                 emitHeapStore(cell, argSrc, ptype, cell);
-                em_.emit("store ptr " + cell + ", ptr " + addr);
+                emitStore("ptr", cell, addr);
                 emitGcRootPush(addr);
             }
             ps->boxed = true;
             ps->irAddr = addr;
         } else {
-            em_.emit(addr + " = alloca " + ptype->llvmType());
-            em_.emit("store " + ptype->llvmType() + " " + argSrc +
-                     ", ptr " + addr);
+            emitAllocaAt(addr, ptype->llvmType());
+            emitStore(ptype->llvmType(), argSrc, addr);
             ps->irAddr = addr;
             if (isGcPointerType(ptype))
                 emitGcRootPush(addr);
         }
         syms_.declare(ps);
+        emitDbgDeclareIf(ps->irAddr, pname, dbgLine,
+                         dbgArgBase + static_cast<unsigned>(i) + 1);
     }
 
     // ---- 函数体：符号与参数同层；块 GC 作用域使顶层局部在落回出口前可清槽 ----
     /* v0.53.3：入口 safepoint，加密协作 STW（循环外长直线路径也能 park） */
-    em_.emit("call void @hao_gc_safepoint()");
+    emitSafepoint();
     pushSmartCastFrame();
     beginBlockGcScope();
     genBlock(body, /*newScope=*/false);
@@ -1480,16 +1547,16 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
     // ---- 补全返回 ----
     if (!blockTerminated_) {
         emitGcRootUnwind();
+        emitRuntimePopFrame();
         if (isMain) {
-            em_.emit("ret i32 0");
+            emitRet("i32", "0");
         } else if (returnType->isUnit()) {
-            em_.emit("ret void");
+            emitRetVoid();
         } else {
             error(declCtx, "'" + declName + "' 声明返回 " + returnType->toString() +
                            "，但存在没有 return 的执行路径");
             // 仍生成合法 IR，避免 clang 报错掩盖真实错误
-            em_.emit("ret " + returnType->llvmType() + " " +
-                     zeroValueFor(returnType));
+            emitRet(returnType->llvmType(), zeroValueFor(returnType));
         }
     }
     gcRootWm_.clear();
@@ -1594,21 +1661,20 @@ void IRGen::genFunction(HaoLangParser::FuncDeclContext* fn,
     em_.emitBlank();
     em_.emitRaw(sig);
     em_.emitLabel("entry");
+    beginDebugFunction(fn, name);
 
     // Go 式 init()：main 启动时先按依赖顺序调用各包 init()（依赖在前）
     if (isMain) {
         // 静态 GC 指针字段挂根槽（函数体在全部类就绪后 emit）
-        em_.emit("call void @hao.registerStaticRoots()");
+        emitCallVoid("@hao.registerStaticRoots", "");
         for (const auto& in : initCalls_)
-            em_.emit("call void " + in + "()");
+            emitCallVoid(in, "");
     }
 
     // main 带 args：把 argc/argv 构造成 [String] 数组，供参数绑定使用。
     mainArgsIR_.clear();
     if (hasArgs) {
-        std::string arr = em_.nextTemp();
-        em_.emit(arr + " = call ptr @hao_make_args(i32 %argc, i8** %argv)");
-        mainArgsIR_ = arr;
+        mainArgsIR_ = emitCall("ptr", "@hao_make_args", "i32 %argc, i8** %argv");
     }
 
     genFunctionBody(fn->block(), sym->paramNames, sym->paramTypes,

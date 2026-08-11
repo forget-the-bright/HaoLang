@@ -47,7 +47,7 @@ bool Driver::compileToIR(const BuildOptions& opts, std::string& llPath,
             std::cout << "[hao] testMode: 纳入 *_test.hao\n";
     }
     if (!resolver.resolve(inputs, diags)) {
-        diags.print("");
+        diags.print();
         return false;
     }
     auto units = resolver.sourceUnits();
@@ -55,12 +55,13 @@ bool Driver::compileToIR(const BuildOptions& opts, std::string& llPath,
     // ---- 语义分析 + IR 生成 ----
     IRGen gen(diags);
     gen.setTestMode(opts.testMode);
+    gen.setEmitDebug(opts.emitDebug);
     auto p = opts.target.empty() ? hostPlatform() : platformFromName(opts.target);
     if (p.triple) gen.setTargetTriple(p.triple);
 
     std::string ir = gen.generate(units);
 
-    if (!diags.diags().empty()) diags.print("");
+    if (!diags.diags().empty()) diags.print();
     if (diags.hasErrors()) return false;
 
     // 带出 extern @link(...) 声明的外部链接库，供链接阶段追加到命令。
@@ -84,7 +85,7 @@ bool Driver::compileToIR(const BuildOptions& opts, std::string& llPath,
     llPath = stripExt(baseOut) + ".ll";
     std::ofstream out(llPath, std::ios::binary);
     if (!out) {
-        std::cerr << "错误: 无法写入 " << llPath << "\n";
+        DiagnosticEngine::toolError("无法写入 " + llPath, llPath);
         return false;
     }
     out << ir;

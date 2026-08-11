@@ -9,6 +9,9 @@
 
 #include "irgen/IRGen.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 namespace hao {
 
 void IRGen::pushSmartCastFrame() { smartCastStack_.emplace_back(); }
@@ -106,20 +109,14 @@ Value IRGen::unboxNullableKnown(const Value& base, const TypePtr& nonNull) {
     if (!base.type->isBoxedNullable())
         return Value(base.ir, nonNull);
     auto unboxI64 = [&]() {
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call i64 @hao_unbox_i64(ptr " + base.ir + ")");
-        return Value(reg, nonNull);
+        return Value(emitCall("i64", "@hao_unbox_i64", "ptr " + base.ir), nonNull);
     };
     auto unboxI32 = [&]() {
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call i32 @hao_unbox_i32(ptr " + base.ir + ")");
-        return Value(reg, nonNull);
+        return Value(emitCall("i32", "@hao_unbox_i32", "ptr " + base.ir), nonNull);
     };
     auto unboxNarrow = [&](const std::string& toTy) {
-        std::string wide = em_.nextTemp();
-        em_.emit(wide + " = call i32 @hao_unbox_i32(ptr " + base.ir + ")");
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = trunc i32 " + wide + " to " + toTy);
+        std::string wide = emitCall("i32", "@hao_unbox_i32", "ptr " + base.ir);
+        std::string reg = emitCast("trunc", "i32", wide, toTy);
         return Value(reg, nonNull);
     };
     switch (base.type->kind) {
@@ -134,14 +131,10 @@ Value IRGen::unboxNullableKnown(const Value& base, const TypePtr& nonNull) {
         case TypeKind::SByte: case TypeKind::Byte:
             return unboxNarrow("i8");
         case TypeKind::Double: {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call double @hao_unbox_f64(ptr " + base.ir + ")");
-            return Value(reg, nonNull);
+            return Value(emitCall("double", "@hao_unbox_f64", "ptr " + base.ir), nonNull);
         }
         case TypeKind::Float: {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call float @hao_unbox_f32(ptr " + base.ir + ")");
-            return Value(reg, nonNull);
+            return Value(emitCall("float", "@hao_unbox_f32", "ptr " + base.ir), nonNull);
         }
         default:
             return unboxI32();
@@ -150,9 +143,7 @@ Value IRGen::unboxNullableKnown(const Value& base, const TypePtr& nonNull) {
 
 Value IRGen::loadVar(const SymbolPtr& sym) {
     std::string ptr = varValuePtr(sym);
-    std::string reg = em_.nextTemp();
-    em_.emit(reg + " = load " + sym->type->llvmType() + ", ptr " + ptr);
-    Value v(reg, sym->type);
+    Value v(emitLoad(sym->type->llvmType(), ptr), sym->type);
     if (auto nt = lookupSmartCast(sym->name)) {
         if (sym->type->isBoxedNullable())
             return unboxNullableKnown(v, nt);
@@ -166,17 +157,14 @@ Value IRGen::loadVar(const SymbolPtr& sym) {
 // 普通变量的真实值地址就是 sym->irAddr 本身。
 std::string IRGen::varValuePtr(const SymbolPtr& sym) {
     if (!sym->boxed) return sym->irAddr;
-    std::string cell = em_.nextTemp();
-    em_.emit(cell + " = load ptr, ptr " + sym->irAddr);
-    return cell;
+    return emitLoad("ptr", sym->irAddr);
 }
 
 std::string IRGen::arrayArgSlot(antlr4::tree::ParseTree* expr,
                                 const Value& arrVal) {
     auto makeTempSlot = [&]() -> std::string {
-        std::string addr = em_.nextTemp();
-        em_.emit(addr + " = alloca ptr");
-        em_.emit("store ptr " + arrVal.ir + ", ptr " + addr);
+        std::string addr = emitAlloca("ptr");
+        emitStore("ptr", arrVal.ir, addr);
         return addr;
     };
 
@@ -272,23 +260,16 @@ Value IRGen::coerce(const Value& v, const TypePtr& target, size_t line, size_t c
         std::string src = v.ir;
         std::string fromTy = v.type->llvmType();
 
-        auto emit = [&](const std::string& insn) {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = " + insn);
-            return reg;
-        };
-
         // 整数互转：按位宽；无符号拓宽用 zext，有符号用 sext；同宽仅改类型标签
         if (v.type->isInteger() && target->isInteger()) {
             int fw = Type::bitWidthBits(from), tw = Type::bitWidthBits(to);
             if (fw < tw) {
                 std::string op = v.type->isUnsigned() ? "zext" : "sext";
-                return Value(emit(op + " " + fromTy + " " + src + " to " +
-                                  target->llvmType()), target);
+                return Value(emitCast(op, fromTy, src, target->llvmType()), target);
             }
             if (fw > tw) {
-                return Value(emit("trunc " + fromTy + " " + src + " to " +
-                                  target->llvmType()), target);
+                return Value(emitCast("trunc", fromTy, src, target->llvmType()),
+                             target);
             }
             // 同宽有符号/无符号：位模式不变，只改类型
             return Value(src, target);
@@ -297,21 +278,19 @@ Value IRGen::coerce(const Value& v, const TypePtr& target, size_t line, size_t c
         // 整数 → 浮点
         if (v.type->isInteger() && target->isFloating()) {
             std::string op = v.type->isUnsigned() ? "uitofp" : "sitofp";
-            return Value(emit(op + " " + fromTy + " " + src + " to " +
-                              target->llvmType()), target);
+            return Value(emitCast(op, fromTy, src, target->llvmType()), target);
         }
 
         if (from == TypeKind::Float && to == TypeKind::Double) {
-            return Value(emit("fpext float " + src + " to double"), target);
+            return Value(emitCast("fpext", "float", src, "double"), target);
         }
         if (from == TypeKind::Double && to == TypeKind::Float) {
-            return Value(emit("fptrunc double " + src + " to float"), target);
+            return Value(emitCast("fptrunc", "double", src, "float"), target);
         }
 
         if (v.type->isFloating() && target->isInteger()) {
             std::string op = target->isUnsigned() ? "fptoui" : "fptosi";
-            return Value(emit(op + " " + fromTy + " " + src + " to " +
-                              target->llvmType()), target);
+            return Value(emitCast(op, fromTy, src, target->llvmType()), target);
         }
     }
 
@@ -331,60 +310,37 @@ Value IRGen::coerce(const Value& v, const TypePtr& target, size_t line, size_t c
         v.type->kind == target->kind && v.type->sameShape(*target)) {
         if (v.type->kind == TypeKind::Long || v.type->kind == TypeKind::ULong ||
             v.type->kind == TypeKind::UIntPtr) {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_box_i64(i64 " + v.ir + ")");
-            return Value(reg, target);
+            return Value(emitCall("ptr", "@hao_box_i64", "i64 " + v.ir), target);
         }
         if (v.type->kind == TypeKind::Int || v.type->kind == TypeKind::UInt ||
             v.type->kind == TypeKind::Char) {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_box_i32(i32 " + v.ir + ")");
-            return Value(reg, target);
+            return Value(emitCall("ptr", "@hao_box_i32", "i32 " + v.ir), target);
         }
         if (v.type->kind == TypeKind::Bool) {
-            std::string wide = em_.nextTemp();
-            em_.emit(wide + " = zext i8 " + v.ir + " to i32");
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_box_i32(i32 " + wide + ")");
-            return Value(reg, target);
+            std::string wide = emitCast("zext", "i8", v.ir, "i32");
+            return Value(emitCall("ptr", "@hao_box_i32", "i32 " + wide), target);
         }
         if (v.type->kind == TypeKind::Short) {
-            std::string wide = em_.nextTemp();
-            em_.emit(wide + " = sext i16 " + v.ir + " to i32");
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_box_i32(i32 " + wide + ")");
-            return Value(reg, target);
+            std::string wide = emitCast("sext", "i16", v.ir, "i32");
+            return Value(emitCall("ptr", "@hao_box_i32", "i32 " + wide), target);
         }
         if (v.type->kind == TypeKind::UShort) {
-            std::string wide = em_.nextTemp();
-            em_.emit(wide + " = zext i16 " + v.ir + " to i32");
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_box_i32(i32 " + wide + ")");
-            return Value(reg, target);
+            std::string wide = emitCast("zext", "i16", v.ir, "i32");
+            return Value(emitCall("ptr", "@hao_box_i32", "i32 " + wide), target);
         }
         if (v.type->kind == TypeKind::SByte) {
-            std::string wide = em_.nextTemp();
-            em_.emit(wide + " = sext i8 " + v.ir + " to i32");
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_box_i32(i32 " + wide + ")");
-            return Value(reg, target);
+            std::string wide = emitCast("sext", "i8", v.ir, "i32");
+            return Value(emitCall("ptr", "@hao_box_i32", "i32 " + wide), target);
         }
         if (v.type->kind == TypeKind::Byte) {
-            std::string wide = em_.nextTemp();
-            em_.emit(wide + " = zext i8 " + v.ir + " to i32");
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_box_i32(i32 " + wide + ")");
-            return Value(reg, target);
+            std::string wide = emitCast("zext", "i8", v.ir, "i32");
+            return Value(emitCall("ptr", "@hao_box_i32", "i32 " + wide), target);
         }
         if (v.type->kind == TypeKind::Double) {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_box_f64(double " + v.ir + ")");
-            return Value(reg, target);
+            return Value(emitCall("ptr", "@hao_box_f64", "double " + v.ir), target);
         }
         if (v.type->kind == TypeKind::Float) {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_box_f32(float " + v.ir + ")");
-            return Value(reg, target);
+            return Value(emitCall("ptr", "@hao_box_f32", "float " + v.ir), target);
         }
         return Value(v.ir, target);
     }
@@ -412,15 +368,13 @@ bool IRGen::ensureNonNullOperand(const Value& v, antlr4::ParserRuleContext* ctx,
 
 void IRGen::emitIntDivZeroCheck(const Value& divisor) {
     if (!divisor.type || !divisor.type->isInteger()) return;
-    std::string isZero = em_.nextTemp();
-    em_.emit(isZero + " = icmp eq " + divisor.type->llvmType() + " " +
-             divisor.ir + ", 0");
+    std::string isZero = emitICmp("eq", divisor.type->llvmType(), divisor.ir, "0");
     std::string panicL = em_.nextLabel("div0.panic");
     std::string okL = em_.nextLabel("div0.ok");
-    em_.emit("br i1 " + isZero + ", label %" + panicL + ", label %" + okL);
+    emitCondBr(isZero, panicL, okL);
     em_.emitLabel(panicL);
-    em_.emit("call void @hao_panic_div_zero()");
-    em_.emit("unreachable");
+    emitCallVoid("@hao_panic_div_zero", "");
+    emitUnreachable();
     em_.emitLabel(okL);
     blockTerminated_ = false;
 }
@@ -437,23 +391,16 @@ Value IRGen::emitSafeSignedDivisor(const Value& dividend, const Value& divisor) 
     else if (bits <= 32) minLit = "-2147483648";
     else                 minLit = "-9223372036854775808";
     // MIN/-1 → 除数改 1：sdiv 得 MIN，srem 得 0（无毒值）
-    std::string isNeg1 = em_.nextTemp();
-    em_.emit(isNeg1 + " = icmp eq " + ty + " " + divisor.ir + ", -1");
-    std::string isMin = em_.nextTemp();
-    em_.emit(isMin + " = icmp eq " + ty + " " + dividend.ir + ", " + minLit);
-    std::string ov = em_.nextTemp();
-    em_.emit(ov + " = and i1 " + isNeg1 + ", " + isMin);
-    std::string safe = em_.nextTemp();
-    em_.emit(safe + " = select i1 " + ov + ", " + ty + " 1, " + ty + " " +
-             divisor.ir);
+    std::string isNeg1 = emitICmp("eq", ty, divisor.ir, "-1");
+    std::string isMin = emitICmp("eq", ty, dividend.ir, minLit);
+    std::string ov = emitBinOp("and", "i1", isNeg1, isMin);
+    std::string safe = emitSelect(ov, ty, "1", divisor.ir);
     return Value(safe, divisor.type);
 }
 
 std::string IRGen::toI1(const Value& v) {
     // Bool 存 i8（0/1），比较跳转需要 i1
-    std::string reg = em_.nextTemp();
-    em_.emit(reg + " = icmp ne i8 " + v.ir + ", 0");
-    return reg;
+    return emitICmp("ne", "i8", v.ir, "0");
 }
 
 Value IRGen::toStringValue(const Value& v) {
@@ -462,27 +409,19 @@ Value IRGen::toStringValue(const Value& v) {
     switch (v.type->kind) {
         case TypeKind::String:
             return v;
-        case TypeKind::Long: {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_long_to_str(i64 " + v.ir + ")");
-            return Value(reg, Type::makeString());
-        }
+        case TypeKind::Long:
+            return Value(emitCall("ptr", "@hao_long_to_str", "i64 " + v.ir),
+                         Type::makeString());
         case TypeKind::ULong:
-        case TypeKind::UIntPtr: {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_ulong_to_str(i64 " + v.ir + ")");
-            return Value(reg, Type::makeString());
-        }
-        case TypeKind::Int: {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_int_to_str(i32 " + v.ir + ")");
-            return Value(reg, Type::makeString());
-        }
-        case TypeKind::UInt: {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_uint_to_str(i32 " + v.ir + ")");
-            return Value(reg, Type::makeString());
-        }
+        case TypeKind::UIntPtr:
+            return Value(emitCall("ptr", "@hao_ulong_to_str", "i64 " + v.ir),
+                         Type::makeString());
+        case TypeKind::Int:
+            return Value(emitCall("ptr", "@hao_int_to_str", "i32 " + v.ir),
+                         Type::makeString());
+        case TypeKind::UInt:
+            return Value(emitCall("ptr", "@hao_uint_to_str", "i32 " + v.ir),
+                         Type::makeString());
         case TypeKind::SByte:
         case TypeKind::Byte:
         case TypeKind::Short:
@@ -490,26 +429,18 @@ Value IRGen::toStringValue(const Value& v) {
             Value asInt = coerce(v, Type::makeInt(), 0, 0);
             return toStringValue(asInt);
         }
-        case TypeKind::Double: {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_double_to_str(double " + v.ir + ")");
-            return Value(reg, Type::makeString());
-        }
-        case TypeKind::Float: {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_float_to_str(float " + v.ir + ")");
-            return Value(reg, Type::makeString());
-        }
-        case TypeKind::Bool: {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_bool_to_str(i8 " + v.ir + ")");
-            return Value(reg, Type::makeString());
-        }
-        case TypeKind::Char: {
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_char_to_str(i32 " + v.ir + ")");
-            return Value(reg, Type::makeString());
-        }
+        case TypeKind::Double:
+            return Value(emitCall("ptr", "@hao_double_to_str", "double " + v.ir),
+                         Type::makeString());
+        case TypeKind::Float:
+            return Value(emitCall("ptr", "@hao_float_to_str", "float " + v.ir),
+                         Type::makeString());
+        case TypeKind::Bool:
+            return Value(emitCall("ptr", "@hao_bool_to_str", "i8 " + v.ir),
+                         Type::makeString());
+        case TypeKind::Char:
+            return Value(emitCall("ptr", "@hao_char_to_str", "i32 " + v.ir),
+                         Type::makeString());
         default:
             return Value();
     }
@@ -517,9 +448,7 @@ Value IRGen::toStringValue(const Value& v) {
 
 // 计算对象字段地址
 std::string IRGen::fieldPtr(const std::string& objIR, int slot) {
-    std::string ptr = em_.nextTemp();
-    em_.emit(ptr + " = getelementptr i64, ptr " + objIR +
-             ", i64 " + std::to_string(slot));
+    std::string ptr = emitGep("i64", objIR, "i64", std::to_string(slot));
     return ptr;
 }
 
@@ -543,8 +472,8 @@ void IRGen::emitHeapStore(const std::string& addr, const std::string& valIr,
     std::string lt = ty ? ty->llvmType() : "ptr";
     /* v0.54：混合屏障；dst 必须是槽地址（addr），非对象基址 */
     if (isGcPointerType(ty) && !barrierBase.empty())
-        em_.emit("call void @hao_gc_barrier(ptr " + addr + ", ptr " + valIr + ")");
-    em_.emit("store " + lt + " " + valIr + ", ptr " + addr);
+        ops_.emitCallVoid("@hao_gc_barrier", "ptr " + addr + ", ptr " + valIr);
+    ops_.emitStore(lt, valIr, addr);
 }
 
 void IRGen::emitGlobalGcStore(const std::string& gptr, const std::string& valIr,
@@ -552,23 +481,26 @@ void IRGen::emitGlobalGcStore(const std::string& gptr, const std::string& valIr,
     std::string lt = ty ? ty->llvmType() : "ptr";
     /* 静态槽同样走混合屏障（gptr 即槽地址） */
     if (isGcPointerType(ty))
-        em_.emit("call void @hao_gc_barrier(ptr " + gptr + ", ptr " + valIr + ")");
-    em_.emit("store " + lt + " " + valIr + ", ptr " + gptr);
+        ops_.emitCallVoid("@hao_gc_barrier", "ptr " + gptr + ", ptr " + valIr);
+    ops_.emitStore(lt, valIr, gptr);
 }
 
 void IRGen::beginFunctionGcRoots() {
-    gcRootWm_ = em_.nextTemp();
-    em_.emit(gcRootWm_ + " = call i64 @hao_gc_root_watermark()");
+    gcRootWm_ = ops_.emitCall("i64", "@hao_gc_root_watermark", "");
 }
 
 void IRGen::emitGcRootPush(const std::string& slotAddr) {
     if (slotAddr.empty()) return;
-    em_.emit("call void @hao_gc_root_push(ptr " + slotAddr + ")");
+    ops_.emitCallVoid("@hao_gc_root_push", "ptr " + slotAddr);
 }
 
 void IRGen::emitGcRootUnwind() {
     if (gcRootWm_.empty()) return;
-    em_.emit("call void @hao_gc_root_unwind(i64 " + gcRootWm_ + ")");
+    ops_.emitCallVoid("@hao_gc_root_unwind", "i64 " + gcRootWm_);
+}
+
+void IRGen::emitSafepoint() {
+    ops_.emitCallVoid("@hao_gc_safepoint", "");
 }
 
 void IRGen::emitAllocUnwindSlots() {
@@ -576,12 +508,12 @@ void IRGen::emitAllocUnwindSlots() {
     unwindRetAddr_    = "%unwind.ret.addr";
     unwindStopAddr_   = "%unwind.stop.addr";
     unwindGcRootAddr_ = "%unwind.gc.addr";
-    em_.emit(unwindReasonAddr_ + " = alloca i32");
-    em_.emit(unwindRetAddr_ + " = alloca i64");
-    em_.emit(unwindStopAddr_ + " = alloca i32");
-    em_.emit(unwindGcRootAddr_ + " = alloca ptr");
-    em_.emit("store i32 0, ptr " + unwindReasonAddr_);
-    em_.emit("store ptr null, ptr " + unwindGcRootAddr_);
+    emitAllocaAt(unwindReasonAddr_, "i32");
+    emitAllocaAt(unwindRetAddr_, "i64");
+    emitAllocaAt(unwindStopAddr_, "i32");
+    emitAllocaAt(unwindGcRootAddr_, "ptr");
+    emitStore("i32", "0", unwindReasonAddr_);
+    emitStore("ptr", "null", unwindGcRootAddr_);
 }
 
 void IRGen::emitPushUnwindGcRoot() {
@@ -591,7 +523,7 @@ void IRGen::emitPushUnwindGcRoot() {
 
 void IRGen::storeUnwindGcRootPtr(const std::string& ptrIr) {
     if (unwindGcRootAddr_.empty()) return;
-    em_.emit("store ptr " + ptrIr + ", ptr " + unwindGcRootAddr_);
+    emitStore("ptr", ptrIr, unwindGcRootAddr_);
 }
 
 void IRGen::clearUnwindGcRoot() {
@@ -606,7 +538,7 @@ void IRGen::endBlockGcScope() {
     if (blockGcSlots_.empty()) return;
     if (!blockTerminated_) {
         for (const auto& addr : blockGcSlots_.back())
-            em_.emit("store ptr null, ptr " + addr);
+            emitStore("ptr", "null", addr);
     }
     blockGcSlots_.pop_back();
 }
@@ -624,9 +556,8 @@ void IRGen::enterLoopSpillScope() {
         LoopSpillPool pool;
         /* 在 while/for 之前发射：支配 body/step/end 上所有 store null */
         for (size_t i = 0; i < kLoopSpillPoolPrealloc; ++i) {
-            std::string addr = em_.nextNamed("loop.spill");
-            em_.emit(addr + " = alloca ptr");
-            em_.emit("store ptr null, ptr " + addr);
+            std::string addr = emitAllocaNamed("loop.spill", "ptr");
+            emitStore("ptr", "null", addr);
             emitGcRootPush(addr);
             pool.slots.push_back(addr);
         }
@@ -637,6 +568,10 @@ void IRGen::enterLoopSpillScope() {
     if (!loopSpillPools_.empty()) {
         auto& pool = loopSpillPools_.back();
         pool.scopeStack.push_back(pool.next);
+        size_t enterSticky = pool.stickyStack.size();
+        pool.stickyEnterStack.push_back(enterSticky);
+        /* 占位；while 在 hoist pin 后 markLoopSpillStickyFloor 覆写 */
+        pool.stickyFloorStack.push_back(enterSticky);
     }
     ++loopSpillDepth_;
 }
@@ -650,14 +585,20 @@ void IRGen::leaveLoopSpillScope() {
             size_t lim = pool.highWater > pool.next ? pool.highWater : pool.next;
             if (lim > pool.slots.size()) lim = pool.slots.size();
             for (size_t i = base; i < lim; ++i)
-                em_.emit("store ptr null, ptr " + pool.slots[i]);
+                emitStore("ptr", "null", pool.slots[i]);
             pool.next = base;
             if (pool.highWater > base) pool.highWater = base;
             pool.scopeStack.pop_back();
-            /* 弹出本层 sticky（异常路径防护） */
-            while (!pool.stickyStack.empty() &&
-                   pool.stickyStack.back() > base)
+            /* 只卸本层 sticky；按 enter 时深度回退，禁止 >=base 误剥外层 */
+            size_t enterSticky = pool.stickyEnterStack.empty()
+                ? 0
+                : pool.stickyEnterStack.back();
+            while (pool.stickyStack.size() > enterSticky)
                 pool.stickyStack.pop_back();
+            if (!pool.stickyEnterStack.empty())
+                pool.stickyEnterStack.pop_back();
+            if (!pool.stickyFloorStack.empty())
+                pool.stickyFloorStack.pop_back();
         }
     }
     --loopSpillDepth_;
@@ -668,6 +609,71 @@ void IRGen::leaveLoopSpillScope() {
 void IRGen::pinLoopSpillCheckpoint() {
     if (loopSpillPools_.empty()) return;
     loopSpillPools_.back().stickyStack.push_back(loopSpillPools_.back().next);
+}
+
+void IRGen::markLoopSpillStickyFloor() {
+    if (loopSpillPools_.empty()) return;
+    auto& pool = loopSpillPools_.back();
+    if (pool.stickyFloorStack.empty()) return;
+    pool.stickyFloorStack.back() = pool.stickyStack.size();
+}
+
+void IRGen::clearLoopSpillSlots() {
+    if (loopSpillPools_.empty()) return;
+    auto& pool = loopSpillPools_.back();
+    /* 只清本层作用域；sticky（条件根 / for.seq）跨迭代持有，禁止抹掉或 pop */
+    size_t base = pool.scopeStack.empty() ? 0 : pool.scopeStack.back();
+    size_t target = base;
+    if (!pool.stickyStack.empty() && pool.stickyStack.back() > target)
+        target = pool.stickyStack.back();
+    size_t lim = pool.highWater > pool.next ? pool.highWater : pool.next;
+    if (lim > pool.slots.size()) lim = pool.slots.size();
+    /* A6：正路径可观测（默认关）；固定前缀便于门禁匹配 */
+    {
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr,
+                    "hao:irgen:clear_spill base=%zu target=%zu next=%zu\n",
+                    base, target, pool.next);
+            fflush(stderr);
+        }
+    }
+    /* A5：清到本层 base 以下 = 嵌套 sticky 分层仍坏
+     * 始终打固定前缀；HAO_IRGEN_STRICT=1 时记诊断（拒绝 emit） */
+    if (target < base) {
+        fprintf(stderr,
+                "hao:irgen:clear_spill_underflow target=%zu < base=%zu "
+                "(nested sticky floor bug?)\n",
+                target, base);
+        fflush(stderr);
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr,
+                    "[hao:irgen] clearLoopSpill target=%zu < base=%zu "
+                    "(nested sticky floor bug?)\n",
+                    target, base);
+        }
+        const char* st = getenv("HAO_IRGEN_STRICT");
+        int strict = 0;
+        if (st && st[0] && !(st[0] == '0' && st[1] == '\0') &&
+            !((st[0] == 'n' || st[0] == 'N') &&
+              (st[1] == 'o' || st[1] == 'O') && st[2] == '\0') &&
+            !((st[0] == 'f' || st[0] == 'F') &&
+              (st[1] == 'a' || st[1] == 'A') &&
+              (st[2] == 'l' || st[2] == 'L') &&
+              (st[3] == 's' || st[3] == 'S') &&
+              (st[4] == 'e' || st[4] == 'E') && st[5] == '\0'))
+            strict = 1;
+        if (strict) {
+            diags_.error(0, 0,
+                         "hao:irgen:clear_spill_underflow "
+                         "(HAO_IRGEN_STRICT=1)");
+        }
+    }
+    for (size_t i = target; i < lim; ++i)
+        emitStore("ptr", "null", pool.slots[i]);
+    pool.next = target;
+    if (pool.highWater > target) pool.highWater = target;
 }
 
 void IRGen::recycleLoopSpillSlots() {
@@ -682,7 +688,7 @@ void IRGen::recycleLoopSpillSlots() {
     size_t lim = pool.highWater > pool.next ? pool.highWater : pool.next;
     if (lim > pool.slots.size()) lim = pool.slots.size();
     for (size_t i = target; i < lim; ++i)
-        em_.emit("store ptr null, ptr " + pool.slots[i]);
+        emitStore("ptr", "null", pool.slots[i]);
     pool.next = target;
     if (pool.highWater > target) pool.highWater = target;
 }
@@ -694,32 +700,15 @@ void IRGen::unpinLoopSpillCheckpoint() {
     size_t sticky = pool.stickyStack.back();
     size_t lim = pool.next > sticky ? pool.next : sticky;
     for (size_t i = sticky; i < lim && i < pool.slots.size(); ++i)
-        em_.emit("store ptr null, ptr " + pool.slots[i]);
+        emitStore("ptr", "null", pool.slots[i]);
     pool.next = sticky;
     pool.stickyStack.pop_back();
 }
 
-void IRGen::clearLoopSpillSlots() {
-    if (loopSpillPools_.empty()) return;
-    auto& pool = loopSpillPools_.back();
-    /* 只清本层作用域；sticky（条件根 / for.seq）跨迭代持有，禁止抹掉或 pop */
-    size_t base = pool.scopeStack.empty() ? 0 : pool.scopeStack.back();
-    size_t target = base;
-    if (!pool.stickyStack.empty() && pool.stickyStack.back() > target)
-        target = pool.stickyStack.back();
-    size_t lim = pool.highWater > pool.next ? pool.highWater : pool.next;
-    if (lim > pool.slots.size()) lim = pool.slots.size();
-    for (size_t i = target; i < lim; ++i)
-        em_.emit("store ptr null, ptr " + pool.slots[i]);
-    pool.next = target;
-    if (pool.highWater > target) pool.highWater = target;
-}
-
 std::string IRGen::acquireLoopGcSlot(const std::string& nameHint) {
     if (loopSpillPools_.empty()) {
-        std::string addr = em_.nextNamed(nameHint);
-        em_.emit(addr + " = alloca ptr");
-        em_.emit("store ptr null, ptr " + addr);
+        std::string addr = emitAllocaNamed(nameHint, "ptr");
+        emitStore("ptr", "null", addr);
         emitGcRootPush(addr);
         return addr;
     }
@@ -727,7 +716,7 @@ std::string IRGen::acquireLoopGcSlot(const std::string& nameHint) {
     if (pool.next >= pool.slots.size()) {
         /* 扩池：alloca 进 entry（支配），再 root_push 一次并入可复用表 */
         std::string addr = em_.emitEntryAllocaPtr(nameHint);
-        em_.emit("store ptr null, ptr " + addr);
+        emitStore("ptr", "null", addr);
         emitGcRootPush(addr);
         pool.slots.push_back(addr);
     }
@@ -739,15 +728,16 @@ std::string IRGen::acquireLoopGcSlot(const std::string& nameHint) {
 std::string IRGen::emitSpillGcRoot(const std::string& nameHint, const std::string& ptrIr) {
     if (!loopSpillPools_.empty()) {
         std::string addr = acquireLoopGcSlot(nameHint);
-        em_.emit("store ptr " + ptrIr + ", ptr " + addr);
+        emitStore("ptr", ptrIr, addr);
         /* 池寿命由 clear/recycle/leave 管；勿 noteBlock——内层块尾会误杀仍在用的池槽 */
         return addr;
     }
     /* alloca 必须进 entry，否则分支内 spill 的 use 不支配（套件 clang 失败） */
     std::string addr = em_.emitEntryAllocaPtr(nameHint);
-    em_.emit("store ptr " + ptrIr + ", ptr " + addr);
+    emitStore("ptr", ptrIr, addr);
     emitGcRootPush(addr);
-    /* 不 noteBlockGcSlot：表达式临时寿命到 return unwind；块尾清易误杀仍被 SSA/后续用的槽 */
+    /* 不 noteBlock/Expr：表达式临时寿命到函数 unwind；语句尾清曾误杀
+     * new/构造期仍被 SSA 使用的槽（G1 债：需更精的寿命分析） */
     return addr;
 }
 
@@ -755,9 +745,7 @@ void IRGen::rootGcOperand(Value& v) {
     /* 静态 ClassName.f：recv.ir 为空，勿 spill */
     if (!v.valid() || v.ir.empty() || !isGcPointerType(v.type)) return;
     std::string slot = emitSpillGcRoot("op.root", v.ir);
-    std::string p = em_.nextTemp();
-    em_.emit(p + " = load ptr, ptr " + slot);
-    v.ir = p;
+    v.ir = emitLoad("ptr", slot);
 }
 
 void IRGen::emitVarStore(const SymbolPtr& sym, const TypePtr& ty,
@@ -767,14 +755,13 @@ void IRGen::emitVarStore(const SymbolPtr& sym, const TypePtr& ty,
     if (sym->boxed || (sym->byRefParam && isGcPointerType(ty)))
         emitHeapStore(addr, valIr, ty, addr);
     else
-        em_.emit("store " + ty->llvmType() + " " + valIr + ", ptr " + addr);
+        emitStore(ty->llvmType(), valIr, addr);
 }
 
 std::string IRGen::emitObjectNew(int64_t nfields, int64_t bitmap) {
-    std::string obj = em_.nextTemp();
-    em_.emit(obj + " = call ptr @hao_object_new(i64 " +
-             std::to_string(nfields) + ", i64 " + std::to_string(bitmap) + ")");
-    return obj;
+    return emitCall("ptr", "@hao_object_new",
+                    "i64 " + std::to_string(nfields) + ", i64 " +
+                        std::to_string(bitmap));
 }
 
 // 将数组下标提升为 i64（语言侧 Int=i32）
@@ -788,30 +775,26 @@ std::string IRGen::indexAsI64(const Value& idx) {
         std::string r = em_.nextTemp();
         // 下标非负语义：无符号 zext，有符号 sext
         if (idx.type->isUnsigned())
-            em_.emit(r + " = zext i32 " + idx.ir + " to i64");
+            r = emitCast("zext", "i32", idx.ir, "i64");
         else
-            em_.emit(r + " = sext i32 " + idx.ir + " to i64");
+            r = emitCast("sext", "i32", idx.ir, "i64");
         return r;
     }
     // 窄整数等：先升 Int 再 sext
     Value asInt = coerce(idx, Type::makeInt(), 0, 0);
-    std::string r = em_.nextTemp();
-    em_.emit(r + " = sext i32 " + asInt.ir + " to i64");
+    std::string r = emitCast("sext", "i32", asInt.ir, "i64");
     return r;
 }
 
 // 计算数组元素地址，带运行时边界检查
 std::string IRGen::arrayElemPtr(const Value& arr, const Value& idx) {
     std::string idx64 = indexAsI64(idx);
-    std::string checked = em_.nextTemp();
-    em_.emit(checked + " = call i64 @hao_array_check(ptr " + arr.ir +
-             ", i64 " + idx64 + ")");
+    std::string checked = emitCall("i64", "@hao_array_check",
+                                   "ptr " + arr.ir + ", i64 " + idx64);
     std::string gepTy = "i64";
     if (arr.type && arr.type->elem)
         gepTy = arr.type->elem->arrayGepType();
-    std::string ptr = em_.nextTemp();
-    em_.emit(ptr + " = getelementptr " + gepTy + ", ptr " + arr.ir +
-             ", i64 " + checked);
+    std::string ptr = emitGep(gepTy, arr.ir, "i64", checked);
     return ptr;
 }
 

@@ -1,0 +1,49 @@
+// U3：try × while × finally 多层 GC 根存活（发现向；非全量 unwind）
+package main;
+
+import collections.*;
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var outer = new List<Object>();
+    var round = 0;
+    while (round < 3) {
+        try {
+            outer.add(new Box("r"));
+            if (round < 2) {
+                throw new Exception("bounce");
+            }
+        } catch (e: Exception) {
+            // catch 后 outer 仍存活
+            fmt.println(outer.size() == round + 1);
+        } finally {
+            // finally 可读 outer 末元素
+            fmt.println((outer.get(outer.size() - 1) as Box).s == "r");
+        }
+        round += 1;
+    }
+
+    // continue 穿过 finally：外层 GC 局部不被误杀
+    var keep = new Box("keep");
+    var i = 0;
+    while (i < 3) {
+        try {
+            if (i == 1) {
+                i += 1;
+                continue;
+            }
+        } finally {
+            fmt.println(keep.s == "keep");
+        }
+        i += 1;
+    }
+
+    fmt.println(outer.size() == 3);
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

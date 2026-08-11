@@ -504,6 +504,31 @@ public class Http {
 
     // 按「行首字段名」取 Content-Length（大小写不敏感）；忽略头值里的同名子串。
     // 多行时取第一次行锚定命中。解析区间为 ASCII，按字节切片。
+    // 单行解析（独立帧，避免 while 内 spill/sticky 清掉 line 根）
+    static func contentLengthOfLine(line: String): Int? {
+        val ln = _httpByteLen(line);
+        if (ln < 15 || !Http.asciiStartsWithCi(line, "content-length:")) {
+            return null;
+        }
+        var i = 15;
+        while (i < ln) {
+            val one = _httpByteSlice(line, i, i + 1);
+            if (one != " " && one != "\t") { break; }
+            i += 1;
+        }
+        var j = i;
+        while (j < ln) {
+            val one = _httpByteSlice(line, j, j + 1);
+            val c = String.valueOf(one).charAt(0);
+            if (c < 48 || c > 57) { break; }
+            j += 1;
+        }
+        if (j > i) {
+            return Integer.parse(_httpByteSlice(line, i, j));
+        }
+        return null;
+    }
+
     static func contentLengthOf(headers: String): Int? {
         var pos = 0;
         val n = _httpByteLen(headers);
@@ -511,27 +536,8 @@ public class Http {
             var lineEnd = _httpByteIndexOf(headers, "\r\n", pos);
             if (lineEnd < 0) { lineEnd = n; }
             val line = _httpByteSlice(headers, pos, lineEnd);
-            val ln = _httpByteLen(line);
-            // "content-length:" 长度 15
-            if (ln >= 15 && Http.asciiStartsWithCi(line, "content-length:")) {
-                var i = 15;
-                while (i < ln) {
-                    val one = _httpByteSlice(line, i, i + 1);
-                    if (one != " " && one != "\t") { break; }
-                    i += 1;
-                }
-                var j = i;
-                while (j < ln) {
-                    val one = _httpByteSlice(line, j, j + 1);
-                    val c = String.valueOf(one).charAt(0);
-                    if (c < 48 || c > 57) { break; }
-                    j += 1;
-                }
-                if (j > i) {
-                    return Integer.parse(_httpByteSlice(line, i, j));
-                }
-                return null;
-            }
+            val hit = Http.contentLengthOfLine(line);
+            if (hit != null) { return hit; }
             if (lineEnd >= n) { break; }
             pos = lineEnd + 2;
         }

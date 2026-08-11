@@ -32,7 +32,9 @@ void IRGen::genReturn(HaoLangParser::ReturnStmtContext* st) {
         // 在 try 内：先执行 finally 再返回
         if (!tryStack_.empty()) { emitUnwind(1); return; }
         emitGcRootUnwind();
-        em_.emit(inMain_ ? "ret i32 0" : "ret void");
+        emitRuntimePopFrame();
+        if (inMain_) emitRet("i32", "0");
+        else emitRetVoid();
         blockTerminated_ = true;
         return;
     }
@@ -64,17 +66,18 @@ void IRGen::genReturn(HaoLangParser::ReturnStmtContext* st) {
     }
 
     emitGcRootUnwind();
+    emitRuntimePopFrame();
     if (inMain_) {
         // main 的 C 入口返回 int(i32)。v0.25+ Int 已是 i32，直接 ret，勿再 trunc i64。
         if (currentReturn_->kind == TypeKind::Int) {
-            em_.emit("ret i32 " + v.ir);
+            emitRet("i32", v.ir);
         } else {
-            em_.emit("ret i32 0");
+            emitRet("i32", "0");
         }
         blockTerminated_ = true;
         return;
     }
-    em_.emit("ret " + currentReturn_->llvmType() + " " + v.ir);
+    emitRet(currentReturn_->llvmType(), v.ir);
     blockTerminated_ = true;
 }
 
@@ -86,7 +89,7 @@ void IRGen::genReturn(HaoLangParser::ReturnStmtContext* st) {
 // GC 指针同时写入 unwindGcRootAddr_，保证 finally/safepoint 期间可达。
 void IRGen::storeUnwindRet(const Value& v) {
     if (!v.valid() || v.type->isUnit()) {
-        em_.emit("store i64 0, ptr " + unwindRetAddr_);
+        emitStore("i64", "0", unwindRetAddr_);
         clearUnwindGcRoot();
         return;
     }
@@ -95,29 +98,30 @@ void IRGen::storeUnwindRet(const Value& v) {
     else
         clearUnwindGcRoot();
     std::string val64 = em_.boxToI64(v.ir, v.type);
-    em_.emit("store i64 " + val64 + ", ptr " + unwindRetAddr_);
+    emitStore("i64", val64, unwindRetAddr_);
 }
 
 // 从 unwind 槽读回返回值并发射 ret（函数尾声用）
 void IRGen::emitUnwindRet() {
-    std::string raw = em_.nextTemp();
-    em_.emit(raw + " = load i64, ptr " + unwindRetAddr_);
+    std::string raw = emitLoad("i64", unwindRetAddr_);
     emitGcRootUnwind();
+    emitRuntimePopFrame();
     if (currentReturn_->isUnit()) {
-        em_.emit(inMain_ ? "ret i32 0" : "ret void");
+        if (inMain_) emitRet("i32", "0");
+        else emitRetVoid();
         return;
     }
     std::string r = em_.unboxFromI64(raw, currentReturn_);
     if (inMain_) {
         // main 的 C 入口返回 int(i32)；Int 已是 i32。
         if (currentReturn_->kind == TypeKind::Int) {
-            em_.emit("ret i32 " + r);
+            emitRet("i32", r);
         } else {
-            em_.emit("ret i32 0");
+            emitRet("i32", "0");
         }
         return;
     }
-    em_.emit("ret " + currentReturn_->llvmType() + " " + r);
+    emitRet(currentReturn_->llvmType(), r);
 }
 
 // 从 try/catch 体离开：写入 reason，跳到最近的 cleanup（若有），
@@ -126,9 +130,9 @@ void IRGen::emitUnwindRet() {
 void IRGen::emitUnwind(int reason, const Value& retVal) {
     if (reason == 1) {
         if (retVal.valid()) storeUnwindRet(retVal);
-        em_.emit("store i32 1, ptr " + unwindReasonAddr_);
+        emitStore("i32", "1", unwindReasonAddr_);
     } else if (reason == 2 || reason == 3) {
-        em_.emit("store i32 " + std::to_string(reason) + ", ptr " + unwindReasonAddr_);
+        emitStore("i32", std::to_string(reason), unwindReasonAddr_);
         if (loops_.empty()) {
             diags_.error(0, 0, reason == 2 ? "break 只能出现在循环内部"
                                              : "continue 只能出现在循环内部");
@@ -138,33 +142,32 @@ void IRGen::emitUnwind(int reason, const Value& retVal) {
         int loopDepth = static_cast<int>(loop.tryDepth);
         int curDepth = static_cast<int>(tryStack_.size());
         if (curDepth <= loopDepth) {
-            // 没有需要穿过的 finally，直接跳到循环目标
-            em_.emit("br label %" + (reason == 2 ? loop.breakLabel : loop.continueLabel));
+            // 没有需要穿过的 finally，直接跳到循环目标（清 reason，防污染后续 try）
+            emitStore("i32", "0", unwindReasonAddr_);
+            emitBr((reason == 2 ? loop.breakLabel : loop.continueLabel));
             blockTerminated_ = true;
             return;
         }
         // 记录停止深度：cleanup 链执行到该深度时，按 reason 跳到循环目标
-        em_.emit("store i32 " + std::to_string(loopDepth) + ", ptr " + unwindStopAddr_);
+        emitStore("i32", std::to_string(loopDepth), unwindStopAddr_);
     } else if (reason == 4) {
         // catch 体内 throw：存异常对象，走 cleanup 链后重抛
-        em_.emit("store i32 4, ptr " + unwindReasonAddr_);
+        emitStore("i32", "4", unwindReasonAddr_);
         if (retVal.valid()) storeUnwindRet(retVal);
     }
 
     if (tryStack_.empty()) {
         if (reason == 1) { emitUnwindRet(); blockTerminated_ = true; }
         else if (reason == 4) {
-            std::string raw = em_.nextTemp();
-            em_.emit(raw + " = load i64, ptr " + unwindRetAddr_);
-            std::string p = em_.nextTemp();
-            em_.emit(p + " = inttoptr i64 " + raw + " to ptr");
-            em_.emit("call void @hao_rethrow(ptr " + p + ")");
-            em_.emit("unreachable");
+            std::string raw = emitLoad("i64", unwindRetAddr_);
+            std::string p = emitIntToPtr("i64", raw);
+            emitCallVoid("@hao_rethrow", "ptr " + p);
+            emitUnreachable();
             blockTerminated_ = true;
         }
         return;
     }
-    em_.emit("br label %" + tryStack_.back().cleanupLabel);
+    emitBr(tryStack_.back().cleanupLabel);
     blockTerminated_ = true;
 }
 
@@ -229,11 +232,11 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
         std::string bindAddr;
         if (inLoopSpillPool()) {
             bindAddr = acquireLoopGcSlot(bindHint);
-            em_.emit("store ptr null, ptr " + bindAddr);
+            emitStore("ptr", "null", bindAddr);
         } else {
             bindAddr = em_.nextNamed(bindHint);
-            em_.emit(bindAddr + " = alloca ptr");
-            em_.emit("store ptr null, ptr " + bindAddr);
+            emitAllocaAt(bindAddr, "ptr");
+            emitStore("ptr", "null", bindAddr);
             emitGcRootPush(bindAddr);
         }
         catchEntries.push_back(
@@ -246,9 +249,8 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
     //    1) hao_try_alloc 在静态运行时栈上分配一帧，返回 jmp_buf 指针；
     //    2) 在 IR 里直接 call @setjmp(buf)，用 returns_twice 标记。
     std::string idAddr = em_.nextNamed("try" + idx + ".id.addr");
-    em_.emit(idAddr + " = alloca i32");
-    std::string buf = em_.nextTemp();
-    em_.emit(buf + " = call ptr @hao_try_alloc(ptr " + idAddr + ")");
+    emitAllocaAt(idAddr, "i32");
+    std::string buf = emitCall("ptr", "@hao_try_alloc", "ptr " + idAddr);
 
     // Windows x64 的 setjmp 是 _setjmp(buf, frame_pointer) 双参数，
     // 必须传入当前帧指针（@llvm.frameaddress），longjmp 才能正确展开；
@@ -258,15 +260,16 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
     std::string r;
     if (isWin) {
         std::string fp = em_.nextTemp();
-        em_.emit(fp + " = call ptr @llvm.frameaddress.p0(i32 0)");
+        em_.emit(fp + " = call ptr @llvm.frameaddress.p0(i32 0)" + ops_.dbgSuffix());
         r = em_.nextTemp();
-        em_.emit(r + " = call i32 @_setjmp(ptr " + buf + ", ptr " + fp + ") #0");
+        em_.emit(r + " = call i32 @_setjmp(ptr " + buf + ", ptr " + fp + ") #0" +
+                 ops_.dbgSuffix());
     } else {
         r = em_.nextTemp();
-        em_.emit(r + " = call i32 @setjmp(ptr " + buf + ") #0");
+        em_.emit(r + " = call i32 @setjmp(ptr " + buf + ") #0" + ops_.dbgSuffix());
     }
     std::string sw = "switch i32 " + r + ", label %" + bodyL +
-                     " [ i32 1, label %" + dispatchL + " ]";
+                     " [ i32 1, label %" + dispatchL + " ]" + ops_.dbgSuffix();
     em_.emit(sw);
 
     // ---- try 体 ----
@@ -278,15 +281,14 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
         endBlockGcScope();
     }
     bool bodyFallsThrough = !blockTerminated_;
-    if (bodyFallsThrough) em_.emit("br label %" + cleanupL);
+    if (bodyFallsThrough) emitBr(cleanupL);
     bool tryTerminated = blockTerminated_;
     blockTerminated_ = false;
     bool anyCatchFallsThrough = false;
 
     // ---- 异常分派 ----
     em_.emitLabel(dispatchL);
-    std::string exc = em_.nextTemp();
-    em_.emit(exc + " = call ptr @hao_except_capture()");
+    std::string exc = emitCall("ptr", "@hao_except_capture", "");
     // 立刻写入函数级 unwind GC 根：dispatch 匹配 / finally 期间异常对象须可达
     storeUnwindGcRootPtr(exc);
 
@@ -295,7 +297,7 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
 
     // 没有 catch：dispatch 直接落入 noMatch（标记重抛）
     if (catchEntries.empty()) {
-        em_.emit("br label %" + noMatchL);
+        emitBr(noMatchL);
     }
 
     // 逐一类型匹配（复用 is 的 typeids 机制）
@@ -314,14 +316,11 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
         auto it = typeIdLists_.find(ce.type->className);
         if (it == typeIdLists_.end()) {
             // 没有任何可实例化类型满足，恒不匹配
-            em_.emit("br label %" + nextL);
+            emitBr(nextL);
         } else {
-            std::string chk = em_.nextTemp();
-            em_.emit(chk + " = call i8 @hao_type_is(ptr " + exc +
-                     ", ptr " + it->second + ")");
-            std::string cond = em_.nextTemp();
-            em_.emit(cond + " = icmp ne i8 " + chk + ", 0");
-            em_.emit("br i1 " + cond + ", label %" + ce.label + ", label %" + nextL);
+            std::string chk = emitCall("i8", "@hao_type_is", "ptr " + exc + ", ptr " + it->second);
+            std::string cond = emitICmp("ne", "i8", chk, "0");
+            emitCondBr(cond, ce.label, nextL);
         }
 
         // catch 体
@@ -330,8 +329,8 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
         {
             // catch 成功处理异常：复位 reason（内层可能把它设为 4=rethrow），
             // 否则外层 cleanup 会把已处理的异常重新抛出。
-            em_.emit("store i32 0, ptr " + unwindReasonAddr_);
-            em_.emit("store ptr " + exc + ", ptr " + ce.bindAddr);
+            emitStore("i32", "0", unwindReasonAddr_);
+            emitStore("ptr", exc, ce.bindAddr);
             SymbolTable::Guard g(syms_);
             auto sym = std::make_shared<Symbol>();
             sym->kind = SymbolKind::Variable;
@@ -340,6 +339,11 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
             sym->isMutable = false;
             sym->irAddr = ce.bindAddr;
             syms_.declare(sym);
+            {
+                int cl = ce.node->getStart() ? static_cast<int>(ce.node->getStart()->getLine())
+                                             : 1;
+                emitDbgDeclareIf(ce.bindAddr, sym->name, cl, 0);
+            }
 
             beginBlockGcScope();
             for (auto* s : ce.node->block()->statement()) genStatement(s);
@@ -348,7 +352,7 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
         catchDepth_--;
         if (!blockTerminated_) {
             anyCatchFallsThrough = true;
-            em_.emit("br label %" + cleanupL);
+            emitBr(cleanupL);
         }
         blockTerminated_ = false;
     }
@@ -356,20 +360,18 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
     // 没有 catch 或全都不匹配：标记重抛后进入 cleanup
     em_.emitLabel(noMatchL);
     {
-        std::string ei = em_.nextTemp();
-        em_.emit(ei + " = ptrtoint ptr " + exc + " to i64");
-        em_.emit("store i64 " + ei + ", ptr " + unwindRetAddr_);
+        std::string ei = emitPtrToInt("i64", exc);
+        emitStore("i64", ei, unwindRetAddr_);
         storeUnwindGcRootPtr(exc);
-        em_.emit("store i32 4, ptr " + unwindReasonAddr_);
+        emitStore("i32", "4", unwindReasonAddr_);
     }
-    em_.emit("br label %" + cleanupL);
+    emitBr(cleanupL);
 
     // ---- cleanup：弹帧 + finally + 分派 ----
     em_.emitLabel(cleanupL);
     {
-        std::string id = em_.nextTemp();
-        em_.emit(id + " = load i32, ptr " + idAddr);
-        em_.emit("call void @hao_try_end(i32 " + id + ")");
+        std::string id = emitLoad("i32", idAddr);
+        emitCallVoid("@hao_try_end", "i32 " + id);
     }
 
     // 生成 finally 前先把本 try 从 IR 栈弹出：这样 finally 内的
@@ -382,16 +384,19 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
         SymbolTable::Guard g(syms_);
         for (auto* s : fin->block()->statement()) genStatement(s);
         finTerminated = blockTerminated_;
-        blockTerminated_ = false;
+        // 非终结 finally 才复位；若 throw/return 已终结，必须保持
+        // blockTerminated_，否则外层 try 体误判 fallthrough，在
+        // unreachable 后误插 br cleanup → LLVM 临时编号错乱。
+        if (!finTerminated) blockTerminated_ = false;
     }
 
     if (finTerminated) {
         // finally 自身 return/throw 终结了控制流，不再分派
+        blockTerminated_ = true;
         return;
     }
 
-    std::string rsn = em_.nextTemp();
-    em_.emit(rsn + " = load i32, ptr " + unwindReasonAddr_);
+    std::string rsn = emitLoad("i32", unwindReasonAddr_);
 
     std::string retL    = "try" + idx + ".onreturn";
     std::string loopL   = "try" + idx + ".onloop";
@@ -400,12 +405,12 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
              " [ i32 1, label %" + retL +
              " i32 2, label %" + loopL +
              " i32 3, label %" + loopL +
-             " i32 4, label %" + throwL + " ]");
+             " i32 4, label %" + throwL + " ]" + ops_.dbgSuffix());
 
     // reason=1：向外层清理（或尾声）传递
     em_.emitLabel(retL);
     if (!tryStack_.empty()) {
-        em_.emit("br label %" + tryStack_.back().cleanupLabel);
+        emitBr(tryStack_.back().cleanupLabel);
     } else {
         emitUnwindRet();
     }
@@ -414,57 +419,52 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
     // 否则继续向外层 cleanup。此时仍在循环作用域内，loops_.back() 有效。
     em_.emitLabel(loopL);
     {
-        std::string stop = em_.nextTemp();
-        em_.emit(stop + " = load i32, ptr " + unwindStopAddr_);
+        std::string stop = emitLoad("i32", unwindStopAddr_);
         std::string here = std::to_string(depth - 1);  // 当前 try 之外的深度
-        std::string isStop = em_.nextTemp();
-        em_.emit(isStop + " = icmp eq i32 " + stop + ", " + here);
+        std::string isStop = emitICmp("eq", "i32", stop, here);
         std::string doBr = "try" + idx + ".doloop";
         if (!tryStack_.empty()) {
-            em_.emit("br i1 " + isStop + ", label %" + doBr +
-                     ", label %" + tryStack_.back().cleanupLabel);
+            emitCondBr(isStop, doBr, tryStack_.back().cleanupLabel);
         } else {
-            em_.emit("br i1 " + isStop + ", label %" + doBr + ", label %" + endL);
+            emitCondBr(isStop, doBr, endL);
         }
         em_.emitLabel(doBr);
         if (loops_.empty()) {
-            em_.emit("br label %" + endL);
+            emitBr(endL);
         } else {
-            // 按 reason（2=break / 3=continue）选目标
-            std::string which = em_.nextTemp();
-            em_.emit(which + " = load i32, ptr " + unwindReasonAddr_);
-            std::string isBreak = em_.nextTemp();
-            em_.emit(isBreak + " = icmp eq i32 " + which + ", 2");
-            em_.emit("br i1 " + isBreak + ", label %" + loops_.back().breakLabel +
-                     ", label %" + loops_.back().continueLabel);
+            // 按 reason（2=break / 3=continue）选目标。
+            // 跳转前必须清 reason：否则下一轮 try 正常落入 cleanup 时
+            // 仍读到 3，会再次跳回 continueLabel（while×try×continue 死循环）。
+            std::string which = emitLoad("i32", unwindReasonAddr_);
+            emitStore("i32", "0", unwindReasonAddr_);
+            std::string isBreak = emitICmp("eq", "i32", which, "2");
+            emitCondBr(isBreak, loops_.back().breakLabel, loops_.back().continueLabel);
         }
     }
 
     // reason=4：重抛（longjmp 到外层运行时帧）
     em_.emitLabel(throwL);
     {
-        std::string raw = em_.nextTemp();
-        em_.emit(raw + " = load i64, ptr " + unwindRetAddr_);
-        std::string p = em_.nextTemp();
-        em_.emit(p + " = inttoptr i64 " + raw + " to ptr");
-        em_.emit("call void @hao_rethrow(ptr " + p + ")");
-        em_.emit("unreachable");
+        std::string raw = emitLoad("i64", unwindRetAddr_);
+        std::string p = emitIntToPtr("i64", raw);
+        emitCallVoid("@hao_rethrow", "ptr " + p);
+        emitUnreachable();
     }
 
     // ---- 正常继续 ----
     em_.emitLabel(endL);
     // 正常退出后复位 reason（避免上次的残留影响后续——虽然正常路径 reason 应为 0）
-    em_.emit("store i32 0, ptr " + unwindReasonAddr_);
+    emitStore("i32", "0", unwindReasonAddr_);
     /* 放弃 catch 绑定与 unwind GC 根，避免 while{try/catch} 假活 */
     for (const auto& ce : catchEntries)
-        em_.emit("store ptr null, ptr " + ce.bindAddr);
+        emitStore("ptr", "null", ce.bindAddr);
     clearUnwindGcRoot();
 
     // 若 try 体与所有 catch 都不向下落入 cleanup（都 return/throw 了），
     // 则 endL 实际不可达，但仍需一条终结指令；整个 try 不会正常继续。
     bool tryFallsThrough = bodyFallsThrough || anyCatchFallsThrough;
     if (!tryFallsThrough) {
-        em_.emit("unreachable");
+        emitUnreachable();
         blockTerminated_ = true;
     } else {
         blockTerminated_ = false;
@@ -499,8 +499,10 @@ void IRGen::genThrow(HaoLangParser::ThrowStmtContext* st) {
         return;
     }
 
-    em_.emit("call void @hao_throw(ptr " + v.ir + ")");
-    em_.emit("unreachable");
+    // throw 前保证 TLS/栈顶帧已是本语句 loc（genStatement 已 setDebugLoc）
+    setDebugLoc(st);
+    emitCallVoid("@hao_throw", "ptr " + v.ir);
+    emitUnreachable();
     blockTerminated_ = true;
 }
 

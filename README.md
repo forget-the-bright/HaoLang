@@ -5,10 +5,10 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.55.22**（invokeObj 对标 Java；GC monitor 压测约 1 天稳定、峰值约 10MiB；详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)）
-- 测试基线：`test/suite` **1011** 行 stdout，退出码 0；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.55.22
+- 当前版本：**v0.55.42**（定位发现八期：Unit-lambda ret；remset VERIFY；赋值薄 dbg.value）
+- 测试基线：`test/suite` **1011** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.55.42
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
-- **下一批（默认）**：架构方法论比对 → 优化方案 → 文档治理——见 [`记忆文档.md`](记忆文档.md) 第 **10** 章；方法论见 [`docs/方法论/`](docs/方法论/)
+- **下一批（默认）**：扩 IROps（cast/gep/select）清 Expr 残留——见 [`记忆文档.md`](记忆文档.md) 第 10 章
 
 ---
 
@@ -364,8 +364,8 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | **v0.55.22** invokeObj 对标 Java Method.invoke（CF）；反向 28/28 |
-| 🔥 **下一批（默认开干）** | 架构方法论比对 → 优化方案 → 文档治理 |
-| 其后 | select 真多路 wait / 泛型 channel →（停顿）concurrent sweep → 自举 |
+| ✅ 已完成 | **v0.55.42** 定位八期；**v0.55.41** 定位七期；**v0.55.40** 定位六期；**v0.55.39** 定位五期 |
+| 🔥 **下一批（默认开干）** | 扩 IROps（cast/gep/select）清 Expr 残留（记忆文档 §I） |
+| 其后 | I0/I3/I4 dbg（挂 IROps）→ Sema/作用域机（后置）→ select / sweep → 自举 |
 
 实现步骤见 [`记忆文档.md` 第 10 章](记忆文档.md)；历史见 [`docs/项目时间线/`](docs/项目时间线/索引.md)。

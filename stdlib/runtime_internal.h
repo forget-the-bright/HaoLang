@@ -194,11 +194,49 @@ void     hao_win_set_console_cp(uint32_t cp);
 #endif
 
 /* ============================================================
- *  Panic（runtime_panic.c）
+ *  Panic（runtime_panic.c）+ Debug（runtime_debug.c）
  * ============================================================ */
+void hao_panic_null(void);
+void hao_panic_div_zero(void);
 void hao_panic_index(int64_t idx, int64_t len);
 void hao_panic_overflow(void);
+void hao_panic_cast(const char* target);
 void hao_panic_msg(const char* msg);
+
+/* Trace：HAO_TRACE=1 全开；HAO_GC_TRACE=1 仅 module 以 gc 开头。关则立即返回。 */
+void hao_trace(const char* module, const char* fmt, ...);
+void hao_assert_fail(const char* expr, const char* file, int line);
+/* 统一 fatal：stderr + hao-crash.log + GC 只读快照后 exit(1) */
+void hao_report_fatal(const char* kind, const char* msg);
+/* L0b/P1：最近 .hao 源码位（TLS）+ 调用帧栈；panic/crash 打印 src=/stack= */
+void hao_dbg_set_src_loc(const char* file, int32_t line, int32_t col);
+void hao_dbg_clear_src_loc(void);
+void hao_dbg_push_frame(const char* file, int32_t line, int32_t col);
+void hao_dbg_pop_frame(void);
+void hao_dbg_fprint_src_loc(FILE* f);
+void hao_dbg_fprint_stack(FILE* f);
+/* loc_smoke：稳定触发 AV，验证 crash log access=/用户 stack */
+void hao_debug_trap_av(void);
+/* loc_smoke / VERIFY：向本线程 shadow 压入非法非堆指针槽 */
+void hao_debug_poison_shadow_root(void);
+void hao_debug_poison_scan_pin(void);
+void hao_debug_poison_remset(void);
+/* V4：HAO_GC_VERIFY=1 时因 gc_collecting 跳过 collect 的次数 */
+int64_t hao_gc_verify_skip_reenter(void);
+/* R3：Metrics 表化（名称→getter）；不改变 GC.summary 语义 */
+size_t hao_metric_count(void);
+const char* hao_metric_name(size_t i);
+int64_t hao_metric_value(size_t i);
+void hao_metrics_fprint(FILE* f);
+/* 崩溃/fatal 用：无锁尽力写 GC phase/heap 摘要；失败写 unavailable */
+void hao_gc_fprint_debug_snapshot(FILE* f);
+
+#ifdef NDEBUG
+#define HAO_ASSERT(cond) ((void)0)
+#else
+#define HAO_ASSERT(cond) \
+    do { if (!(cond)) hao_assert_fail(#cond, __FILE__, __LINE__); } while (0)
+#endif
 
 /* ============================================================
  *  数组布局（runtime_array.c）

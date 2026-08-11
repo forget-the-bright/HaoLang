@@ -88,8 +88,7 @@ void* hao_except_capture(void) {
 /* 抛出异常：沿帧栈 longjmp 到最近的 try；没有则终止进程 */
 void hao_throw(void* obj) {
     if (g_excDepth <= 0) {
-        fputs("panic: 未捕获的异常\n", stderr);
-        exit(1);
+        hao_report_fatal("uncaught", "未捕获的异常");
     }
     HaoExFrame* f = &g_excStack[g_excDepth - 1];
     f->exception = obj;

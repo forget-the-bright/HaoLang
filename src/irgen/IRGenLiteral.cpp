@@ -123,20 +123,17 @@ Value IRGen::genArrayLiteral(HaoLangParser::ArrayLiteralContext* al) {
 
     // 运行时求和长度（展开源长度动态）；带溢出检测防回绕后欠分配
     auto addLenChecked = [&](const std::string& a, const std::string& b) -> std::string {
-        std::string ov = em_.nextTemp();
-        em_.emit(ov + " = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 " +
-                 a + ", i64 " + b + ")");
-        std::string sum = em_.nextTemp();
-        em_.emit(sum + " = extractvalue {i64, i1} " + ov + ", 0");
-        std::string flag = em_.nextTemp();
-        em_.emit(flag + " = extractvalue {i64, i1} " + ov + ", 1");
+        std::string ov = emitCall("{i64, i1}", "@llvm.sadd.with.overflow.i64",
+                                  "i64 " + a + ", i64 " + b);
+        std::string sum = emitExtractValue("{i64, i1}", ov, 0);
+        std::string flag = emitExtractValue("{i64, i1}", ov, 1);
         std::string okL = em_.nextLabel("alen.ok");
         std::string badL = em_.nextLabel("alen.ovf");
-        em_.emit("br i1 " + flag + ", label %" + badL + ", label %" + okL);
+        emitCondBr(flag, badL, okL);
         em_.emitLabel(badL);
         blockTerminated_ = false;
-        em_.emit("call void @hao_panic_overflow()");
-        em_.emit("unreachable");
+        emitCallVoid("@hao_panic_overflow", "");
+        emitUnreachable();
         em_.emitLabel(okL);
         blockTerminated_ = false;
         return sum;
@@ -146,34 +143,26 @@ Value IRGen::genArrayLiteral(HaoLangParser::ArrayLiteralContext* al) {
         if (!elems[i].spread) {
             total = addLenChecked(total, "1");
         } else {
-            std::string ln = em_.nextTemp();
-            em_.emit(ln + " = call i64 @hao_array_len(ptr " + elems[i].v.ir + ")");
+            std::string ln = emitCall("i64", "@hao_array_len", "ptr " + elems[i].v.ir);
             total = addLenChecked(total, ln);
         }
     }
 
     std::string isPtrLit = isGcPointerType(elemType) ? "1" : "0";
-    std::string arrRaw = em_.nextTemp();
-    em_.emit(arrRaw + " = call ptr @hao_array_new(i64 " + total + ", i64 " +
-             std::to_string(esz) + ", i64 " + isPtrLit + ")");
+    std::string arrRaw = emitCall("ptr", "@hao_array_new", "i64 " + total + ", i64 " + std::to_string(esz) + ", i64 " + isPtrLit);
     // 目标数组跨合成循环 safepoint
     std::string arrSlot = emitSpillGcRoot("aspread.arr", arrRaw);
-    std::string arr = em_.nextTemp();
-    em_.emit(arr + " = load ptr, ptr " + arrSlot);
+    std::string arr = emitLoad("ptr", arrSlot);
 
     // 写入：维护写指针偏移（i64）
     std::string off = "0";
     for (size_t i = 0; i < elems.size(); ++i) {
         if (!elems[i].spread) {
-            arr = em_.nextTemp();
-            em_.emit(arr + " = load ptr, ptr " + arrSlot);
+            arr = emitLoad("ptr", arrSlot);
             Value v = coerce(elems[i].v, elemType, 0, 0);
-            std::string ptr = em_.nextTemp();
-            em_.emit(ptr + " = getelementptr " + gepTy + ", ptr " + arr +
-                     ", i64 " + off);
+            std::string ptr = emitGep(gepTy, arr, "i64", off);
             emitHeapStore(ptr, v.ir, elemType, arr);
-            std::string noff = em_.nextTemp();
-            em_.emit(noff + " = add i64 " + off + ", 1");
+            std::string noff = emitBinOp("add", "i64", off, "1");
             off = noff;
         } else {
             // for j in 0..len: dest[off+j] = coerce(src[j])
@@ -182,66 +171,50 @@ Value IRGen::genArrayLiteral(HaoLangParser::ArrayLiteralContext* al) {
             std::string srcGep = srcElem->arrayGepType();
             std::string srcLt = srcElem->llvmType();
             std::string srcSlot = emitSpillGcRoot("aspread.src", elems[i].v.ir);
-            std::string src0 = em_.nextTemp();
-            em_.emit(src0 + " = load ptr, ptr " + srcSlot);
-            std::string slen = em_.nextTemp();
-            em_.emit(slen + " = call i64 @hao_array_len(ptr " + src0 + ")");
+            std::string src0 = emitLoad("ptr", srcSlot);
+            std::string slen = emitCall("i64", "@hao_array_len", "ptr " + src0);
             std::string jAlloca = em_.nextTemp();
-            em_.emit(jAlloca + " = alloca i64");
-            em_.emit("store i64 0, ptr " + jAlloca);
+            emitAllocaAt(jAlloca, "i64");
+            emitStore("i64", "0", jAlloca);
             std::string offAlloca = em_.nextTemp();
-            em_.emit(offAlloca + " = alloca i64");
-            em_.emit("store i64 " + off + ", ptr " + offAlloca);
+            emitAllocaAt(offAlloca, "i64");
+            emitStore("i64", off, offAlloca);
 
             std::string loopLbl = em_.nextLabel("aspread.loop");
             std::string bodyLbl = em_.nextLabel("aspread.body");
             std::string endLbl = em_.nextLabel("aspread.end");
-            em_.emit("br label %" + loopLbl);
+            emitBr(loopLbl);
             em_.emitLabel(loopLbl);
             blockTerminated_ = false;
             /* v0.53.5：合成展开循环须 safepoint；活数组指针须在 shadow */
-            em_.emit("call void @hao_gc_safepoint()");
-            arr = em_.nextTemp();
-            em_.emit(arr + " = load ptr, ptr " + arrSlot);
-            std::string src = em_.nextTemp();
-            em_.emit(src + " = load ptr, ptr " + srcSlot);
-            std::string jv = em_.nextTemp();
-            em_.emit(jv + " = load i64, ptr " + jAlloca);
-            std::string cmp = em_.nextTemp();
-            em_.emit(cmp + " = icmp slt i64 " + jv + ", " + slen);
-            em_.emit("br i1 " + cmp + ", label %" + bodyLbl + ", label %" + endLbl);
+            emitSafepoint();
+            arr = emitLoad("ptr", arrSlot);
+            std::string src = emitLoad("ptr", srcSlot);
+            std::string jv = emitLoad("i64", jAlloca);
+            std::string cmp = emitICmp("slt", "i64", jv, slen);
+            emitCondBr(cmp, bodyLbl, endLbl);
             em_.emitLabel(bodyLbl);
             blockTerminated_ = false;
-            std::string sp = em_.nextTemp();
-            em_.emit(sp + " = getelementptr " + srcGep + ", ptr " + src +
-                     ", i64 " + jv);
-            std::string sv = em_.nextTemp();
-            em_.emit(sv + " = load " + srcLt + ", ptr " + sp);
+            std::string sp = emitGep(srcGep, src, "i64", jv);
+            std::string sv = emitLoad(srcLt, sp);
             Value loaded(sv, srcElem);
             Value cv = coerce(loaded, elemType, 0, 0);
-            std::string doff = em_.nextTemp();
-            em_.emit(doff + " = load i64, ptr " + offAlloca);
-            std::string dp = em_.nextTemp();
-            em_.emit(dp + " = getelementptr " + gepTy + ", ptr " + arr +
-                     ", i64 " + doff);
+            std::string doff = emitLoad("i64", offAlloca);
+            std::string dp = emitGep(gepTy, arr, "i64", doff);
             emitHeapStore(dp, cv.ir, elemType, arr);
-            std::string doff2 = em_.nextTemp();
-            em_.emit(doff2 + " = add i64 " + doff + ", 1");
-            em_.emit("store i64 " + doff2 + ", ptr " + offAlloca);
-            std::string j2 = em_.nextTemp();
-            em_.emit(j2 + " = add i64 " + jv + ", 1");
-            em_.emit("store i64 " + j2 + ", ptr " + jAlloca);
-            em_.emit("br label %" + loopLbl);
+            std::string doff2 = emitBinOp("add", "i64", doff, "1");
+            emitStore("i64", doff2, offAlloca);
+            std::string j2 = emitBinOp("add", "i64", jv, "1");
+            emitStore("i64", j2, jAlloca);
+            emitBr(loopLbl);
             em_.emitLabel(endLbl);
             blockTerminated_ = false;
-            off = em_.nextTemp();
-            em_.emit(off + " = load i64, ptr " + offAlloca);
-            em_.emit("store ptr null, ptr " + srcSlot);
+            off = emitLoad("i64", offAlloca);
+            emitStore("ptr", "null", srcSlot);
         }
     }
 
-    arr = em_.nextTemp();
-    em_.emit(arr + " = load ptr, ptr " + arrSlot);
+    arr = emitLoad("ptr", arrSlot);
     /* 勿清 arrSlot：返回 SSA 仍可能跨 safepoint；循环由 spill 池清 */
     return Value(arr, Type::makeArray(elemType));
 }
@@ -250,13 +223,10 @@ Value IRGen::genArrayLiteral(HaoLangParser::ArrayLiteralContext* al) {
 Value IRGen::genEmptyArray(const TypePtr& elemType) {
     int64_t esz = elemType ? elemType->arrayElemSize() : 8;
     std::string isPtr = isGcPointerType(elemType) ? "1" : "0";
-    std::string arrRaw = em_.nextTemp();
-    em_.emit(arrRaw + " = call ptr @hao_array_new(i64 0, i64 " +
-             std::to_string(esz) + ", i64 " + isPtr + ")");
+    std::string arrRaw = emitCall("ptr", "@hao_array_new", "i64 0, i64 " + std::to_string(esz) + ", i64 " + isPtr);
     /* 空数组亦可能跨后续 safepoint，进 shadow */
     std::string slot = emitSpillGcRoot("aempty.arr", arrRaw);
-    std::string arr = em_.nextTemp();
-    em_.emit(arr + " = load ptr, ptr " + slot);
+    std::string arr = emitLoad("ptr", slot);
     return Value(arr, Type::makeArray(elemType));
 }
 
@@ -277,13 +247,9 @@ Value IRGen::genSizedArray(const TypePtr& elemType, const Value& len,
     if (len.type->llvmType() == "i64") {
         len64 = len.ir;
     } else if (len.type->isUnsigned()) {
-        len64 = em_.nextTemp();
-        em_.emit(len64 + " = zext " + len.type->llvmType() + " " + len.ir +
-                 " to i64");
+        len64 = emitCast("zext", len.type->llvmType(), len.ir, "i64");
     } else {
-        len64 = em_.nextTemp();
-        em_.emit(len64 + " = sext " + len.type->llvmType() + " " + len.ir +
-                 " to i64");
+        len64 = emitCast("sext", len.type->llvmType(), len.ir, "i64");
     }
 
     int64_t esz = elemType->arrayElemSize();
@@ -301,9 +267,7 @@ Value IRGen::genSizedArray(const TypePtr& elemType, const Value& len,
         fillHeld = coerce(*fill, elemType, 0, 0);
         rootGcOperand(fillHeld);
     }
-    std::string arrRaw = em_.nextTemp();
-    em_.emit(arrRaw + " = call ptr @hao_array_new(i64 " + len64 + ", i64 " +
-             std::to_string(esz) + ", i64 " + isPtr + ")");
+    std::string arrRaw = emitCall("ptr", "@hao_array_new", "i64 " + len64 + ", i64 " + std::to_string(esz) + ", i64 " + isPtr);
     std::string arrSlot = emitSpillGcRoot("asize.arr", arrRaw);
 
     if (fill) {
@@ -312,45 +276,38 @@ Value IRGen::genSizedArray(const TypePtr& elemType, const Value& len,
         if (isGcPointerType(elemType))
             fillSlot = emitSpillGcRoot("asize.fill", fv.ir);
         std::string iAlloca = em_.nextTemp();
-        em_.emit(iAlloca + " = alloca i64");
-        em_.emit("store i64 0, ptr " + iAlloca);
+        emitAllocaAt(iAlloca, "i64");
+        emitStore("i64", "0", iAlloca);
         std::string loopLbl = em_.nextLabel("asize.loop");
         std::string bodyLbl = em_.nextLabel("asize.body");
         std::string endLbl = em_.nextLabel("asize.end");
-        em_.emit("br label %" + loopLbl);
+        emitBr(loopLbl);
         em_.emitLabel(loopLbl);
         blockTerminated_ = false;
         /* v0.53.5：合成填充循环须 safepoint；arr/fill 从 shadow 重载 */
-        em_.emit("call void @hao_gc_safepoint()");
-        std::string arr = em_.nextTemp();
-        em_.emit(arr + " = load ptr, ptr " + arrSlot);
+        emitSafepoint();
+        std::string arr = emitLoad("ptr", arrSlot);
         std::string fillIr = fv.ir;
         if (!fillSlot.empty()) {
-            fillIr = em_.nextTemp();
-            em_.emit(fillIr + " = load ptr, ptr " + fillSlot);
+            fillIr = emitLoad("ptr", fillSlot);
         }
-        std::string iv = em_.nextTemp();
-        em_.emit(iv + " = load i64, ptr " + iAlloca);
-        std::string cmp = em_.nextTemp();
-        em_.emit(cmp + " = icmp slt i64 " + iv + ", " + len64);
-        em_.emit("br i1 " + cmp + ", label %" + bodyLbl + ", label %" + endLbl);
+        std::string iv = emitLoad("i64", iAlloca);
+        std::string cmp = emitICmp("slt", "i64", iv, len64);
+        emitCondBr(cmp, bodyLbl, endLbl);
         em_.emitLabel(bodyLbl);
         blockTerminated_ = false;
-        std::string p = em_.nextTemp();
-        em_.emit(p + " = getelementptr " + gepTy + ", ptr " + arr + ", i64 " + iv);
+        std::string p = emitGep("" + gepTy + "", arr, "i64", iv);
         emitHeapStore(p, fillIr, elemType, arr);
-        std::string i2 = em_.nextTemp();
-        em_.emit(i2 + " = add i64 " + iv + ", 1");
-        em_.emit("store i64 " + i2 + ", ptr " + iAlloca);
-        em_.emit("br label %" + loopLbl);
+        std::string i2 = emitBinOp("add", "i64", iv, "1");
+        emitStore("i64", i2, iAlloca);
+        emitBr(loopLbl);
         em_.emitLabel(endLbl);
         blockTerminated_ = false;
         if (!fillSlot.empty())
-            em_.emit("store ptr null, ptr " + fillSlot);
+            emitStore("ptr", "null", fillSlot);
     }
 
-    std::string arr = em_.nextTemp();
-    em_.emit(arr + " = load ptr, ptr " + arrSlot);
+    std::string arr = emitLoad("ptr", arrSlot);
     /* 勿清 arrSlot：返回 SSA 仍可能跨 safepoint */
     return Value(arr, Type::makeArray(elemType));
 }
@@ -429,13 +386,11 @@ Value IRGen::genWhenExpr(HaoLangParser::WhenStmtContext* w) {
         subjType = subject.type;
         if (isGcPointerType(subjType) && inLoopSpillPool()) {
             subjAddr = acquireLoopGcSlot("when.subj");
-            em_.emit("store " + subjType->llvmType() + " " + subject.ir +
-                     ", ptr " + subjAddr);
+            emitStore(subjType->llvmType(), subject.ir, subjAddr);
         } else {
             subjAddr = em_.nextNamed("when.subj");
-            em_.emit(subjAddr + " = alloca " + subjType->llvmType());
-            em_.emit("store " + subjType->llvmType() + " " + subject.ir +
-                     ", ptr " + subjAddr);
+            emitAllocaAt(subjAddr, subjType->llvmType());
+            emitStore(subjType->llvmType(), subject.ir, subjAddr);
             if (isGcPointerType(subjType))
                 emitGcRootPush(subjAddr);
         }
@@ -444,12 +399,12 @@ Value IRGen::genWhenExpr(HaoLangParser::WhenStmtContext* w) {
     std::string resAddr;
     if (isGcPointerType(resultType) && inLoopSpillPool()) {
         resAddr = acquireLoopGcSlot("when.res");
-        em_.emit("store ptr null, ptr " + resAddr);
+        emitStore("ptr", "null", resAddr);
     } else {
         resAddr = em_.nextNamed("when.res");
-        em_.emit(resAddr + " = alloca " + resultType->llvmType());
+        emitAllocaAt(resAddr, resultType->llvmType());
         if (isGcPointerType(resultType)) {
-            em_.emit("store ptr null, ptr " + resAddr);
+            emitStore("ptr", "null", resAddr);
             emitGcRootPush(resAddr);
         }
     }
@@ -477,9 +432,8 @@ Value IRGen::genWhenExpr(HaoLangParser::WhenStmtContext* w) {
                 return false;
             }
             rv = coerce(rv, resultType, 0, 0);
-            em_.emit("store " + resultType->llvmType() + " " + rv.ir +
-                     ", ptr " + resAddr);
-            if (!blockTerminated_) em_.emit("br label %" + endL);
+            emitStore(resultType->llvmType(), rv.ir, resAddr);
+            if (!blockTerminated_) emitBr(endL);
             blockTerminated_ = true;
             return true;
         };
@@ -506,8 +460,7 @@ Value IRGen::genWhenExpr(HaoLangParser::WhenStmtContext* w) {
                                      cv.type->toString() + "，请先用 !! 或 ??");
                     return Value();
                 }
-                std::string sv = em_.nextTemp();
-                em_.emit(sv + " = load " + subjType->llvmType() + ", ptr " + subjAddr);
+                std::string sv = emitLoad(subjType->llvmType(), subjAddr);
 
                 if (subjType->kind == TypeKind::String) {
                     if (cv.type->kind != TypeKind::String) {
@@ -515,11 +468,8 @@ Value IRGen::genWhenExpr(HaoLangParser::WhenStmtContext* w) {
                                          " 与主体类型 String 不匹配");
                         return Value();
                     }
-                    std::string eqr = em_.nextTemp();
-                    em_.emit(eqr + " = call i8 @hao_str_eq(ptr " + sv +
-                             ", ptr " + cv.ir + ")");
-                    condI1 = em_.nextTemp();
-                    em_.emit(condI1 + " = icmp ne i8 " + eqr + ", 0");
+                    std::string eqr = emitCall("i8", "@hao_str_eq", "ptr " + sv + ", ptr " + cv.ir);
+                    condI1 = emitICmp("ne", "i8", eqr, "0");
                 } else if (subjType->isFloating() || cv.type->isFloating()) {
                     TypePtr ft = (subjType->kind == TypeKind::Double ||
                                   cv.type->kind == TypeKind::Double)
@@ -527,9 +477,7 @@ Value IRGen::genWhenExpr(HaoLangParser::WhenStmtContext* w) {
                     Value sdv(sv, subjType);
                     sdv = coerce(sdv, ft, 0, 0);
                     cv  = coerce(cv,  ft, 0, 0);
-                    condI1 = em_.nextTemp();
-                    em_.emit(condI1 + " = fcmp oeq " + ft->llvmType() + " " +
-                             sdv.ir + ", " + cv.ir);
+                    condI1 = emitFCmp("oeq", ft->llvmType(), sdv.ir, cv.ir);
                 } else {
                     if (!isAssignable(cv.type, subjType) &&
                         !isAssignable(subjType, cv.type)) {
@@ -552,9 +500,7 @@ Value IRGen::genWhenExpr(HaoLangParser::WhenStmtContext* w) {
                     Value sdv(sv, subjType);
                     sdv = coerce(sdv, ct, 0, 0);
                     cv  = coerce(cv,  ct, 0, 0);
-                    condI1 = em_.nextTemp();
-                    em_.emit(condI1 + " = icmp eq " + ct->llvmType() +
-                             " " + sdv.ir + ", " + cv.ir);
+                    condI1 = emitICmp("eq", ct->llvmType(), sdv.ir, cv.ir);
                 }
             } else {
                 if (cv.type->kind != TypeKind::Bool) {
@@ -568,7 +514,7 @@ Value IRGen::genWhenExpr(HaoLangParser::WhenStmtContext* w) {
 
             bool lastValue = (ei + 1 == exprs.size());
             std::string failL = lastValue ? nextL : em_.nextLabel("when.or");
-            em_.emit("br i1 " + condI1 + ", label %" + bodyL + ", label %" + failL);
+            emitCondBr(condI1, bodyL, failL);
             if (!lastValue) {
                 em_.emitLabel(failL);
                 blockTerminated_ = false;
@@ -583,19 +529,18 @@ Value IRGen::genWhenExpr(HaoLangParser::WhenStmtContext* w) {
         blockTerminated_ = false;
     }
 
-    if (!blockTerminated_) em_.emit("br label %" + endL);
+    if (!blockTerminated_) emitBr(endL);
     em_.emitLabel(endL);
     blockTerminated_ = false;
 
-    std::string out = em_.nextTemp();
-    em_.emit(out + " = load " + resultType->llvmType() + ", ptr " + resAddr);
+    std::string out = emitLoad(resultType->llvmType(), resAddr);
     Value result(out, resultType);
     /* 先 spill 结果再清 when.res：否则仅 SSA 跨 safepoint 会假死 */
     rootGcOperand(result);
     if (isGcPointerType(resultType) && !resAddr.empty())
-        em_.emit("store ptr null, ptr " + resAddr);
+        emitStore("ptr", "null", resAddr);
     if (hasSubject && isGcPointerType(subjType) && !subjAddr.empty())
-        em_.emit("store ptr null, ptr " + subjAddr);
+        emitStore("ptr", "null", subjAddr);
     return result;
 }
 
@@ -651,16 +596,14 @@ Value IRGen::genLiteral(HaoLangParser::LiteralContext* lit) {
     if (auto* t = lit->STRING_LIT()) {
         std::string content = StringUtil::unescapeStringLiteral(t->getText());
         std::string cstr = em_.internString(content);
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call ptr @hao_str_from_cstr(ptr " + cstr + ")");
+        std::string reg = emitCall("ptr", "@hao_str_from_cstr", "ptr " + cstr);
         return Value(reg, Type::makeString());
     }
 
     if (auto* vs = lit->VERBATIM_STRING()) {
         std::string content = StringUtil::unescapeVerbatimString(vs->getText());
         std::string cstr = em_.internString(content);
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call ptr @hao_str_from_cstr(ptr " + cstr + ")");
+        std::string reg = emitCall("ptr", "@hao_str_from_cstr", "ptr " + cstr);
         return Value(reg, Type::makeString());
     }
 
@@ -728,8 +671,7 @@ Value IRGen::genTemplateString(HaoLangParser::TemplateStringContext* ts) {
                 }
             }
             std::string cstr = em_.internString(s);
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_str_from_cstr(ptr " + cstr + ")");
+            std::string reg = emitCall("ptr", "@hao_str_from_cstr", "ptr " + cstr);
             piece = Value(reg, Type::makeString());
         } else if (auto* ip = dynamic_cast<HaoLangParser::TmplInterpContext*>(part)) {
             Value v = genExpr(ip->expr());
@@ -757,9 +699,7 @@ Value IRGen::genTemplateString(HaoLangParser::TemplateStringContext* ts) {
         } else {
             rootGcOperand(acc);
             rootGcOperand(piece);
-            std::string reg = em_.nextTemp();
-            em_.emit(reg + " = call ptr @hao_str_concat(ptr " + acc.ir +
-                     ", ptr " + piece.ir + ")");
+            std::string reg = emitCall("ptr", "@hao_str_concat", "ptr " + acc.ir + ", ptr " + piece.ir);
             acc = Value(reg, Type::makeString());
             rootGcOperand(acc);
         }
@@ -767,8 +707,7 @@ Value IRGen::genTemplateString(HaoLangParser::TemplateStringContext* ts) {
 
     if (first) {
         std::string cstr = em_.internString("");
-        std::string reg = em_.nextTemp();
-        em_.emit(reg + " = call ptr @hao_str_from_cstr(ptr " + cstr + ")");
+        std::string reg = emitCall("ptr", "@hao_str_from_cstr", "ptr " + cstr);
         return Value(reg, Type::makeString());
     }
     return acc;

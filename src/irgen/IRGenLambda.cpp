@@ -364,16 +364,14 @@ Value IRGen::genLambda(HaoLangParser::LambdaContext* lam) {
     }
     std::string env = emitObjectNew((int64_t)nslots, envBm);
     std::string envSlot = emitSpillGcRoot("lambda.env", env);
-    env = em_.nextTemp();
-    em_.emit(env + " = load ptr, ptr " + envSlot);
+    env = emitLoad("ptr", envSlot);
     std::string fp0 = fieldPtr(env, 0);
-    em_.emit("store ptr " + mi.implName + ", ptr " + fp0);
+    emitStore("ptr", mi.implName, fp0);
 
     size_t slot = 1;
     if (mi.capturesThis) {
         std::string sp = fieldPtr(env, (int)slot);
-        std::string treg = em_.nextTemp();
-        em_.emit(treg + " = load ptr, ptr " + thisAddr_);
+        std::string treg = emitLoad("ptr", thisAddr_);
         emitHeapStore(sp, treg, Type::makeClass("Object"), env);
         ++slot;
     }
@@ -381,8 +379,7 @@ Value IRGen::genLambda(HaoLangParser::LambdaContext* lam) {
         auto sym = syms_.lookup(cap.name);
         std::string sp = fieldPtr(env, (int)slot);
         if (cap.boxed) {
-            std::string cell = em_.nextTemp();
-            em_.emit(cell + " = load ptr, ptr " + sym->irAddr);
+            std::string cell = emitLoad("ptr", sym->irAddr);
             // cell 本身是堆对象指针
             TypePtr cellTy = Type::makeClass("Object");
             emitHeapStore(sp, cell, cellTy, env);
@@ -407,6 +404,7 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     auto savedReturn = currentReturn_;
     bool savedSawReturn = sawReturn_;
     bool savedBlockTerm = blockTerminated_;
+    bool savedInMain = inMain_;
     const LambdaInfo* savedLambda = currentLambda_;
     auto savedLoops = loops_;
     auto savedHoist = loopHoisted_;
@@ -422,6 +420,8 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     currentReturn_ = mi.returnType;
     sawReturn_ = false;
     blockTerminated_ = false;
+    /* U8：lambda 不是 @main；try/finally 的 emitUnwindRet 勿跟外层 inMain_ 发 ret i32 */
+    inMain_ = false;
     loops_.clear();
     loopHoisted_.clear();
     loopSpillPools_.clear();
@@ -438,6 +438,11 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     em_.emitBlank();
     em_.emitRaw(sig);
     em_.emitLabel("entry");
+    {
+        std::string spName = mi.implName;
+        if (!spName.empty() && spName[0] == '@') spName = spName.substr(1);
+        beginDebugFunction(mi.ctx, spName);
+    }
 
     // try/finally 函数级槽位（含 GC 返回/异常根）
     emitAllocUnwindSlots();
@@ -466,13 +471,12 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
         size_t slot = 1;
         if (mi.capturesThis) {
             thisAddr_ = "%this.lambda.addr";
-            em_.emit(thisAddr_ + " = alloca ptr");
+            emitAllocaAt(thisAddr_, "ptr");
             // 先发射 getelementptr（fieldPtr 内部取号），再取 load 寄存器，
             // 保证编号与发射顺序一致（否则 %N 倒退导致 clang 报错）。
             std::string fp = fieldPtr("%env.arg", (int)slot);
-            std::string tv = em_.nextTemp();
-            em_.emit(tv + " = load ptr, ptr " + fp);
-            em_.emit("store ptr " + tv + ", ptr " + thisAddr_);
+            std::string tv = emitLoad("ptr", fp);
+            emitStore("ptr", tv, thisAddr_);
             emitGcRootPush(thisAddr_);
             ++slot;
         }
@@ -480,16 +484,14 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
             std::string addr = "%" + cap.name + ".cap.addr";
             std::string fp = fieldPtr("%env.arg", (int)slot);
             if (cap.boxed) {
-                em_.emit(addr + " = alloca ptr");
-                std::string cv = em_.nextTemp();
-                em_.emit(cv + " = load ptr, ptr " + fp);
-                em_.emit("store ptr " + cv + ", ptr " + addr);
+                emitAllocaAt(addr, "ptr");
+                std::string cv = emitLoad("ptr", fp);
+                emitStore("ptr", cv, addr);
                 emitGcRootPush(addr);
             } else {
-                em_.emit(addr + " = alloca " + cap.type->llvmType());
-                std::string cv = em_.nextTemp();
-                em_.emit(cv + " = load " + cap.type->llvmType() + ", ptr " + fp);
-                em_.emit("store " + cap.type->llvmType() + " " + cv + ", ptr " + addr);
+                emitAllocaAt(addr, cap.type->llvmType());
+                std::string cv = emitLoad(cap.type->llvmType(), fp);
+                emitStore(cap.type->llvmType(), cv, addr);
                 if (isGcPointerType(cap.type))
                     emitGcRootPush(addr);
             }
@@ -522,27 +524,25 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
                 ps->byRefParam = true;
                 emitGcRootPush(argSrc);
             } else if (boxed) {
-                em_.emit(addr + " = alloca ptr");
+                emitAllocaAt(addr, "ptr");
                 if (isGcPointerType(mi.paramTypes[i])) {
-                    em_.emit("store ptr " + argSrc + ", ptr " + addr);
+                    emitStore("ptr", argSrc, addr);
                     emitGcRootPush(addr);
-                    std::string held = em_.nextTemp();
-                    em_.emit(held + " = load ptr, ptr " + addr);
+                    std::string held = emitLoad("ptr", addr);
                     std::string cell = emitObjectNew(1, 1);
                     emitHeapStore(cell, held, mi.paramTypes[i], cell);
-                    em_.emit("store ptr " + cell + ", ptr " + addr);
+                    emitStore("ptr", cell, addr);
                 } else {
                     std::string cell = emitObjectNew(1, 0);
                     emitHeapStore(cell, argSrc, mi.paramTypes[i], cell);
-                    em_.emit("store ptr " + cell + ", ptr " + addr);
+                    emitStore("ptr", cell, addr);
                     emitGcRootPush(addr);
                 }
                 ps->irAddr = addr;
                 ps->boxed = true;
             } else {
-                em_.emit(addr + " = alloca " + mi.paramTypes[i]->llvmType());
-                em_.emit("store " + mi.paramTypes[i]->llvmType() + " " +
-                         argSrc + ", ptr " + addr);
+                emitAllocaAt(addr, mi.paramTypes[i]->llvmType());
+                emitStore(mi.paramTypes[i]->llvmType(), argSrc, addr);
                 ps->irAddr = addr;
                 if (isGcPointerType(mi.paramTypes[i]))
                     emitGcRootPush(addr);
@@ -559,7 +559,7 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
         }
         size_t genCount = trailingIsReturn ? stmts.size() - 1 : stmts.size();
         /* v0.53.3：lambda 入口 safepoint */
-        em_.emit("call void @hao_gc_safepoint()");
+        emitSafepoint();
         pushSmartCastFrame();
         beginBlockGcScope();
         for (size_t i = 0; i < genCount; ++i) {
@@ -571,27 +571,29 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
         if (!blockTerminated_) {
             if (mi.returnType->isUnit()) {
                 emitGcRootUnwind();
-                em_.emit("ret void");
+                emitRuntimePopFrame();
+                emitRetVoid();
             } else if (trailingIsReturn) {
                 auto* es = stmts.back()->exprStmt();
                 Value v = genExpr(es->expr());
                 emitGcRootUnwind();
+                emitRuntimePopFrame();
                 if (!v.valid()) {
-                    em_.emit("ret " + mi.returnType->llvmType() + " zeroinitializer");
+                    emitRet(mi.returnType->llvmType(), "zeroinitializer");
                 } else {
                     if (!isAssignable(v.type, mi.returnType)) {
                         error(mi.ctx, "lambda 返回值类型 " + v.type->toString() +
                                       " 与推断的 " + mi.returnType->toString() + " 不匹配");
                     }
                     v = coerce(v, mi.returnType, 0, 0);
-                    em_.emit("ret " + mi.returnType->llvmType() + " " + v.ir);
+                    emitRet(mi.returnType->llvmType(), v.ir);
                 }
             } else {
                 error(mi.ctx, "lambda 返回 " + mi.returnType->toString() +
                               "，但存在没有 return 的执行路径");
                 emitGcRootUnwind();
-                em_.emit("ret " + mi.returnType->llvmType() + " " +
-                         zeroValueFor(mi.returnType));
+                emitRuntimePopFrame();
+                emitRet(mi.returnType->llvmType(), zeroValueFor(mi.returnType));
             }
         }
         popSmartCastFrame();
@@ -613,6 +615,7 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     currentReturn_ = savedReturn;
     sawReturn_ = savedSawReturn;
     blockTerminated_ = savedBlockTerm;
+    inMain_ = savedInMain;
     currentLambda_ = savedLambda;
     loops_ = savedLoops;
     loopHoisted_ = savedHoist;

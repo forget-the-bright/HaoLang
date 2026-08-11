@@ -380,4 +380,26 @@ rm -f target/*.ll target/*.exe 2>/dev/null || true
 echo "========================================"
 echo "套件总行数: $total  (基线 1011) | 退出码: $code"
 [[ $code -eq 0 ]] || exit 1
+# P3 双门禁：行数必须等于基线（曾出现增量缓存 suite 少行误报 1007）
+if [[ "$total" -ne 1011 ]]; then
+  echo "FAIL 套件行数 $total != 1011（请 --rebuild-all 或查丢打印）"
+  exit 1
+fi
 # 基线：v0.55.x 可达性主路径 / 精确根 / 混合屏障 → 1011
+
+# C0：定位/spill 门禁（Win + powershell；与套件双门禁同级）
+if command -v powershell >/dev/null 2>&1 || command -v powershell.exe >/dev/null 2>&1; then
+  PS=powershell
+  command -v powershell.exe >/dev/null 2>&1 && PS=powershell.exe
+  echo "== loc_smoke / spill_ir_smoke =="
+  if ! "$PS" -NoProfile -ExecutionPolicy Bypass -File script/win/loc_smoke.ps1; then
+    echo "FAIL loc_smoke.ps1"
+    exit 1
+  fi
+  if ! "$PS" -NoProfile -ExecutionPolicy Bypass -File script/win/spill_ir_smoke.ps1; then
+    echo "FAIL spill_ir_smoke.ps1"
+    exit 1
+  fi
+else
+  echo "SKIP loc/spill smoke (no powershell)"
+fi

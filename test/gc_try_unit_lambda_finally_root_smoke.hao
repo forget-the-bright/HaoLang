@@ -1,0 +1,31 @@
+// U8b：Unit-lambda 体内直接 try/finally GC 根（关 U7a 具名 worker 规避债）
+package main;
+
+import thread;
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var shared = new Box("live");
+    var done = new Box("0");
+    val t = new thread.Thread();
+    // lambda 体内直接 try（禁止再包具名 worker）
+    t.start({
+        try {
+            gc.GC.collect();
+            fmt.println(shared.s == "live");
+        } finally {
+            fmt.println(shared.s == "live");
+            done.s = "1";
+        }
+    });
+    t.join();
+    fmt.println(shared.s == "live");
+    fmt.println(done.s == "1");
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

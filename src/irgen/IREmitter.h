@@ -14,6 +14,7 @@
 
 #include "sema/Type.h"
 
+#include <cstdint>
 #include <map>
 #include <sstream>
 #include <string>
@@ -29,6 +30,24 @@ public:
     // 否则 clang 会以自身默认 triple 覆盖并给出 -Woverride-module 警告。
     void setTargetTriple(const std::string& triple) { triple_ = triple; }
     const std::string& targetTriple() const { return triple_; }
+
+    // I3：调试元数据（仅当 debugEnabled 且有 DILocation 时 finish 才输出）
+    void setDebugEnabled(bool v) { debugEnabled_ = v; }
+    bool debugEnabled() const { return debugEnabled_; }
+    void setDebugFile(const std::string& path) { debugFile_ = path; }
+    void setDebugFileIfEmpty(const std::string& path) {
+        if (debugFile_.empty()) debugFile_ = path;
+    }
+    // 返回 metadata 编号 N（用于 `, !dbg !N`）；未开 debug 返回 0
+    unsigned internDILocation(unsigned line, unsigned col);
+    // D3：薄 DILocalVariable；arg=0 局部，arg>=1 形参序号
+    unsigned internDILocalVariable(const std::string& name, unsigned line,
+                                   unsigned arg);
+    // 空 !DIExpression() 的 metadata id（dbg.declare 第三操作数）
+    unsigned diExpressionId();
+    // 进入用户函数：新建 !DISubprogram，后续 DILocation 的 scope 指向它
+    void beginDebugSubprogram(const std::string& name, unsigned line);
+    void clearDebugSubprogram() { currentScope_ = 0; }
 
     // ------------------------------------------------------------
     //  唯一名字生成
@@ -213,6 +232,70 @@ public:
         // 属性组（如 returns_twice）放在文件末尾
         out << "\n";
         for (const auto& g : attributeGroups()) out << g << "\n";
+
+        if (diReady_ && (!dilocs_.empty() || !dilocals_.empty())) {
+            out << "\n; ---------- Debug Info (I3/D3) ----------\n";
+            out << "!llvm.dbg.cu = !{!0}\n";
+            out << "!llvm.module.flags = !{!1000, !1001}\n";
+            out << "!1000 = !{i32 7, !\"Dwarf Version\", i32 5}\n";
+            out << "!1001 = !{i32 2, !\"Debug Info Version\", i32 3}\n";
+
+            std::string file = debugFile_.empty() ? "hao.hao" : debugFile_;
+            std::string dir = ".";
+            auto slash = file.find_last_of("/\\");
+            std::string base = file;
+            if (slash != std::string::npos) {
+                dir = file.substr(0, slash);
+                base = file.substr(slash + 1);
+            }
+            auto esc = [](const std::string& s) {
+                std::string o;
+                o.reserve(s.size());
+                for (char c : s) {
+                    if (c == '\\' || c == '"') o += '\\';
+                    o += c;
+                }
+                return o;
+            };
+
+            out << "!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, "
+                   "file: !1, producer: \"HaoLang\", isOptimized: true, "
+                   "runtimeVersion: 0, emissionKind: FullDebug, enums: !2)\n";
+            out << "!1 = !DIFile(filename: \"" << esc(base)
+                << "\", directory: \"" << esc(dir) << "\")\n";
+            out << "!2 = !{}\n";
+            out << "!3 = !DISubroutineType(types: !2)\n";
+            out << "!4 = distinct !DISubprogram(name: \"hao\", scope: !1, "
+                   "file: !1, line: 1, type: !3, scopeLine: 1, "
+                   "spFlags: DISPFlagDefinition, unit: !0, retainedNodes: !2)\n";
+            for (const auto& sp : subprograms_) {
+                out << "!" << sp.id << " = distinct !DISubprogram(name: \""
+                    << esc(sp.name) << "\", scope: !1, file: !1, line: "
+                    << sp.line << ", type: !3, scopeLine: " << sp.line
+                    << ", spFlags: DISPFlagDefinition, unit: !0, "
+                       "retainedNodes: !2)\n";
+            }
+            if (diTypeId_ != 0) {
+                out << "!" << diTypeId_
+                    << " = !DIBasicType(name: \"hao_val\", size: 64, "
+                       "encoding: DW_ATE_unsigned)\n";
+            }
+            if (diExprId_ != 0) {
+                out << "!" << diExprId_ << " = !DIExpression()\n";
+            }
+            for (const auto& lv : dilocals_) {
+                out << "!" << lv.id << " = !DILocalVariable(name: \""
+                    << esc(lv.name) << "\"";
+                if (lv.arg > 0) out << ", arg: " << lv.arg;
+                out << ", scope: !" << lv.scope << ", file: !1, line: "
+                    << lv.line << ", type: !" << diTypeId_ << ")\n";
+            }
+            for (const auto& loc : dilocs_) {
+                out << "!" << loc.id << " = !DILocation(line: " << loc.line
+                    << ", column: " << loc.col << ", scope: !" << loc.scope
+                    << ")\n";
+            }
+        }
         return out.str();
     }
 
@@ -232,6 +315,8 @@ public:
     // 运行时函数声明（对应 stdlib/runtime_*.c 各模块）
     static const std::vector<std::string>& runtimeDecls() {
         static const std::vector<std::string> decls = {
+            "declare void @llvm.dbg.declare(metadata, metadata, metadata)",
+            "declare void @llvm.dbg.value(metadata, metadata, metadata)",
             "declare void @hao_println_str(ptr)",
             "declare void @hao_println_sbyte(i8)",
             "declare void @hao_println_byte(i8)",
@@ -260,6 +345,10 @@ public:
             "declare i8   @hao_str_eq(ptr, ptr)",
             "declare i32  @hao_str_char_at(ptr, i64)",
             "declare void @hao_panic_null()",
+            "declare void @hao_dbg_set_src_loc(ptr, i32, i32)",
+            "declare void @hao_dbg_clear_src_loc()",
+            "declare void @hao_dbg_push_frame(ptr, i32, i32)",
+            "declare void @hao_dbg_pop_frame()",
             "declare void @hao_panic_div_zero()",
             "declare void @hao_panic_index(i64, i64)",
             "declare void @hao_panic_overflow()",
@@ -482,6 +571,80 @@ private:
     std::vector<std::string> functionDefs_;
     std::vector<SavedFunctionState> saved_;
     std::ostringstream body_;
+
+    // ---- I3/D3 Debug Info ----
+    bool debugEnabled_ = false;
+    bool diReady_ = false;
+    std::string debugFile_;
+    unsigned nextMetaId_ = 5;   // !0..!4 骨架预留（!4=回退 SP）
+    unsigned currentScope_ = 0; // 当前 DISubprogram id；0 → 用 !4
+    unsigned diTypeId_ = 0;     // 薄 hao_val 基本类型
+    unsigned diExprId_ = 0;     // 空 DIExpression
+    struct DILocRec { unsigned id, line, col, scope; };
+    struct DISubRec { unsigned id; std::string name; unsigned line; };
+    struct DILocalRec {
+        unsigned id;
+        std::string name;
+        unsigned line;
+        unsigned arg;   // 0=局部
+        unsigned scope;
+    };
+    std::vector<DILocRec> dilocs_;
+    std::vector<DISubRec> subprograms_;
+    std::vector<DILocalRec> dilocals_;
+    std::map<std::uint64_t, unsigned> dilocCache_;
+
+    void ensureDISkeleton() {
+        if (diReady_) return;
+        diReady_ = true;
+        nextMetaId_ = 5;
+    }
+    void ensureDIAuxTypes() {
+        ensureDISkeleton();
+        if (diTypeId_ == 0) diTypeId_ = nextMetaId_++;
+        if (diExprId_ == 0) diExprId_ = nextMetaId_++;
+    }
 };
+
+inline void IREmitter::beginDebugSubprogram(const std::string& name,
+                                           unsigned line) {
+    if (!debugEnabled_) return;
+    ensureDISkeleton();
+    unsigned id = nextMetaId_++;
+    subprograms_.push_back({id, name, line ? line : 1});
+    currentScope_ = id;
+}
+
+inline unsigned IREmitter::internDILocation(unsigned line, unsigned col) {
+    if (!debugEnabled_ || line == 0) return 0;
+    ensureDISkeleton();
+    unsigned scope = currentScope_ != 0 ? currentScope_ : 4;
+    // scope(16) | line(32) | col(16) —— 列号截断到 16 位够用
+    std::uint64_t key = (static_cast<std::uint64_t>(scope & 0xffff) << 48) |
+                        (static_cast<std::uint64_t>(line) << 16) |
+                        static_cast<std::uint64_t>(col & 0xffff);
+    auto it = dilocCache_.find(key);
+    if (it != dilocCache_.end()) return it->second;
+    unsigned id = nextMetaId_++;
+    dilocCache_[key] = id;
+    dilocs_.push_back({id, line, col, scope});
+    return id;
+}
+
+inline unsigned IREmitter::diExpressionId() {
+    if (!debugEnabled_) return 0;
+    ensureDIAuxTypes();
+    return diExprId_;
+}
+
+inline unsigned IREmitter::internDILocalVariable(const std::string& name,
+                                                unsigned line, unsigned arg) {
+    if (!debugEnabled_ || name.empty()) return 0;
+    ensureDIAuxTypes();
+    unsigned scope = currentScope_ != 0 ? currentScope_ : 4;
+    unsigned id = nextMetaId_++;
+    dilocals_.push_back({id, name, line ? line : 1, arg, scope});
+    return id;
+}
 
 } // namespace hao

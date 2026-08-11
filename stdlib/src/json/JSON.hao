@@ -10,7 +10,8 @@ import reflect;
 
 // 反射路径读取 keys()/数组元素；元素走 get_obj（托管引用，对标 Java）
 extern func _jsonArrLen(arr: Object): Int = "hao_array_len";
-extern func _jsonArrGet(arr: Object, idx: Int): Object? = "hao_array_get_obj";
+/* keys() 快照为 [String]：元素是 HaoString*，禁止当 Object 调虚方法 */
+extern func _jsonArrGetStr(arr: Object, idx: Int): String? = "hao_array_get_obj";
 
 class JSON {
     // Feature 位标志（toJSONString 可选）
@@ -200,15 +201,15 @@ class JSON {
         return n;
     }
 
-    // 是否 Map 形态（有无参 keys）
+    // 是否 Map 形态（对标 Html.lookupOne：无参 keys + 单参 get）
     static func looksLikeMap(t: reflect.Class): Bool {
-        return t.methodParamCount("keys") == 0;
+        return t.methodParamCount("keys") == 0 && t.methodParamCount("get") == 1;
     }
 
-    // 是否 List 形态（size+get，无 keys）
+    // 是否 List 形态（size+get，且无 keys；对标 Html.renderSection）
     static func looksLikeList(t: reflect.Class): Bool {
-        if (t.methodParamCount("keys") == 0) { return false; }
-        return t.methodParamCount("size") == 0 && t.methodParamCount("get") == 1;
+        return t.methodParamCount("size") == 0 && t.methodParamCount("get") == 1
+            && t.methodParamCount("keys") != 0;
     }
 
     static func fieldIsString(ft: String): Bool {
@@ -270,16 +271,24 @@ class JSON {
         if (keys == null) { return "{}"; }
         val keysArr = keys!!;
         val n = _jsonArrLen(keysArr);
+        // 先快照键串（[String] 元素须按 String? 取，勿 Object.toString）
+        var keyStrs: [String] = [];
+        var ki = 0;
+        while (ki < n) {
+            val kStr = _jsonArrGetStr(keysArr, ki);
+            ki += 1;
+            if (kStr == null) { continue; }
+            keyStrs += kStr!!;
+        }
         var r = "{";
         var first = true;
         var i = 0;
-        while (i < n) {
-            val kObj = _jsonArrGet(keysArr, i);
-            if (kObj == null) { i += 1; continue; }
-            val k = kObj!!;
-            val kStr = k.toString();
+        while (i < keyStrs.length) {
+            val kStr = keyStrs[i];
+            i += 1;
             var gargs: [Long] = [];
-            gargs += reflect.ptrOf(k);
+            // 与 Html.lookupOne 一致：Map.get(String) 形参槽用 ptrOfStr
+            gargs += reflect.ptrOfStr(kStr);
             val child = t.invokeObj(value, "get", gargs);
             if (!first) { r = r + ","; }
             first = false;
@@ -291,7 +300,6 @@ class JSON {
             } else {
                 r = r + JSON.stringifyAt(child!!, features, indent + 1, stack, depth);
             }
-            i += 1;
         }
         if (pretty && !first) { r = r + "\n" + JSON.pad(indent); }
         return r + "}";
@@ -360,23 +368,33 @@ class JSON {
     static func stringifyObj(obj: JSONObject, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
         val writeNull = (features & JSON.WriteMapNullValue) != 0;
+        // 键名快照：while 内 `r` 与 `k` 曾疑似 spill 别名，导致后续键被污染成结果串前缀
+        val nkeys = obj.keys.length;
+        var keySnap: [String] = [];
+        var si = 0;
+        while (si < nkeys) {
+            keySnap += obj.keys[si];
+            si += 1;
+        }
         var r = "{";
         var first = true;
         var i = 0;
-        while (i < obj.keys.length) {
-            val k = obj.keys[i];
+        while (i < nkeys) {
+            val k = keySnap[i];
             val v = obj.map.get(k);
             i += 1;
             if (v == null) { continue; }
             if ((!writeNull) && (v!! is JSONNull)) { continue; }
+            val piece = JSON.stringifyAt(v!!, features, indent + 1, stack, depth + 1);
+            val kq = JSON.quote(k);
             if (!first) { r = r + ","; }
             first = false;
             if (pretty) {
                 r = r + "\n" + JSON.pad(indent + 1);
             }
-            r = r + JSON.quote(k) + ":";
+            r = r + kq + ":";
             if (pretty) { r = r + " "; }
-            r = r + JSON.stringifyAt(v!!, features, indent + 1, stack, depth + 1);
+            r = r + piece;
         }
         if (pretty && !first) {
             r = r + "\n" + JSON.pad(indent);

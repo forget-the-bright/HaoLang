@@ -12,6 +12,8 @@
 
 #include "HaoLangParser.h"
 #include "irgen/IREmitter.h"
+#include "irgen/IROps.h"
+#include "irgen/SourceLoc.h"
 #include "sema/Diagnostic.h"
 #include "sema/SymbolTable.h"
 #include "sema/Type.h"
@@ -44,6 +46,9 @@ public:
 
     // v0.42：hao test —— 跳过非 harness 的业务 main，由 __hao_test_main.hao 提供入口
     void setTestMode(bool v);
+
+    // I0/I3：开启后 IROps 指令附加 !dbg；默认关（套件路径）
+    void setEmitDebug(bool v) { ops_.setDebugEnabled(v); }
 
     // 一个编译单元 = 一个 .hao 文件：所属包、import 路径、语法树。
     // main 包的 importPath 为空，内部符号不加前缀。
@@ -102,6 +107,33 @@ private:
 
     // 设置当前正在处理的单元（包前缀、imports 等），供名字解析使用
     void setCurrentUnit(const SourceUnit& u, const std::vector<Import>& imp);
+
+    // I0：从 ANTLR 节点取 SourceLoc（文件用 currentUnitPath_）
+    SourceLoc locFrom(antlr4::ParserRuleContext* ctx) const;
+    SourceLoc locFrom(antlr4::Token* tok) const;
+    void setDebugLoc(antlr4::ParserRuleContext* ctx) {
+        SourceLoc loc = locFrom(ctx);
+        ops_.setDebugLoc(loc);
+        /* 运行期 TLS：不在 genExpr 路径更新（过频）；见 genStatement */
+    }
+    void clearDebugLoc() {
+        ops_.clearDebugLoc();
+        em_.clearDebugSubprogram();
+    }
+    // 用户函数入口：填 loc + 新建 DISubprogram + push Hao 调用帧（P1）
+    void beginDebugFunction(antlr4::ParserRuleContext* ctx,
+                            const std::string& name) {
+        SourceLoc loc = locFrom(ctx);
+        ops_.setDebugLoc(loc);
+        em_.beginDebugSubprogram(name, loc.line);
+        emitRuntimePushFrame(loc);
+    }
+    // L0b/P1：TLS 源码位；函数帧 push/pop（与 -g 解耦）
+    void emitRuntimeSrcLoc(const SourceLoc& loc);
+    /* 调用/方法分派前钉 TLS src= 到调用点（禁漂到 callee/native） */
+    void pinRuntimeCallSite(antlr4::ParserRuleContext* ctx);
+    void emitRuntimePushFrame(const SourceLoc& loc);
+    void emitRuntimePopFrame();
 
     // 顶层声明是否带 private 修饰（mods 来自 *DeclContext::modifier()）
     static bool declIsPrivate(const std::vector<HaoLangParser::ModifierContext*>& mods);
@@ -532,6 +564,103 @@ private:
     // v0.54/v0.55.7：Hao 精确根（shadow；循环提升/spill 池；块尾清槽）
     void emitGcRootPush(const std::string& slotAddr);
     void emitGcRootUnwind();
+    // Phase A / I2：唯一 safepoint 出口（禁裸 call @hao_gc_safepoint）
+    // I2+ 纪律：gen* 禁止手写 `call void @hao_gc_safepoint`；
+    //   允许出现处仅 `emitSafepoint` 实现体 + IREmitter declare。
+    void emitSafepoint();
+    // Phase B：通用指令封装 —— 实现在 IROps；此处转发兼容 gen*
+    std::string emitLoad(const std::string& ty, const std::string& ptr) {
+        return ops_.emitLoad(ty, ptr);
+    }
+    void emitStore(const std::string& ty, const std::string& val,
+                   const std::string& ptr) {
+        ops_.emitStore(ty, val, ptr);
+    }
+    std::string emitCall(const std::string& retTy, const std::string& callee,
+                         const std::string& argsIr) {
+        return ops_.emitCall(retTy, callee, argsIr);
+    }
+    void emitCallVoid(const std::string& callee, const std::string& argsIr) {
+        ops_.emitCallVoid(callee, argsIr);
+    }
+    void emitCallTyped(const std::string& fnTy, const std::string& callee,
+                       const std::string& argsIr) {
+        ops_.emitCallTyped(fnTy, callee, argsIr);
+    }
+    void emitBr(const std::string& label) { ops_.emitBr(label); }
+    void emitCondBr(const std::string& cond, const std::string& trueL,
+                    const std::string& falseL) {
+        ops_.emitCondBr(cond, trueL, falseL);
+    }
+    void emitRetVoid() { ops_.emitRetVoid(); }
+    void emitRet(const std::string& ty, const std::string& val) {
+        ops_.emitRet(ty, val);
+    }
+    std::string emitAlloca(const std::string& ty) {
+        return ops_.emitAlloca(ty);
+    }
+    std::string emitAllocaNamed(const std::string& hint, const std::string& ty) {
+        return ops_.emitAllocaNamed(hint, ty);
+    }
+    void emitAllocaAt(const std::string& addr, const std::string& ty) {
+        ops_.emitAllocaAt(addr, ty);
+    }
+    // D3：-g 时发射薄 llvm.dbg.declare
+    void emitDbgDeclareIf(const std::string& addr, const std::string& name,
+                          int line, unsigned arg = 0) {
+        if (!em_.debugEnabled() || addr.empty() || name.empty()) return;
+        ops_.emitDbgDeclare(addr, name, line > 0 ? static_cast<unsigned>(line) : 1u,
+                            arg);
+    }
+    // D5：-g 时发射薄 llvm.dbg.value
+    void emitDbgValueIf(const std::string& llvmTy, const std::string& val,
+                        const std::string& name, int line, unsigned arg = 0) {
+        if (!em_.debugEnabled() || llvmTy.empty() || val.empty() || name.empty())
+            return;
+        ops_.emitDbgValue(llvmTy, val, name,
+                          line > 0 ? static_cast<unsigned>(line) : 1u, arg);
+    }
+    std::string emitBinOp(const std::string& op, const std::string& ty,
+                          const std::string& lhs, const std::string& rhs) {
+        return ops_.emitBinOp(op, ty, lhs, rhs);
+    }
+    std::string emitICmp(const std::string& pred, const std::string& ty,
+                         const std::string& lhs, const std::string& rhs) {
+        return ops_.emitICmp(pred, ty, lhs, rhs);
+    }
+    std::string emitPhi(const std::string& ty, const std::string& incomingsIr) {
+        return ops_.emitPhi(ty, incomingsIr);
+    }
+    std::string emitFCmp(const std::string& pred, const std::string& ty,
+                         const std::string& lhs, const std::string& rhs) {
+        return ops_.emitFCmp(pred, ty, lhs, rhs);
+    }
+    std::string emitSelect(const std::string& cond, const std::string& ty,
+                           const std::string& tVal, const std::string& fVal) {
+        return ops_.emitSelect(cond, ty, tVal, fVal);
+    }
+    std::string emitCast(const std::string& op, const std::string& fromTy,
+                         const std::string& val, const std::string& toTy) {
+        return ops_.emitCast(op, fromTy, val, toTy);
+    }
+    std::string emitGep(const std::string& pointeeTy, const std::string& ptr,
+                        const std::string& idxTy, const std::string& idx) {
+        return ops_.emitGep(pointeeTy, ptr, idxTy, idx);
+    }
+    std::string emitPtrToInt(const std::string& intTy, const std::string& ptr) {
+        return ops_.emitPtrToInt(intTy, ptr);
+    }
+    std::string emitIntToPtr(const std::string& intTy, const std::string& val) {
+        return ops_.emitIntToPtr(intTy, val);
+    }
+    std::string emitExtractValue(const std::string& aggTy,
+                                 const std::string& agg, int index) {
+        return ops_.emitExtractValue(aggTy, agg, index);
+    }
+    std::string emitFNeg(const std::string& ty, const std::string& val) {
+        return ops_.emitFNeg(ty, val);
+    }
+    void emitUnreachable() { ops_.emitUnreachable(); }
     void beginFunctionGcRoots();
     // 分配函数级 unwind 槽（含 GC 返回/异常 ptr 根槽；push 须在 beginFunctionGcRoots 之后）
     void emitAllocUnwindSlots();
@@ -541,7 +670,9 @@ private:
     void clearUnwindGcRoot();
     // 分配 ptr 槽、写入初值并 root_push；循环内走 spill 池（只 push 一次）
     std::string emitSpillGcRoot(const std::string& nameHint, const std::string& ptrIr);
-    /* 块/分支作用域：只 store null，不 root_unwind（曾 unwind 致套件 AV） */
+    /* 块/分支作用域：只 store null，不 root_unwind（曾 unwind 致套件 AV）
+     * G1 口径（v0.55.33）：本机 + loop spill 即为作用域临时根机；
+     * 语句级 expr 清槽曾误杀 new/构造期根，禁止盲目开启。 */
     std::vector<std::vector<std::string>> blockGcSlots_;
     void beginBlockGcScope();
     void endBlockGcScope();
@@ -553,12 +684,18 @@ private:
         size_t highWater = 0; /* 用过的最大 next */
         std::vector<size_t> scopeStack;  /* 每层 while/for 的 next 基线 */
         std::vector<size_t> stickyStack; /* recycle 不低于栈顶（保护 for.seq 等） */
+        /* enter 时 sticky.size()：leave 只卸本层 pin，不剥外层 */
+        std::vector<size_t> stickyEnterStack;
+        /* hoist pin 后 sticky.size()：cond 只卸本层条件 pin
+         * （旧 size>1 在嵌套 while 生成期误清外层 junk 池槽 → AV） */
+        std::vector<size_t> stickyFloorStack;
     };
     std::vector<LoopSpillPool> loopSpillPools_;
     int loopSpillDepth_ = 0;
     void enterLoopSpillScope();
     void leaveLoopSpillScope();
     void pinLoopSpillCheckpoint();
+    void markLoopSpillStickyFloor(); /* hoist pin 之后调用 */
     void recycleLoopSpillSlots();
     void unpinLoopSpillCheckpoint();
     void clearLoopSpillSlots();
@@ -706,6 +843,7 @@ private:
     void emitUnwindRet();
 
     IREmitter em_;
+    IROps ops_{em_};   // 须紧随 em_；通用指令收口（I3 !dbg 挂此层）
     SymbolTable syms_;
     DiagnosticEngine& diags_;
 

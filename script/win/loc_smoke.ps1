@@ -1,0 +1,592 @@
+# HaoLang loc smoke (D0/L1/L2/U1)
+# Usage from repo root:
+#   powershell -NoProfile -ExecutionPolicy Bypass -File script\win\loc_smoke.ps1
+$ErrorActionPreference = "Continue"
+$Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+Set-Location $Root
+
+$hao = Join-Path $Root "output\hao.exe"
+if (-not (Test-Path $hao)) { $hao = "hao" }
+
+$td = Join-Path $Root "target\repro-loc"
+New-Item -ItemType Directory -Force -Path $td | Out-Null
+$fail = 0
+$log = Join-Path $Root "hao-crash.log"
+
+function Reset-CrashLog {
+    if (Test-Path $log) { Remove-Item $log -Force }
+}
+
+# --- D0: bad compile path:line:col ---
+@'
+func main() {
+  var x: Int = "bad"
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "bad.hao")
+$err1 = & $hao build (Join-Path $td "bad.hao") 2>&1 | Out-String
+if ($err1 -match "bad\.hao:\d+:\d+:") {
+    Write-Host "OK   bad compile has path:line:col"
+} else {
+    Write-Host "FAIL bad compile missing path:line:col"
+    Write-Host $err1
+    $fail++
+}
+
+# --- panic src= user file ---
+@'
+import fmt
+
+func main() {
+  var p: String? = null
+  fmt.println(p!!)
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "panic.hao")
+Reset-CrashLog
+& $hao run (Join-Path $td "panic.hao") 2>&1 | Out-Null
+$okSrc = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    if ($txt -match "src=.*panic\.hao:\d+:\d+") { $okSrc = $true }
+    if ($txt -match "src=.*native\.hao") { $okSrc = $false }
+}
+if ($okSrc) {
+    Write-Host "OK   panic log has src=...panic.hao:"
+} else {
+    Write-Host "FAIL panic missing src= or drifted to native.hao"
+    if (Test-Path $log) { Get-Content $log }
+    $fail++
+}
+
+# --- L2: cross-fn stack >=2 user frames ---
+@'
+import fmt
+
+func boom() {
+  var p: String? = null
+  fmt.println(p!!)
+}
+
+func main() {
+  boom()
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "stack.hao")
+Reset-CrashLog
+& $hao run (Join-Path $td "stack.hao") 2>&1 | Out-Null
+$okStack = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    $n = ([regex]::Matches($txt, "#\d+ .*stack\.hao:\d+:")).Count
+    if ($txt -match "src=.*stack\.hao:\d+:" -and $n -ge 2) { $okStack = $true }
+    if ($txt -match "src=.*native\.hao") { $okStack = $false }
+}
+if ($okStack) {
+    Write-Host "OK   stack has >=2 frames (caller+callee)"
+} else {
+    Write-Host "FAIL cross-fn stack frames"
+    if (Test-Path $log) { Get-Content $log }
+    $fail++
+}
+
+# --- toolError hao:0:0 ---
+$err3 = & $hao build (Join-Path $td "panic.hao") --target no-such -o (Join-Path $td "x.exe") 2>&1 | Out-String
+if ($err3 -match "hao:0:0:") {
+    Write-Host "OK   tool error hao:0:0"
+} else {
+    Write-Host "FAIL unknown target not Diagnostic toolError"
+    Write-Host $err3
+    $fail++
+}
+
+# --- D0/L1: call site src= must be user file (not native.hao) via List.add + !! ---
+@'
+import fmt
+import collections.*
+
+class Box {
+    public var s: String = ""
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var junk = new List<Object>()
+    junk.add(new Box("x"))
+    var p: String? = null
+    fmt.println(p!!)
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "callsite.hao")
+Reset-CrashLog
+& $hao run (Join-Path $td "callsite.hao") 2>&1 | Out-Null
+$okCall = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    if ($txt -match "src=.*callsite\.hao:\d+:\d+" -and $txt -notmatch "src=.*native\.hao") {
+        $okCall = $true
+    }
+}
+if ($okCall) {
+    Write-Host "OK   callsite src= user file (not native.hao)"
+} else {
+    Write-Host "FAIL callsite src= drifted or missing"
+    if (Test-Path $log) { Get-Content $log }
+    $fail++
+}
+
+# --- L2: if stack has stdlib path, it must carry [lib] ---
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    $libLines = [regex]::Matches($txt, "#\d+ .*stdlib[/\\][^\r\n]+")
+    $badLib = $false
+    foreach ($m in $libLines) {
+        if ($m.Value -notmatch "\[lib\]") { $badLib = $true }
+    }
+    if ($badLib) {
+        Write-Host "FAIL stdlib stack frame missing [lib]"
+        Get-Content $log
+        $fail++
+    } else {
+        Write-Host "OK   stack [lib] tag (or no lib frames)"
+    }
+}
+
+# --- D0: AV trap -> access= + user stack ---
+@'
+extern func hao_debug_trap_av(): Unit = "hao_debug_trap_av";
+
+func main() {
+    hao_debug_trap_av();
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "av.hao")
+Reset-CrashLog
+& $hao run (Join-Path $td "av.hao") 2>&1 | Out-Null
+$okAv = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    $hasAccess = $txt -match "access=" -or $txt -match "av_addr="
+    $hasUser = $txt -match "av\.hao:\d+"
+    if ($hasAccess -and $hasUser) { $okAv = $true }
+}
+if ($okAv) {
+    Write-Host "OK   AV crash has access=/av_addr= and user stack"
+} else {
+    Write-Host "FAIL AV crash log incomplete"
+    if (Test-Path $log) { Get-Content $log }
+    $fail++
+}
+
+# --- U1: uncaught throw loc ---
+@'
+import exception.*
+
+func main() {
+    throw new Exception("boom")
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "throw.hao")
+Reset-CrashLog
+& $hao run (Join-Path $td "throw.hao") 2>&1 | Out-Null
+$okThrow = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    if ($txt -match "src=.*throw\.hao:\d+:\d+" -or $txt -match "stack:[\s\S]*throw\.hao:\d+") {
+        $okThrow = $true
+    }
+    if ($txt -match "src=.*native\.hao") { $okThrow = $false }
+}
+if ($okThrow) {
+    Write-Host "OK   throw uncaught has user src=/stack="
+} else {
+    Write-Host "FAIL throw loc missing"
+    if (Test-Path $log) { Get-Content $log }
+    $fail++
+}
+
+# --- T1: child-thread panic stack is TLS (no main-only mix required; must show worker file) ---
+@'
+import thread.*
+import fmt
+
+func worker() {
+    var p: String? = null
+    fmt.println(p!!)
+}
+
+func main() {
+    var t = new Thread()
+    t.start(worker)
+    t.join()
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "tlsstack.hao")
+Reset-CrashLog
+& $hao run (Join-Path $td "tlsstack.hao") 2>&1 | Out-Null
+$okTls = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    # Worker frame must appear; process exits in worker so stack is that thread's TLS
+    if ($txt -match "tlsstack\.hao:\d+" -and $txt -match "stack:") {
+        $okTls = $true
+    }
+}
+if ($okTls) {
+    Write-Host "OK   thread panic stack has tlsstack.hao frame"
+} else {
+    Write-Host "FAIL thread TLS stack"
+    if (Test-Path $log) { Get-Content $log }
+    $fail++
+}
+
+# --- V2: HAO_GC_VERIFY bad shadow root fatal with user loc ---
+@'
+import gc
+
+extern func hao_debug_poison_shadow_root(): Unit = "hao_debug_poison_shadow_root";
+
+func main() {
+    hao_debug_poison_shadow_root();
+    gc.GC.collect();
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "verify_bad.hao")
+Reset-CrashLog
+$prevV = $env:HAO_GC_VERIFY
+$env:HAO_GC_VERIFY = "1"
+& $hao run (Join-Path $td "verify_bad.hao") 2>&1 | Out-Null
+if ($null -ne $prevV) { $env:HAO_GC_VERIFY = $prevV } else { Remove-Item Env:HAO_GC_VERIFY -ErrorAction SilentlyContinue }
+$okVfy = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    if ($txt -match "kind=gc_verify" -and
+        $txt -match "shadow_i=" -and
+        $txt -match "ptr=" -and
+        ($txt -match "src=.*verify_bad\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_bad\.hao:\d+")) {
+        $okVfy = $true
+    }
+    if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_bad\.hao") {
+        $okVfy = $false
+    }
+}
+if ($okVfy) {
+    Write-Host "OK   VERIFY poison has gc_verify + shadow_i + verify_bad.hao loc"
+} else {
+    Write-Host "FAIL VERIFY poison loc"
+    if (Test-Path $log) { Get-Content $log }
+    $fail++
+}
+
+# --- V3: VERIFY on alloc-triggered collect (not only GC.collect) ---
+@'
+import collections.*
+import gc
+
+extern func hao_debug_poison_shadow_root(): Unit = "hao_debug_poison_shadow_root";
+
+class Box {
+    public var s: String = ""
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    hao_debug_poison_shadow_root();
+    var xs = new List<Object>();
+    var i = 0;
+    while (i < 8000) {
+        xs.add(new Box("pad-0123456789abcdef0123456789abcdef"));
+        i += 1;
+    }
+    fmt.println(xs.size());
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "verify_alloc.hao")
+Reset-CrashLog
+$prevVa = $env:HAO_GC_VERIFY
+$env:HAO_GC_VERIFY = "1"
+& $hao run (Join-Path $td "verify_alloc.hao") 2>&1 | Out-Null
+if ($null -ne $prevVa) { $env:HAO_GC_VERIFY = $prevVa } else { Remove-Item Env:HAO_GC_VERIFY -ErrorAction SilentlyContinue }
+$okVa = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    if ($txt -match "kind=gc_verify" -and
+        $txt -match "shadow_i=" -and
+        $txt -match "ptr=" -and
+        ($txt -match "src=.*verify_alloc\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_alloc\.hao:\d+")) {
+        $okVa = $true
+    }
+    if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_alloc\.hao") {
+        $okVa = $false
+    }
+}
+if ($okVa) {
+    Write-Host "OK   VERIFY alloc-collect has gc_verify + shadow_i + verify_alloc.hao loc"
+} else {
+    Write-Host "FAIL VERIFY alloc-collect loc"
+    if (Test-Path $log) { Get-Content $log }
+    $fail++
+}
+
+# --- D3: -g emit has llvm.dbg.declare + var name ---
+@'
+func add(a: Int, b: Int): Int {
+    var sum = a + b
+    return sum
+}
+func main() {
+    var x = 1
+    fmt.println(add(x, 2))
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_declare.hao")
+$ll = Join-Path $td "dbg_declare.ll"
+& $hao emit -g (Join-Path $td "dbg_declare.hao") -o $ll 2>&1 | Out-Null
+$okDbg = $false
+if (Test-Path $ll) {
+    $irtxt = Get-Content $ll -Raw
+    if ($irtxt -match 'llvm\.dbg\.declare' -and $irtxt -match 'DILocalVariable\(name: "sum"' -and
+        $irtxt -match 'DILocalVariable\(name: "a"' -and $irtxt -match 'DILocalVariable\(name: "x"') {
+        $okDbg = $true
+    }
+}
+if ($okDbg) {
+    Write-Host "OK   -g emit has dbg.declare + DILocalVariable names"
+} else {
+    Write-Host "FAIL -g dbg.declare missing"
+    $fail++
+}
+
+# --- D4: catch/for declare + try setjmp/switch !dbg ---
+@'
+import collections.*
+import exception.*
+
+class Box {
+    public var s: String = ""
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var xs = new List<Object>()
+    xs.add(new Box("a"))
+    xs.add(new Box("b"))
+    for (it in xs) {
+        try {
+            if ((it as Box).s == "b") { throw new Exception("x") }
+        } catch (e: Exception) {
+            fmt.println(e != null)
+        }
+    }
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_catch_for.hao")
+$ll2 = Join-Path $td "dbg_catch_for.ll"
+& $hao emit -g (Join-Path $td "dbg_catch_for.hao") -o $ll2 2>&1 | Out-Null
+$okDbg2 = $false
+if (Test-Path $ll2) {
+    $irtxt2 = Get-Content $ll2 -Raw
+    $hasCatch = $irtxt2 -match 'DILocalVariable\(name: "e"'
+    $hasFor = $irtxt2 -match 'DILocalVariable\(name: "it"'
+    $hasSj = $irtxt2 -match '_setjmp[^\n]*!dbg|setjmp[^\n]*!dbg'
+    $hasSw = $irtxt2 -match 'switch i32[^\n]*!dbg'
+    if ($hasCatch -and $hasFor -and ($hasSj -or $hasSw)) { $okDbg2 = $true }
+}
+if ($okDbg2) {
+    Write-Host "OK   -g catch/for declare + Except !dbg"
+} else {
+    Write-Host "FAIL -g catch/for/Except dbg"
+    $fail++
+}
+
+# --- V4: hao_gc_verify_skip_reenter symbol callable (count >= 0) ---
+@'
+extern func hao_gc_verify_skip_reenter(): Long = "hao_gc_verify_skip_reenter";
+func main() {
+    fmt.println(hao_gc_verify_skip_reenter() >= 0);
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "verify_skip.hao")
+$vsOut = & $hao run (Join-Path $td "verify_skip.hao") 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0 -and $vsOut -match '(?m)^true\s*$') {
+    Write-Host "OK   hao_gc_verify_skip_reenter readable"
+} else {
+    Write-Host "FAIL verify_skip_reenter"
+    Write-Host $vsOut
+    $fail++
+}
+
+# --- L5: select switch has !dbg under -g ---
+@'
+import channel
+func main() {
+    var ch = channel.make(1)
+    ch.sendStr("a")
+    select {
+        case s = ch.recvStr():
+            fmt.println(s!! == "a")
+        default:
+            fmt.println(false)
+    }
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_select.hao")
+$llSel = Join-Path $td "dbg_select.ll"
+& $hao emit -g (Join-Path $td "dbg_select.hao") -o $llSel 2>&1 | Out-Null
+$okSel = $false
+if (Test-Path $llSel) {
+    $stxt = Get-Content $llSel -Raw
+    if ($stxt -match 'switch i32[^\n]*!dbg') { $okSel = $true }
+}
+if ($okSel) {
+    Write-Host "OK   -g select switch has !dbg"
+} else {
+    Write-Host "FAIL -g select !dbg"
+    $fail++
+}
+
+# --- V6: VERIFY poison scan pin has pin_i= ---
+@'
+import gc
+
+extern func hao_debug_poison_scan_pin(): Unit = "hao_debug_poison_scan_pin";
+
+func main() {
+    hao_debug_poison_scan_pin();
+    gc.GC.collect();
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "verify_pin.hao")
+Reset-CrashLog
+$prevVp = $env:HAO_GC_VERIFY
+$env:HAO_GC_VERIFY = "1"
+& $hao run (Join-Path $td "verify_pin.hao") 2>&1 | Out-Null
+if ($null -ne $prevVp) { $env:HAO_GC_VERIFY = $prevVp } else { Remove-Item Env:HAO_GC_VERIFY -ErrorAction SilentlyContinue }
+$okPin = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    if ($txt -match "kind=gc_verify" -and
+        $txt -match "pin_i=" -and
+        $txt -match "ptr=" -and
+        ($txt -match "src=.*verify_pin\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_pin\.hao:\d+")) {
+        $okPin = $true
+    }
+    if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_pin\.hao") {
+        $okPin = $false
+    }
+}
+if ($okPin) {
+    Write-Host "OK   VERIFY poison pin has pin_i + verify_pin.hao loc"
+} else {
+    Write-Host "FAIL VERIFY poison pin loc"
+    if (Test-Path $log) { Get-Content $log }
+    $fail++
+}
+
+# --- D5: -g emit has llvm.dbg.value ---
+@'
+func main() {
+    var x: Int = 42
+    fmt.println(x == 42)
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_value.hao")
+$llVal = Join-Path $td "dbg_value.ll"
+& $hao emit -g (Join-Path $td "dbg_value.hao") -o $llVal 2>&1 | Out-Null
+$okVal = $false
+if (Test-Path $llVal) {
+    $vtxt = Get-Content $llVal -Raw
+    $nVal = ([regex]::Matches($vtxt, 'llvm\.dbg\.value')).Count
+    if ($nVal -ge 1) { $okVal = $true }
+}
+if ($okVal) {
+    Write-Host "OK   -g emit has llvm.dbg.value"
+} else {
+    Write-Host "FAIL -g dbg.value"
+    $fail++
+}
+
+# --- U8: Unit-lambda x try ret void (no ret i32 in lambda) ---
+@'
+package main
+func main() {
+    val f: ()->Unit = {
+        try {
+            return
+        } finally {
+        }
+    }
+    f()
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "unit_lambda_try.hao")
+$llU8 = Join-Path $td "unit_lambda_try.ll"
+& $hao emit (Join-Path $td "unit_lambda_try.hao") -o $llU8 2>&1 | Out-Null
+$okU8 = $false
+if (Test-Path $llU8) {
+    $utxt = Get-Content $llU8 -Raw
+    $lm = [regex]::Match($utxt, 'define void @lambda\$\d+\(ptr %env\.arg\) \{([\s\S]*?)\n\}')
+    if ($lm.Success) {
+        $body = $lm.Groups[1].Value
+        if ($body -notmatch '(?m)^\s*ret i32\b') { $okU8 = $true }
+    }
+}
+$runU8 = & $hao run (Join-Path $td "unit_lambda_try.hao") 2>&1 | Out-String
+if ($okU8 -and $LASTEXITCODE -eq 0) {
+    Write-Host "OK   Unit-lambda x try ret void + link"
+} else {
+    Write-Host "FAIL Unit-lambda x try (emit/link)"
+    Write-Host $runU8
+    $fail++
+}
+
+# --- V7: VERIFY poison remset has remset_i= ---
+@'
+import gc
+
+extern func hao_debug_poison_remset(): Unit = "hao_debug_poison_remset";
+
+func main() {
+    hao_debug_poison_remset();
+    gc.GC.collect();
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "verify_remset.hao")
+Reset-CrashLog
+$prevVr = $env:HAO_GC_VERIFY
+$env:HAO_GC_VERIFY = "1"
+& $hao run (Join-Path $td "verify_remset.hao") 2>&1 | Out-Null
+if ($null -ne $prevVr) { $env:HAO_GC_VERIFY = $prevVr } else { Remove-Item Env:HAO_GC_VERIFY -ErrorAction SilentlyContinue }
+$okRem = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    if ($txt -match "kind=gc_verify" -and
+        $txt -match "remset_i=" -and
+        $txt -match "ptr=" -and
+        ($txt -match "src=.*verify_remset\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_remset\.hao:\d+")) {
+        $okRem = $true
+    }
+    if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_remset\.hao") {
+        $okRem = $false
+    }
+}
+if ($okRem) {
+    Write-Host "OK   VERIFY poison remset has remset_i + verify_remset.hao loc"
+} else {
+    Write-Host "FAIL VERIFY poison remset loc"
+    if (Test-Path $log) { Get-Content $log }
+    $fail++
+}
+
+# --- D6: -g assign path has >=2 dbg.value ---
+@'
+func main() {
+    var x: Int = 1
+    x = 2
+    fmt.println(x == 2)
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_value_assign.hao")
+$llAsg = Join-Path $td "dbg_value_assign.ll"
+& $hao emit -g (Join-Path $td "dbg_value_assign.hao") -o $llAsg 2>&1 | Out-Null
+$okAsg = $false
+if (Test-Path $llAsg) {
+    $atxt = Get-Content $llAsg -Raw
+    $nAsg = ([regex]::Matches($atxt, 'llvm\.dbg\.value')).Count
+    if ($nAsg -ge 2 -and $atxt -match 'DILocalVariable\(name: "x"') { $okAsg = $true }
+}
+if ($okAsg) {
+    Write-Host "OK   -g assign has dbg.value >=2"
+} else {
+    Write-Host "FAIL -g assign dbg.value"
+    $fail++
+}
+
+if ($fail -eq 0) {
+    Write-Host "loc_smoke: ALL PASS"
+    exit 0
+}
+Write-Host "loc_smoke: $fail FAIL(s)"
+exit 1
