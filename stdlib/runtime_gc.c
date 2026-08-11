@@ -1637,19 +1637,23 @@ static int gc_verify_env_on(void) {
     return on;
 }
 
-/* V2/V6/V7：冒烟夹具用 TLS 毒槽（文件作用域；MSVC 函数内 TLS 不可靠） */
+/* V2/V6/V7/V8：冒烟夹具用 TLS 毒槽（文件作用域；MSVC 函数内 TLS 不可靠） */
 #ifdef _WIN32
 static __declspec(thread) void* g_verify_poison_cell;
 static __declspec(thread) void* g_verify_poison_pin;
 static __declspec(thread) int g_verify_poison_pin_armed;
 static __declspec(thread) void* g_verify_poison_remset;
 static __declspec(thread) int g_verify_poison_remset_armed;
+static __declspec(thread) void* g_verify_poison_refl;
+static __declspec(thread) int g_verify_poison_refl_armed;
 #else
 static __thread void* g_verify_poison_cell;
 static __thread void* g_verify_poison_pin;
 static __thread int g_verify_poison_pin_armed;
 static __thread void* g_verify_poison_remset;
 static __thread int g_verify_poison_remset_armed;
+static __thread void* g_verify_poison_refl;
+static __thread int g_verify_poison_refl_armed;
 #endif
 
 static void gc_verify_shadow_roots(void) {
@@ -1727,10 +1731,38 @@ static void gc_verify_remset(void) {
     }
 }
 
+/* V8：校验 refl_i64 pin；毒针合成 refl_i64_i=0 */
+static void gc_verify_refl_i64_pins(void) {
+    int i;
+    if (!gc_verify_env_on()) return;
+    for (i = 0; i < g_refl_i64_pin_n && i < GC_REFL_I64_PINS; ++i) {
+        void* p = g_refl_i64_pins[i];
+        if (!p) continue;
+        if (!gc_find_block_exact(p)) {
+            char detail[160];
+            snprintf(detail, sizeof(detail),
+                     "refl_i64 pin is not a live heap object refl_i64_i=%d ptr=%p",
+                     i, p);
+            hao_report_fatal("gc_verify", detail);
+        }
+    }
+    if (g_verify_poison_refl_armed) {
+        void* p = g_verify_poison_refl;
+        if (p && !gc_find_block_exact(p)) {
+            char detail[160];
+            snprintf(detail, sizeof(detail),
+                     "refl_i64 pin is not a live heap object refl_i64_i=%d ptr=%p",
+                     0, p);
+            hao_report_fatal("gc_verify", detail);
+        }
+    }
+}
+
 static void gc_verify_roots(void) {
     gc_verify_shadow_roots();
     gc_verify_scan_pins();
     gc_verify_remset();
+    gc_verify_refl_i64_pins();
 }
 
 /* V2：冒烟/调试钩子——压入非堆指针，下一 VERIFY collect 应 fatal */
@@ -1750,6 +1782,12 @@ void hao_debug_poison_scan_pin(void) {
 void hao_debug_poison_remset(void) {
     g_verify_poison_remset = (void*)(uintptr_t)0x8;
     g_verify_poison_remset_armed = 1;
+}
+
+/* V8：武装 refl_i64 毒槽 */
+void hao_debug_poison_refl_i64(void) {
+    g_verify_poison_refl = (void*)(uintptr_t)0x8;
+    g_verify_poison_refl_armed = 1;
 }
 
 __attribute__((noinline))

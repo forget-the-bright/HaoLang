@@ -584,6 +584,94 @@ if ($okAsg) {
     $fail++
 }
 
+# --- V8: VERIFY poison refl_i64 has refl_i64_i= ---
+@'
+import gc
+
+extern func hao_debug_poison_refl_i64(): Unit = "hao_debug_poison_refl_i64";
+
+func main() {
+    hao_debug_poison_refl_i64();
+    gc.GC.collect();
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "verify_refl.hao")
+Reset-CrashLog
+$prevVrfl = $env:HAO_GC_VERIFY
+$env:HAO_GC_VERIFY = "1"
+& $hao run (Join-Path $td "verify_refl.hao") 2>&1 | Out-Null
+if ($null -ne $prevVrfl) { $env:HAO_GC_VERIFY = $prevVrfl } else { Remove-Item Env:HAO_GC_VERIFY -ErrorAction SilentlyContinue }
+$okRfl = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    if ($txt -match "kind=gc_verify" -and
+        $txt -match "refl_i64_i=" -and
+        $txt -match "ptr=" -and
+        ($txt -match "src=.*verify_refl\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_refl\.hao:\d+")) {
+        $okRfl = $true
+    }
+    if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_refl\.hao") {
+        $okRfl = $false
+    }
+}
+if ($okRfl) {
+    Write-Host "OK   VERIFY poison refl_i64 has refl_i64_i + verify_refl.hao loc"
+} else {
+    Write-Host "FAIL VERIFY poison refl_i64 loc"
+    if (Test-Path $log) { Get-Content $log }
+    $fail++
+}
+
+# --- D7: -g compound assign has dbg.value ---
+@'
+func main() {
+    var x: Int = 1
+    x += 1
+    fmt.println(x == 2)
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_value_compound.hao")
+$llCmp = Join-Path $td "dbg_value_compound.ll"
+& $hao emit -g (Join-Path $td "dbg_value_compound.hao") -o $llCmp 2>&1 | Out-Null
+$okCmp = $false
+if (Test-Path $llCmp) {
+    $ctxt = Get-Content $llCmp -Raw
+    $nCmp = ([regex]::Matches($ctxt, 'llvm\.dbg\.value')).Count
+    if ($nCmp -ge 2 -and $ctxt -match 'DILocalVariable\(name: "x"') { $okCmp = $true }
+}
+if ($okCmp) {
+    Write-Host "OK   -g compound assign has dbg.value >=2"
+} else {
+    Write-Host "FAIL -g compound dbg.value"
+    $fail++
+}
+
+# --- D8: -g field assign has dbg.value ---
+@'
+class Box {
+    public var n: Int = 0
+    public constructor() {}
+}
+func main() {
+    var b = new Box()
+    b.n = 7
+    fmt.println(b.n == 7)
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_value_field.hao")
+$llFld = Join-Path $td "dbg_value_field.ll"
+& $hao emit -g (Join-Path $td "dbg_value_field.hao") -o $llFld 2>&1 | Out-Null
+$okFld = $false
+if (Test-Path $llFld) {
+    $ftxt = Get-Content $llFld -Raw
+    if ($ftxt -match 'llvm\.dbg\.value' -and $ftxt -match 'DILocalVariable\(name: "n"') {
+        $okFld = $true
+    }
+}
+if ($okFld) {
+    Write-Host "OK   -g field assign has dbg.value for n"
+} else {
+    Write-Host "FAIL -g field dbg.value"
+    $fail++
+}
+
 if ($fail -eq 0) {
     Write-Host "loc_smoke: ALL PASS"
     exit 0

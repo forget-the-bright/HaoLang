@@ -713,6 +713,16 @@ std::string IRGen::acquireLoopGcSlot(const std::string& nameHint) {
         return addr;
     }
     auto& pool = loopSpillPools_.back();
+    /* A7：正路径可观测（默认关） */
+    {
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr,
+                    "hao:irgen:acquire_spill next=%zu slots=%zu hint=%s\n",
+                    pool.next, pool.slots.size(), nameHint.c_str());
+            fflush(stderr);
+        }
+    }
     if (pool.next >= pool.slots.size()) {
         /* 扩池：alloca 进 entry（支配），再 root_push 一次并入可复用表 */
         std::string addr = em_.emitEntryAllocaPtr(nameHint);

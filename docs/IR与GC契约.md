@@ -134,7 +134,9 @@ flowchart TD
 
 **Unit-lambda ret / remset VERIFY / 赋值 dbg.value（v0.55.42）**：`emitLambdaImpl` 保存并清 `inMain_`（禁 Unit-lambda×try 误 `ret i32`）；`gc_try_unit_lambda_finally_root_smoke`。VERIFY 扫 remset（`remset_i=`）；`hao_debug_poison_remset`。简单局部赋值薄 `dbg.value`。
 
-**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖。
+**refl_i64 VERIFY / 复合·字段 dbg.value / acquire TRACE（v0.55.43）**：VERIFY 扫 `g_refl_i64_pins`（`refl_i64_i=`）；`hao_debug_poison_refl_i64`。复合赋值与字段 `=` 薄 `dbg.value`。`HAO_IRGEN_TRACE` 增 `hao:irgen:acquire_spill`。
+
+**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口。
 
 ### 4.4 分配
 

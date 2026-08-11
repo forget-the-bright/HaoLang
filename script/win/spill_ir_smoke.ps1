@@ -293,7 +293,7 @@ if ($sec -eq 0 -and $sec2 -eq 0) {
     $fail++
 }
 
-# A6: HAO_IRGEN_TRACE=1 clear_spill positive path prefix on nested while emit
+# A6+A7: HAO_IRGEN_TRACE=1 clear_spill + acquire_spill prefixes on nested while emit
 $prevTrace = $env:HAO_IRGEN_TRACE
 $env:HAO_IRGEN_TRACE = "1"
 $traceOut = & $hao emit (Join-Path $td "nested.hao") -o (Join-Path $td "nested_trace.ll") 2>&1 | Out-String
@@ -303,6 +303,13 @@ if ($traceEc -eq 0 -and $traceOut -match 'hao:irgen:clear_spill base=') {
     Write-Host "OK   HAO_IRGEN_TRACE clear_spill prefix"
 } else {
     Write-Host "FAIL HAO_IRGEN_TRACE clear_spill"
+    Write-Host $traceOut
+    $fail++
+}
+if ($traceEc -eq 0 -and $traceOut -match 'hao:irgen:acquire_spill next=') {
+    Write-Host "OK   HAO_IRGEN_TRACE acquire_spill prefix"
+} else {
+    Write-Host "FAIL HAO_IRGEN_TRACE acquire_spill"
     Write-Host $traceOut
     $fail++
 }
