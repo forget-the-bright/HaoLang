@@ -69,7 +69,8 @@ $deleted = @(
     'hao_char_to_str',
     'hao_hash_str',
     'hao_reflect_is_assignable',
-    'hao_str_byte_index_of'
+    'hao_str_byte_index_of',
+    'hao_array_get_ptr'
 )
 foreach ($sym in $deleted) {
     $pat = [regex]::Escape($sym)
@@ -102,7 +103,47 @@ foreach ($sym in $deleted) {
         Fail "src/irgen still mentions $sym"
     }
 }
-Write-Host "OK   src/irgen free of deleted P5 C symbols"
+Write-Host "OK   src/irgen free of deleted P5/P6 C symbols"
+
+# ---- 6) hao_str_cstr 调用点白名单（仅定义 + ffi_dup）----
+$cstrHits = Get-ChildItem -Path (Join-Path $root "stdlib") -Filter "*.c" -File |
+    Select-String -Pattern 'hao_str_cstr\s*\('
+foreach ($h in $cstrHits) {
+    $ok = ($h.Filename -eq 'runtime_string.c') -or ($h.Filename -eq 'runtime_handle.c')
+    if (-not $ok) {
+        Write-Host "  $($h.Path):$($h.LineNumber) $($h.Line.Trim())"
+        Fail "hao_str_cstr call outside whitelist: $($h.Filename)"
+    }
+}
+# runtime_handle.c 仅允许在 hao_ffi_dup_cstr 内
+$dupHits = Select-String -Path (Join-Path $root "stdlib\runtime_handle.c") -Pattern 'hao_str_cstr\s*\('
+foreach ($h in $dupHits) {
+    if ($h.LineNumber -lt 88 -or $h.LineNumber -gt 112) {
+        Fail "hao_str_cstr in runtime_handle.c outside hao_ffi_dup_cstr (~L88-112)"
+    }
+}
+Write-Host "OK   hao_str_cstr whitelist (string define + ffi_dup)"
+
+# ---- 7) 源码无 hao_array_get_ptr（已删；.c/.cpp/.hao + irgen）----
+$arrRoots = @(
+    (Join-Path $root "stdlib"),
+    (Join-Path $root "src")
+)
+$arrHits = foreach ($r in $arrRoots) {
+    Get-ChildItem -Path $r -Recurse -File |
+        Where-Object { $_.Extension -in '.c', '.cpp', '.hao', '.h' } |
+        Select-String -Pattern 'hao_array_get_ptr' -SimpleMatch
+}
+$arrHits = @($arrHits | Where-Object {
+    $_.Line -notmatch '已删|P6|get_obj|废弃|deleted'
+})
+if ($arrHits.Count -gt 0) {
+    $arrHits | Select-Object -First 5 | ForEach-Object {
+        Write-Host "  $($_.Path):$($_.LineNumber) $($_.Line.Trim())"
+    }
+    Fail "hao_array_get_ptr still present in code"
+}
+Write-Host "OK   hao_array_get_ptr deleted"
 
 Write-Host "P5_SMOKE+IR_SYNC OK"
 exit 0

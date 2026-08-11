@@ -80,8 +80,9 @@ int8_t hao_gc_expect_heap_object(void* p);
 /* 无 safepoint：p 是否像合法堆用户指针（对齐+在 heap 范围内+有块） */
 int8_t hao_gc_expect_heap_ptr(void* p);
 /*
- * reflect.invoke / array_get_ptr 把堆指针藏进 i64，直至 objOf/strOfInt。
+ * reflect.invoke 槽：引用经 ptrOf 临时编组为 Long 位型，直至 objOf/strOfInt。
  * 钉住期间参与 STW 扫描；inttoptr 消费时 unpin（无 safepoint）。
+ * 禁新 i64 藏针 API（P6 已删 get_ptr；用 hao_array_get_obj）。
  */
 void hao_gc_refl_i64_pin(void* p);
 void hao_gc_refl_i64_unpin(void* p);
@@ -256,6 +257,7 @@ void*   hao_array_new(int64_t len, int64_t esz, int64_t is_ptr);
 int64_t hao_array_len(void* arr);
 int64_t hao_array_cap(void* arr);
 int64_t hao_array_check(void* arr, int64_t idx);
+void*   hao_array_get_obj(void* arr, int64_t idx); /* 指针宽元素 → 托管引用；禁 i64 藏针 */
 void*   hao_array_push(void* arr, int64_t value);
 int64_t hao_array_pop(void* arr);
 

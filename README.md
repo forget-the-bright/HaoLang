@@ -5,11 +5,11 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.56.2**（P5 + IR↔Handle 同步门禁；套件基线 1027）
-- 测试基线：`test/suite` **1027** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.56.2
+- 当前版本：**v0.56.3**（P6 删 `hao_array_get_ptr` + cstr 门禁；套件基线 1027）
+- 测试基线：`test/suite` **1027** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.56.3
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
 - **下一批（默认）**：IR concat epic / miss tid / 功能轨——见 [`记忆文档.md`](记忆文档.md) 第 10 章
-- **P5 独立冒烟 + IR 同步门禁**：`powershell -File script/win/p5_smoke.ps1` → `P5_SMOKE+IR_SYNC OK`
+- **P5/P6 独立冒烟 + IR/FFI 门禁**：`powershell -File script/win/p5_smoke.ps1` → `P5_SMOKE+IR_SYNC OK`
 
 ---
 
