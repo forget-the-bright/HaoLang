@@ -1,0 +1,34 @@
+// U17：catch 体内 finally throw → reason=4（catchDepth_）；外层 catch 后根仍存活
+package main;
+
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var outer = new Box("outer");
+    try {
+        try {
+            throw new Exception("inner");
+        } catch (e: Exception) {
+            var mid = new Box("mid");
+            try {
+                fmt.println(e.getMessage().length > 0);
+            } finally {
+                gc.GC.collect();
+                fmt.println(mid.s == "mid");
+                fmt.println(outer.s == "outer");
+                throw new Exception("from-fin-in-catch");
+            }
+        }
+    } catch (e2: Exception) {
+        fmt.println(outer.s == "outer");
+        fmt.println(e2.getMessage().length > 0);
+    }
+    fmt.println(outer.s == "outer");
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

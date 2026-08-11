@@ -362,6 +362,23 @@ if ($LASTEXITCODE -eq 0) {
     $fail++
 }
 
+# U17: catch-body finally throw (reason=4 / catchDepth_) root smoke
+$out17 = & $hao run (Join-Path $Root "test\gc_try_catch_finally_throw_root_smoke.hao") 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0) {
+    $tc17 = ([regex]::Matches($out17, '(?m)^true\s*$')).Count
+    if ($tc17 -ge 7) {
+        Write-Host "OK   gc_try_catch_finally_throw_root_smoke true x7"
+    } else {
+        Write-Host "FAIL catch-finally-throw smoke true count=$tc17"
+        Write-Host $out17
+        $fail++
+    }
+} else {
+    Write-Host "FAIL gc_try_catch_finally_throw_root_smoke exit=$LASTEXITCODE"
+    Write-Host $out17
+    $fail++
+}
+
 # H1: HAO_GC_VERIFY=1 normal collect
 $prevVerify = $env:HAO_GC_VERIFY
 $env:HAO_GC_VERIFY = "1"
@@ -542,6 +559,24 @@ if ($traceEc4 -eq 0 -and $traceOut4 -match 'hao:irgen:grow_spill next=') {
 } else {
     Write-Host "FAIL HAO_IRGEN_TRACE grow_spill"
     Write-Host $traceOut4
+    $fail++
+}
+
+# A13: unwind / catch_enter / catch_leave / gc_unwind prefixes
+$prevTrace5 = $env:HAO_IRGEN_TRACE
+$env:HAO_IRGEN_TRACE = "1"
+$traceOut5 = & $hao emit (Join-Path $Root "test\gc_try_catch_finally_throw_root_smoke.hao") -o (Join-Path $td "unwind_trace.ll") 2>&1 | Out-String
+$traceEc5 = $LASTEXITCODE
+if ($null -ne $prevTrace5) { $env:HAO_IRGEN_TRACE = $prevTrace5 } else { Remove-Item Env:HAO_IRGEN_TRACE -ErrorAction SilentlyContinue }
+if ($traceEc5 -eq 0 -and
+    $traceOut5 -match 'hao:irgen:unwind reason=' -and
+    $traceOut5 -match 'hao:irgen:catch_enter depth=' -and
+    $traceOut5 -match 'hao:irgen:catch_leave depth=' -and
+    $traceOut5 -match 'hao:irgen:gc_unwind wm=') {
+    Write-Host "OK   HAO_IRGEN_TRACE unwind/catch/gc_unwind prefix"
+} else {
+    Write-Host "FAIL HAO_IRGEN_TRACE unwind/catch/gc_unwind"
+    Write-Host $traceOut5
     $fail++
 }
 

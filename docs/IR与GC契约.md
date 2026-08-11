@@ -146,7 +146,9 @@ flowchart TD
 
 **grow_spill TRACE / lambda·select 薄 DI / nested-catch（v0.55.48）**：`HAO_IRGEN_TRACE` 增 `hao:irgen:grow_spill`。lambda 形参与 select 接收绑定薄 `dbg.declare`/`dbg.value`。`gc_try_nested_catch_root_smoke`（`catchDepth_`）。**非** TRACE 全收口；**全量** Unwind / 完整类型仍开。
 
-**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口（unwind_* 等）；真实 C 叶槽 / 跨线程 VERIFY。
+**unwind TRACE / fn·this dbg.value / catch-finally-throw / ext 毒针（v0.55.49）**：`HAO_IRGEN_TRACE` 增 `unwind`/`catch_enter`/`catch_leave`/`gc_unwind`。形参与 `this` 初值薄 `dbg.value`。`gc_try_catch_finally_throw_root_smoke`。VERIFY `hao_debug_poison_ext_root`（`ext_i=`；仅毒针）。**非** TRACE 全收口；**非**跨线程 VERIFY；**全量** Unwind / 完整类型仍开。
+
+**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口（noteBlock 等）；真实 C 叶槽 / 跨线程 VERIFY。
 
 ### 4.4 分配
 

@@ -1473,6 +1473,8 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
         syms_.declare(ts);
         dbgArgBase = 1;
         emitDbgDeclareIf(thisAddr_, "this", dbgLine, 1);
+        /* D15：this 初值薄 dbg.value */
+        emitDbgValueIf("ptr", "%this.arg", "this", dbgLine, 1);
     }
 
     // ---- 参数：拷贝到栈上 ----
@@ -1531,8 +1533,11 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
                 emitGcRootPush(addr);
         }
         syms_.declare(ps);
-        emitDbgDeclareIf(ps->irAddr, pname, dbgLine,
-                         dbgArgBase + static_cast<unsigned>(i) + 1);
+        unsigned argNo = dbgArgBase + static_cast<unsigned>(i) + 1;
+        emitDbgDeclareIf(ps->irAddr, pname, dbgLine, argNo);
+        /* D15：形参初值薄 dbg.value（array-by-ref 仅 declare） */
+        if (!arrayByRef)
+            emitDbgValueIf(ptype->llvmType(), argSrc, pname, dbgLine, argNo);
     }
 
     // ---- 函数体：符号与参数同层；块 GC 作用域使顶层局部在落回出口前可清槽 ----

@@ -1650,6 +1650,8 @@ static __declspec(thread) void* g_verify_poison_gpr;
 static __declspec(thread) int g_verify_poison_gpr_armed;
 static __declspec(thread) void* g_verify_poison_leaf;
 static __declspec(thread) int g_verify_poison_leaf_armed;
+static __declspec(thread) void* g_verify_poison_ext;
+static __declspec(thread) int g_verify_poison_ext_armed;
 #else
 static __thread void* g_verify_poison_cell;
 static __thread void* g_verify_poison_pin;
@@ -1662,6 +1664,8 @@ static __thread void* g_verify_poison_gpr;
 static __thread int g_verify_poison_gpr_armed;
 static __thread void* g_verify_poison_leaf;
 static __thread int g_verify_poison_leaf_armed;
+static __thread void* g_verify_poison_ext;
+static __thread int g_verify_poison_ext_armed;
 #endif
 
 static void gc_verify_shadow_roots(void) {
@@ -1815,6 +1819,22 @@ static void gc_verify_c_leaf(void) {
     }
 }
 
+/* V11：外部根（gc_roots / slots）VERIFY 仅毒针；禁跨线程；fatal 含 ext_i=/ptr= */
+static void gc_verify_ext_roots(void) {
+    if (!gc_verify_env_on()) return;
+    if (!g_verify_poison_ext_armed) return;
+    {
+        void* p = g_verify_poison_ext;
+        if (p && !gc_find_block_exact(p)) {
+            char detail[160];
+            snprintf(detail, sizeof(detail),
+                     "ext root is not a live heap object ext_i=%d ptr=%p",
+                     0, p);
+            hao_report_fatal("gc_verify", detail);
+        }
+    }
+}
+
 static void gc_verify_roots(void) {
     gc_verify_shadow_roots();
     gc_verify_scan_pins();
@@ -1822,6 +1842,7 @@ static void gc_verify_roots(void) {
     gc_verify_refl_i64_pins();
     gc_verify_gpr_spill();
     gc_verify_c_leaf();
+    gc_verify_ext_roots();
 }
 
 /* V2：冒烟/调试钩子——压入非堆指针，下一 VERIFY collect 应 fatal */
@@ -1860,6 +1881,12 @@ void hao_debug_poison_gpr(void) {
 void hao_debug_poison_c_leaf(void) {
     g_verify_poison_leaf = (void*)(uintptr_t)0x8;
     g_verify_poison_leaf_armed = 1;
+}
+
+/* V11：武装外部根毒针（仅 armed；不对真实 gc_roots 全扫假阳） */
+void hao_debug_poison_ext_root(void) {
+    g_verify_poison_ext = (void*)(uintptr_t)0x8;
+    g_verify_poison_ext_armed = 1;
 }
 
 __attribute__((noinline))

@@ -899,6 +899,75 @@ if ($okSel) {
     $fail++
 }
 
+# --- D15: -g fn param + this have dbg.value ---
+@'
+class Box {
+    public var n: Int = 0
+    public constructor(n: Int) { this.n = n }
+    public func get(): Int { return this.n }
+}
+func add1(x: Int): Int { return x + 1 }
+func main() {
+    var b = new Box(3)
+    fmt.println(add1(1) == 2)
+    fmt.println(b.get() == 3)
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_value_fn_this.hao")
+$llFn = Join-Path $td "dbg_value_fn_this.ll"
+& $hao emit -g (Join-Path $td "dbg_value_fn_this.hao") -o $llFn 2>&1 | Out-Null
+$okFn = $false
+if (Test-Path $llFn) {
+    $ftxt = Get-Content $llFn -Raw
+    if ($ftxt -match 'llvm\.dbg\.value' -and
+        $ftxt -match 'DILocalVariable\(name: "x"' -and
+        $ftxt -match 'DILocalVariable\(name: "this"') {
+        $okFn = $true
+    }
+}
+if ($okFn) {
+    Write-Host "OK   -g fn/this has dbg.value for x and this"
+} else {
+    Write-Host "FAIL -g fn/this dbg.value"
+    $fail++
+}
+
+# --- V11: VERIFY poison ext root has ext_i= ---
+@'
+import gc
+
+extern func hao_debug_poison_ext_root(): Unit = "hao_debug_poison_ext_root";
+
+func main() {
+    hao_debug_poison_ext_root();
+    gc.GC.collect();
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "verify_ext.hao")
+Reset-CrashLog
+$prevVext = $env:HAO_GC_VERIFY
+$env:HAO_GC_VERIFY = "1"
+& $hao run (Join-Path $td "verify_ext.hao") 2>&1 | Out-Null
+if ($null -ne $prevVext) { $env:HAO_GC_VERIFY = $prevVext } else { Remove-Item Env:HAO_GC_VERIFY -ErrorAction SilentlyContinue }
+$okExt = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    if ($txt -match "kind=gc_verify" -and
+        $txt -match "ext_i=" -and
+        $txt -match "ptr=" -and
+        ($txt -match "src=.*verify_ext\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_ext\.hao:\d+")) {
+        $okExt = $true
+    }
+    if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_ext\.hao") {
+        $okExt = $false
+    }
+}
+if ($okExt) {
+    Write-Host "OK   VERIFY poison ext has ext_i + verify_ext.hao loc"
+} else {
+    Write-Host "FAIL VERIFY poison ext_i"
+    if (Test-Path $log) { Get-Content $log -Raw | Write-Host }
+    $fail++
+}
+
 if ($fail -eq 0) {
     Write-Host "loc_smoke: ALL PASS"
     exit 0

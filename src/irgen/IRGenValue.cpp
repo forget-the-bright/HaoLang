@@ -496,6 +496,14 @@ void IRGen::emitGcRootPush(const std::string& slotAddr) {
 
 void IRGen::emitGcRootUnwind() {
     if (gcRootWm_.empty()) return;
+    /* A13：正路径可观测（默认关） */
+    {
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr, "hao:irgen:gc_unwind wm=%s\n", gcRootWm_.c_str());
+            fflush(stderr);
+        }
+    }
     ops_.emitCallVoid("@hao_gc_root_unwind", "i64 " + gcRootWm_);
 }
 

@@ -16,6 +16,9 @@
 
 #include "irgen/IRGen.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 namespace hao {
 
 // ------------------------------------------------------------
@@ -128,6 +131,16 @@ void IRGen::emitUnwindRet() {
 // 否则（无 try 包裹）执行真正的 return/break/continue/throw。
 //   reason: 0=正常 1=return 2=break 3=continue 4=rethrow
 void IRGen::emitUnwind(int reason, const Value& retVal) {
+    /* A13：正路径可观测（默认关） */
+    {
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr,
+                    "hao:irgen:unwind reason=%d tryDepth=%zu\n",
+                    reason, tryStack_.size());
+            fflush(stderr);
+        }
+    }
     if (reason == 1) {
         if (retVal.valid()) storeUnwindRet(retVal);
         emitStore("i32", "1", unwindReasonAddr_);
@@ -326,6 +339,14 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
         // catch 体
         em_.emitLabel(ce.label);
         catchDepth_++;
+        /* A13：catchDepth 进出可观测（默认关） */
+        {
+            const char* tr = getenv("HAO_IRGEN_TRACE");
+            if (tr && tr[0] && tr[0] != '0') {
+                fprintf(stderr, "hao:irgen:catch_enter depth=%d\n", catchDepth_);
+                fflush(stderr);
+            }
+        }
         {
             // catch 成功处理异常：复位 reason（内层可能把它设为 4=rethrow），
             // 否则外层 cleanup 会把已处理的异常重新抛出。
@@ -350,6 +371,13 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
             beginBlockGcScope();
             for (auto* s : ce.node->block()->statement()) genStatement(s);
             endBlockGcScope();
+        }
+        {
+            const char* tr = getenv("HAO_IRGEN_TRACE");
+            if (tr && tr[0] && tr[0] != '0') {
+                fprintf(stderr, "hao:irgen:catch_leave depth=%d\n", catchDepth_);
+                fflush(stderr);
+            }
         }
         catchDepth_--;
         if (!blockTerminated_) {
