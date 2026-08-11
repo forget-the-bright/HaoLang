@@ -150,6 +150,8 @@ flowchart TD
 
 **note_block·unwind_gc TRACE / lambda 捕获 DI / select-in-catch（v0.55.50）**：`HAO_IRGEN_TRACE` 增 `note_block`/`unwind_gc`。lambda 捕获 unpack 薄 DI。`gc_try_select_in_catch_root_smoke`。**非** TRACE 全收口；**全量** Unwind / 完整类型仍开；跨线程 VERIFY 仍开。
 
+**leave noop·非池 acquire TRACE / new 字段默认 DI / for-in-catch（v0.55.51）**：`HAO_IRGEN_TRACE` 增 `leave_spill noop=1`、`acquire_spill pool=0`。`new`/reflect `$new` 字段默认薄 `dbg.value`。`gc_try_for_in_catch_root_smoke`。**非** TRACE 全收口（统一 helper 仍开）；**全量** Unwind / 完整类型仍开；跨线程 VERIFY 仍开。
+
 **后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口（统一 helper 等）；真实 C 叶槽 / 跨线程 VERIFY。
 
 ### 4.4 分配

@@ -1,0 +1,32 @@
+// U19：外层 catch 体内 for-in + GC.collect 根存活（catchDepth_ × loop spill；发现向；非全量 unwind）
+package main;
+
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var outer = new Box("outer");
+    var xs = [new Box("a"), new Box("b")];
+    try {
+        throw new Exception("boom");
+    } catch (e: Exception) {
+        var mid = new Box("mid");
+        for (it in xs) {
+            gc.GC.collect();
+            fmt.println(it.s.length > 0);
+            fmt.println(mid.s == "mid");
+            fmt.println(outer.s == "outer");
+            fmt.println(e.getMessage().length > 0);
+        }
+        fmt.println(mid.s == "mid");
+        fmt.println(outer.s == "outer");
+        fmt.println(e.getMessage().length > 0);
+    }
+    fmt.println(outer.s == "outer");
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

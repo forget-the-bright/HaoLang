@@ -994,6 +994,32 @@ if ($okCap) {
     $fail++
 }
 
+# --- D17: -g new field default has dbg.value ---
+@'
+class Box {
+    public var s: String = "x"
+}
+func main() {
+    var b = new Box()
+    fmt.println(b.s == "x")
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_value_new_field.hao")
+$llNew = Join-Path $td "dbg_value_new_field.ll"
+& $hao emit -g (Join-Path $td "dbg_value_new_field.hao") -o $llNew 2>&1 | Out-Null
+$okNew = $false
+if (Test-Path $llNew) {
+    $ntext = Get-Content $llNew -Raw
+    if ($ntext -match 'llvm\.dbg\.value' -and $ntext -match 'DILocalVariable\(name: "s"') {
+        $okNew = $true
+    }
+}
+if ($okNew) {
+    Write-Host "OK   -g new field default has dbg.value for s"
+} else {
+    Write-Host "FAIL -g new field default dbg"
+    $fail++
+}
+
 if ($fail -eq 0) {
     Write-Host "loc_smoke: ALL PASS"
     exit 0

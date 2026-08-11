@@ -3082,6 +3082,8 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
             dv = coerce(dv, f.type, 0, 0);
             std::string fp = fieldPtr(obj, f.slot);
             emitHeapStore(fp, dv.ir, f.type, obj);
+            /* D17：new 字段默认写回薄 dbg.value（完整类型仍开） */
+            emitDbgValueIf(f.type->llvmType(), dv.ir, f.name, 0, 0);
         }
 
         // 基类构造函数：子类未声明构造函数时，若基类有构造函数则报错，

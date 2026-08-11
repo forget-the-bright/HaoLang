@@ -630,7 +630,17 @@ void IRGen::enterLoopSpillScope() {
 }
 
 void IRGen::leaveLoopSpillScope() {
-    if (loopSpillDepth_ <= 0) return;
+    /* A15：空栈 / depth<=0 早退亦 TRACE（默认关） */
+    if (loopSpillDepth_ <= 0) {
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr,
+                    "hao:irgen:leave_spill noop=1 depth=%d\n",
+                    loopSpillDepth_);
+            fflush(stderr);
+        }
+        return;
+    }
     if (!loopSpillPools_.empty()) {
         auto& pool = loopSpillPools_.back();
         if (!pool.scopeStack.empty()) {
@@ -662,6 +672,14 @@ void IRGen::leaveLoopSpillScope() {
                 pool.stickyEnterStack.pop_back();
             if (!pool.stickyFloorStack.empty())
                 pool.stickyFloorStack.pop_back();
+        } else {
+            const char* tr = getenv("HAO_IRGEN_TRACE");
+            if (tr && tr[0] && tr[0] != '0') {
+                fprintf(stderr,
+                        "hao:irgen:leave_spill noop=1 depth=%d next=%zu\n",
+                        loopSpillDepth_, pool.next);
+                fflush(stderr);
+            }
         }
     }
     --loopSpillDepth_;
@@ -811,7 +829,17 @@ void IRGen::unpinLoopSpillCheckpoint() {
 
 std::string IRGen::acquireLoopGcSlot(const std::string& nameHint) {
     if (loopSpillPools_.empty()) {
-        std::string addr = emitAllocaNamed(nameHint, "ptr");
+        /* A15：非池回退可观测（默认关）；alloca 进 entry 保支配 */
+        {
+            const char* tr = getenv("HAO_IRGEN_TRACE");
+            if (tr && tr[0] && tr[0] != '0') {
+                fprintf(stderr,
+                        "hao:irgen:acquire_spill pool=0 hint=%s\n",
+                        nameHint.c_str());
+                fflush(stderr);
+            }
+        }
+        std::string addr = em_.emitEntryAllocaPtr(nameHint);
         emitStore("ptr", "null", addr);
         emitGcRootPush(addr);
         return addr;
@@ -850,18 +878,11 @@ std::string IRGen::acquireLoopGcSlot(const std::string& nameHint) {
 }
 
 std::string IRGen::emitSpillGcRoot(const std::string& nameHint, const std::string& ptrIr) {
-    if (!loopSpillPools_.empty()) {
-        std::string addr = acquireLoopGcSlot(nameHint);
-        emitStore("ptr", ptrIr, addr);
-        /* 池寿命由 clear/recycle/leave 管；勿 noteBlock——内层块尾会误杀仍在用的池槽 */
-        return addr;
-    }
-    /* alloca 必须进 entry，否则分支内 spill 的 use 不支配（套件 clang 失败） */
-    std::string addr = em_.emitEntryAllocaPtr(nameHint);
+    /* 池内复用槽；非池走 acquire pool=0（entry alloca + root_push + A15 TRACE） */
+    std::string addr = acquireLoopGcSlot(nameHint);
     emitStore("ptr", ptrIr, addr);
-    emitGcRootPush(addr);
-    /* 不 noteBlock/Expr：表达式临时寿命到函数 unwind；语句尾清曾误杀
-     * new/构造期仍被 SSA 使用的槽（G1 债：需更精的寿命分析） */
+    /* 池寿命由 clear/recycle/leave 管；勿 noteBlock——内层块尾会误杀仍在用的池槽
+     * 非池：不 noteBlock/Expr——语句尾清曾误杀 new/构造期仍被 SSA 使用的槽 */
     return addr;
 }
 

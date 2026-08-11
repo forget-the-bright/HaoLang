@@ -1566,6 +1566,9 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
     }
     gcRootWm_.clear();
     loopHoisted_.clear();
+    /* A15：函数尾探测 leave noop（depth 已 0 → 仅 TRACE，无 IR） */
+    if (loopSpillDepth_ <= 0)
+        leaveLoopSpillScope();
     loopSpillPools_.clear();
     loopSpillDepth_ = 0;
     blockGcSlots_.clear();

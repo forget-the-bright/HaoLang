@@ -613,6 +613,55 @@ if ($traceEc6 -eq 0 -and
     $fail++
 }
 
+# A15: leave_spill noop + acquire_spill pool=0
+@'
+class Box {
+    public var s: String = "x"
+}
+func main() {
+    var b = new Box()
+    fmt.println(b.s == "x")
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "nopool_acquire.hao")
+$prevTrace7 = $env:HAO_IRGEN_TRACE
+$env:HAO_IRGEN_TRACE = "1"
+$traceOut7 = & $hao emit (Join-Path $td "nopool_acquire.hao") -o (Join-Path $td "nopool_acquire.ll") 2>&1 | Out-String
+$traceEc7 = $LASTEXITCODE
+if ($null -ne $prevTrace7) { $env:HAO_IRGEN_TRACE = $prevTrace7 } else { Remove-Item Env:HAO_IRGEN_TRACE -ErrorAction SilentlyContinue }
+if ($traceEc7 -eq 0 -and $traceOut7 -match 'hao:irgen:acquire_spill pool=0 hint=') {
+    Write-Host "OK   HAO_IRGEN_TRACE acquire_spill pool=0 prefix"
+} else {
+    Write-Host "FAIL HAO_IRGEN_TRACE acquire_spill pool=0"
+    Write-Host $traceOut7
+    $fail++
+}
+if (($traceEc -eq 0 -and $traceOut -match 'hao:irgen:leave_spill noop=1') -or
+    ($traceEc7 -eq 0 -and $traceOut7 -match 'hao:irgen:leave_spill noop=1')) {
+    Write-Host "OK   HAO_IRGEN_TRACE leave_spill noop prefix"
+} else {
+    Write-Host "FAIL HAO_IRGEN_TRACE leave_spill noop"
+    Write-Host $traceOut
+    Write-Host $traceOut7
+    $fail++
+}
+
+# U19: for-in inside catch body root smoke
+$out19 = & $hao run (Join-Path $Root "test\gc_try_for_in_catch_root_smoke.hao") 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0) {
+    $tc19 = ([regex]::Matches($out19, '(?m)^true\s*$')).Count
+    if ($tc19 -ge 12) {
+        Write-Host "OK   gc_try_for_in_catch_root_smoke true x12"
+    } else {
+        Write-Host "FAIL for-in-catch smoke true count=$tc19"
+        Write-Host $out19
+        $fail++
+    }
+} else {
+    Write-Host "FAIL gc_try_for_in_catch_root_smoke exit=$LASTEXITCODE"
+    Write-Host $out19
+    $fail++
+}
+
 if ($fail -eq 0) {
     Write-Host "spill_ir_smoke: ALL PASS"
     exit 0

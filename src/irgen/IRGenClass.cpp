@@ -1237,6 +1237,8 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
         dv = coerce(dv, f.type, 0, 0);
         std::string fp = fieldPtr(obj, f.slot);
         emitHeapStore(fp, dv.ir, f.type, obj);
+        /* D17：reflect $new 字段默认与语言 new 对齐薄 dbg.value */
+        emitDbgValueIf(f.type->llvmType(), dv.ir, f.name, 0, 0);
     }
 
     obj = emitLoad("ptr", objSlot);
