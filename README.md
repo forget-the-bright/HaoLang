@@ -5,8 +5,8 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.55.51**（定位发现十七期：leave noop/非池 acquire TRACE；new 字段默认 DI；for-in-catch 根冒烟）
-- 测试基线：`test/suite` **1011** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.55.51
+- 当前版本：**v0.55.52**（定位发现十八期：STW abort 分相定位；软 STW 工程债仍开）
+- 测试基线：`test/suite` **1014** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.55.52
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
 - **下一批（默认）**：扩 IROps（cast/gep/select）清 Expr 残留——见 [`记忆文档.md`](记忆文档.md) 第 10 章
 
@@ -364,7 +364,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | **v0.55.51** 定位十七期；**v0.55.50** 定位十六期；**v0.55.49** 定位十五期；**v0.55.48** 定位十四期；**v0.55.47** 定位十三期；**v0.55.46** 定位十二期；**v0.55.45** 定位十一期；**v0.55.44** 定位十期；**v0.55.43** 定位九期 |
+| ✅ 已完成 | **v0.55.52** 定位十八期；**v0.55.51** 定位十七期；**v0.55.50** 定位十六期；**v0.55.49** 定位十五期；**v0.55.48** 定位十四期；**v0.55.47** 定位十三期；**v0.55.46** 定位十二期；**v0.55.45** 定位十一期；**v0.55.44** 定位十期 |
 | 🔥 **下一批（默认开干）** | 扩 IROps（cast/gep/select）清 Expr 残留（记忆文档 §I） |
 | 其后 | I0/I3/I4 dbg（挂 IROps）→ Sema/作用域机（后置）→ select / sweep → 自举 |
 

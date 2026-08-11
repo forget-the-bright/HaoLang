@@ -49,6 +49,13 @@ func gcApiTest() {
     fmt.println(gc.GC.heapBytes() >= 0);           // true
     fmt.println(gc.GC.markAssistSteps() >= 0);     // true
     fmt.println(gc.GC.markAbortCycles() >= 0);     // true（v0.53.3）
+    // v0.55.52：分相 abort/incomplete 不变量 + 末次快照可读（不要求 incomplete==0）
+    {
+        val g = gc.GC.stats();
+        fmt.println(g.markAbortCycles == g.markAbortRoot + g.markAbortTerm + g.markAbortParkWd);
+        fmt.println(g.stwIncomplete == g.stwIncompleteRoot + g.stwIncompleteTerm);
+        fmt.println(g.lastStwPhase >= 0 && g.lastStwMissing >= 0);
+    }
     fmt.println(os.Process.workingSetBytes() > 0); // true
     fmt.println(os.Process.handleCount() > 0); // true
     fmt.println(os.Process.threadCount() >= 1); // true

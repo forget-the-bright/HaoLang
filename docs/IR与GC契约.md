@@ -57,11 +57,11 @@ flowchart TD
 
 | 阶段 | STW？ | 持锁要点 |
 |------|-------|----------|
-| Mark setup | 软根 STW（可未齐） | 先开屏障再扫根 |
+| Mark setup | 软根 STW；**未齐则 abort**（禁漏根进 mark） | 先开屏障再扫根；分相 `IncompleteRoot`/`AbortRoot`（v0.55.52） |
 | 并发 mark | 否 | drain 每 16 步可放锁；**2 条 GC 私有 worker** 同锁取灰 |
-| 终止 | 软 STW，**必须齐** | 重扫根+双轨；worklist 清空 |
-| Sweep | 否（已 leave） | 每 128 块放锁 |
-| Abort | leave | 不 sweep；色作废 |
+| 终止 | 软 STW，**必须齐** | 重扫根+双轨；未齐计 `IncompleteTerm`；失败 `AbortTerm` |
+| Sweep | **保持 STW**（v0.55.15；禁边扫边 leave） | 终止成功后 sweep 完再 leave |
+| Abort | leave | 不 sweep；色作废；`AbortRoot`/`Term`/`ParkWd` 分相 |
 
 ---
 
@@ -152,7 +152,9 @@ flowchart TD
 
 **leave noop·非池 acquire TRACE / new 字段默认 DI / for-in-catch（v0.55.51）**：`HAO_IRGEN_TRACE` 增 `leave_spill noop=1`、`acquire_spill pool=0`。`new`/reflect `$new` 字段默认薄 `dbg.value`。`gc_try_for_in_catch_root_smoke`。**非** TRACE 全收口（统一 helper 仍开）；**全量** Unwind / 完整类型仍开；跨线程 VERIFY 仍开。
 
-**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口（统一 helper 等）；真实 C 叶槽 / 跨线程 VERIFY。
+**STW abort 分相定位（v0.55.52）**：`stwIncompleteRoot/Term`、`markAbortRoot/Term/ParkWd` + 末次 `lastStw*`；`HAO_GC_TRACE` 打 `stw_incomplete`/`mark_abort`。压测两格同步涨可分类；**软 STW 工程债仍开**（未压 incomplete→0；S1e 判定跳过补丁）。
+
+**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口（统一 helper 等）；真实 C 叶槽 / 跨线程 VERIFY；软 STW 根握手税收紧（据分相）。
 
 ### 4.4 分配
 
@@ -192,7 +194,10 @@ flowchart TD
 | `liveBytes` | 上次成功 major 后存活 |
 | `concurrentMarkCycles` / `markAssistSteps` | 并发 mark / assist |
 | `markWorkerSteps` | **GC 私有 worker** 推进灰块数（v0.54） |
-| `stwIncomplete` / `markAbortCycles` | 握手失败 |
+| `stwIncomplete` / `markAbortCycles` | 握手失败总量 |
+| `stwIncompleteRoot`/`Term` · `markAbortRoot`/`Term`/`ParkWd` | 分相（v0.55.52）；不变量 abort 总量=三分相之和 |
+| `lastStwPhase`/`Missing`/`Targets`/`OsBlockMissing` | 末次未齐 sticky 快照（定位用） |
+| `HAO_GC_TRACE=1` | `[hao:gc] stw_incomplete …` / `mark_abort reason=…` |
 | `remsetCount` | 分代 remset 条目数（**仅服务 minor**；major 不 seed） |
 
 ---
@@ -225,7 +230,7 @@ GC 只认**可达性**：从根沿指针摸得到 = 存活；摸不到 = 可回�
 | 清除白色 | 终止齐后 sweep；失败 abort（bump epoch，非假死借口） | **已做** |
 | 写屏障 | 混合（Yuasa old + Dijkstra new）；IDLE remset | **已做** |
 | C runtime 帧 | 有界保守叶 + 显式 `add_root` 皮带 | **诚实边界**（混合语言税） |
-| 软 STW abort | 单轮可能不回收，靠下一轮 | **工程债**（非架构天花板） |
+| 软 STW abort | 单轮可能不回收，靠下一轮；压测两格同步涨多为根握手税（非计数器 bug） | **工程债**（v0.55.52 已可分相定位；未压 incomplete→0） |
 | 并发 drain 上限 | 步数/时间封顶，防密分配屏障活锁拖死 HTTP（v0.55.11） | **已做** |
 | 终止握手 | STW 内只 seed/判空，放行后再并发 drain（v0.55.13；取代 STW 下长 drain） | **已做** |
 | root 协作锁 | `add_root*`/`remove_root` 走 safepoint+STW 让出（v0.55.13） | **已做** |

@@ -54,6 +54,18 @@ public class GcStats {
     var markWorkerSteps: Long = 0; /* GC 私有 mark worker 推进量（v0.54） */
     var remsetCount: Long = 0; /* 分代 remset 条目数（v0.55.2；仅服务 minor） */
     var parkWatchdogTrips: Long = 0; /* park_wait 超时强行放行（v0.55.11） */
+    /* v0.55.52：分相 incomplete/abort + 末次未齐快照（槽 21..31） */
+    var stwIncompleteRoot: Long = 0;
+    var stwIncompleteTerm: Long = 0;
+    var markAbortRoot: Long = 0;
+    var markAbortTerm: Long = 0;
+    var markAbortParkWd: Long = 0;
+    var lastStwPhase: Long = 0;          /* 0=无 1=root 2=term */
+    var lastStwAttempt: Long = 0;
+    var lastStwTargets: Long = 0;
+    var lastStwParked: Long = 0;
+    var lastStwMissing: Long = 0;
+    var lastStwOsBlockMissing: Long = 0;
 }
 
 extern func hao_gc_stats(dst: GcStats): Unit = "hao_gc_stats";
@@ -214,6 +226,6 @@ class GC {
     // 复杂度：O(1)（单次 stats）
     static func summary(): String {
         val s = GC.stats();
-        return $"GC[v3] live={s.liveBytes}B heap={s.heapBytes}B threshold={s.threshold}B allocatedSince={s.allocatedSinceGc}B blocks={s.blockCount} collects={s.collectCount} minor={s.minorCount} major={s.majorCount} finalizerRuns={s.finalizerRuns} finalizerSets={s.finalizerSets} stwIncomplete={s.stwIncomplete} concurrentMark={s.concurrentMarkCycles} markAssist={s.markAssistSteps} markAbort={s.markAbortCycles} markWorker={s.markWorkerSteps} remset={s.remsetCount} parkWd={s.parkWatchdogTrips}";
+        return $"GC[v3] live={s.liveBytes}B heap={s.heapBytes}B threshold={s.threshold}B allocatedSince={s.allocatedSinceGc}B blocks={s.blockCount} collects={s.collectCount} minor={s.minorCount} major={s.majorCount} finalizerRuns={s.finalizerRuns} finalizerSets={s.finalizerSets} stwIncomplete={s.stwIncomplete} stwIncRoot={s.stwIncompleteRoot} stwIncTerm={s.stwIncompleteTerm} concurrentMark={s.concurrentMarkCycles} markAssist={s.markAssistSteps} markAbort={s.markAbortCycles} abortRoot={s.markAbortRoot} abortTerm={s.markAbortTerm} abortParkWd={s.markAbortParkWd} markWorker={s.markWorkerSteps} remset={s.remsetCount} parkWd={s.parkWatchdogTrips} lastStwPhase={s.lastStwPhase} lastMissing={s.lastStwMissing}/{s.lastStwTargets} lastOsBlock={s.lastStwOsBlockMissing}";
     }
 }

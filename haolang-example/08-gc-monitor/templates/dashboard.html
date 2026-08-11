@@ -164,8 +164,16 @@
         <div class="value" id="finalizerSets">{{finalizerSets}}</div>
       </div>
       <div class="metric">
-        <div class="label">STW incomplete<br>软 STW 未齐 park 计数（终止未齐见 markAbort）</div>
+        <div class="label">STW incomplete<br>软 STW 未齐 park 总量（分相见下）</div>
         <div class="value" id="stwIncomplete">{{stwIncomplete}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">stwIncompleteRoot<br>根软 STW 未齐（v0.55.52）</div>
+        <div class="value" id="stwIncompleteRoot">{{stwIncompleteRoot}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">stwIncompleteTerm<br>终止软 STW 未齐（v0.55.52）</div>
+        <div class="value" id="stwIncompleteTerm">{{stwIncompleteTerm}}</div>
       </div>
       <div class="metric">
         <div class="label">stwMarkAllFallbacks<br>已废除全标活，应恒为 0</div>
@@ -180,8 +188,32 @@
         <div class="value" id="markAssistSteps">{{markAssistSteps}}</div>
       </div>
       <div class="metric">
-        <div class="label">markAbortCycles<br>终止失败 abort MARK（v0.53.3）</div>
+        <div class="label">markAbortCycles<br>abort MARK 总量（分相见下）</div>
         <div class="value" id="markAbortCycles">{{markAbortCycles}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">markAbortRoot<br>根未齐 abort（≈incomplete 则根握手税）</div>
+        <div class="value" id="markAbortRoot">{{markAbortRoot}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">markAbortTerm<br>终止失败 abort</div>
+        <div class="value" id="markAbortTerm">{{markAbortTerm}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">markAbortParkWd<br>park watchdog abort</div>
+        <div class="value" id="markAbortParkWd">{{markAbortParkWd}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">lastStwMissing / Targets<br>末次未齐 missing/targets</div>
+        <div class="value" id="lastStwMissTgt">{{lastStwMissing}}/{{lastStwTargets}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">lastStwOsBlockMissing<br>末次缺 park 中 os_block 数</div>
+        <div class="value" id="lastStwOsBlockMissing">{{lastStwOsBlockMissing}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">lastStwPhase<br>1=root 2=term 0=无</div>
+        <div class="value" id="lastStwPhase">{{lastStwPhase}}</div>
       </div>
       <div class="metric">
         <div class="label">markWorkerSteps<br>GC 私有 mark worker（v0.54）</div>
@@ -232,11 +264,16 @@
       document.getElementById(id).textContent = fmtBytes(data[id]);
     });
     ["minorCount","majorCount","handleCount","blockCount","remsetCount","threadCount","gcThreads",
-     "collectCount","finalizerRuns","finalizerSets","stwIncomplete","stwMarkAllFallbacks",
-     "concurrentMarkCycles","markAssistSteps","markAbortCycles","markWorkerSteps"].forEach(function (id) {
+     "collectCount","finalizerRuns","finalizerSets","stwIncomplete","stwIncompleteRoot","stwIncompleteTerm",
+     "stwMarkAllFallbacks","concurrentMarkCycles","markAssistSteps","markAbortCycles",
+     "markAbortRoot","markAbortTerm","markAbortParkWd","lastStwPhase","lastStwOsBlockMissing",
+     "markWorkerSteps"].forEach(function (id) {
       document.getElementById(id).textContent = data[id];
     });
-    const cpuEl = document.getElementById("cpuPercent");
+    var missEl = document.getElementById("lastStwMissTgt");
+    if (missEl) {
+      missEl.textContent = String(data.lastStwMissing) + "/" + String(data.lastStwTargets);
+    }    const cpuEl = document.getElementById("cpuPercent");
     if (data.cpuReady) cpuEl.textContent = data.cpuPercent + "%";
     else cpuEl.textContent = "采样中…";
     document.getElementById("summary").textContent = data.summary;

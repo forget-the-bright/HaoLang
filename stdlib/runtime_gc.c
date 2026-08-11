@@ -87,6 +87,8 @@ static int      gc_minors_since_major = 0;
 static int64_t  gc_main_tid = 0;
 /* v0.50.4：STW 未齐时不再全标活；incomplete + pacing 避免死亡螺旋 */
 static int64_t  g_stw_incomplete = 0;
+static int64_t  g_stw_incomplete_root = 0; /* v0.55.52：根软 STW 未齐 */
+static int64_t  g_stw_incomplete_term = 0; /* v0.55.52：终止软 STW 未齐 */
 static int64_t  g_stw_mark_all_fallbacks = 0; /* 兼容旧 API；本版恒 0（已废除全标活） */
 static int      gc_pacing_level = 0;          /* 连续 incomplete 退避档位 */
 static size_t   gc_nursery_gate = GC_NURSERY_THRESHOLD; /* 可被 pacing 放大 */
@@ -98,6 +100,9 @@ static volatile int gc_phase = GC_PHASE_IDLE;
 static int64_t      g_concurrent_mark_cycles = 0;
 static int64_t      g_mark_assist_steps = 0;
 static int64_t      g_mark_abort_cycles = 0; /* 终止失败 abort MARK 次数（v0.53.3） */
+static int64_t      g_mark_abort_root = 0;   /* v0.55.52 */
+static int64_t      g_mark_abort_term = 0;
+static int64_t      g_mark_abort_park_wd = 0;
 static int64_t      g_mark_worker_steps = 0; /* mark worker 推进灰块数（v0.54） */
 static int64_t      g_park_watchdog_trips = 0; /* park_wait 超时强行放行（防 Web 永久楔死） */
 static size_t       gc_heap_bytes = 0; /* 用户区合计，alloc/sweep 维护 */
@@ -107,6 +112,22 @@ static int          gc_mark_major = 1;       /* 扫/入队用：本轮是否 maj
 static int          gc_cycle_is_major = 1;   /* 本轮 cycle 固定，续跑不改 */
 static int          g_collect_want_major = 1;
 static int64_t      gc_last_term_attempt_ms = 0;
+
+/* v0.55.52：软 STW 调用上下文 + 末次未齐快照（sticky） */
+#define GC_STW_PHASE_NONE 0
+#define GC_STW_PHASE_ROOT 1
+#define GC_STW_PHASE_TERM 2
+#define GC_ABORT_ROOT     1
+#define GC_ABORT_TERM     2
+#define GC_ABORT_PARK_WD  3
+static int g_stw_soft_phase = GC_STW_PHASE_NONE;
+static int g_stw_soft_attempt = 0;
+static int g_last_stw_phase = 0;
+static int g_last_stw_attempt = 0;
+static int g_last_stw_targets = 0;
+static int g_last_stw_parked = 0;
+static int g_last_stw_missing = 0;
+static int g_last_stw_os_block_missing = 0;
 
 static void**  gc_roots = NULL;
 static size_t  gc_root_count = 0;
@@ -270,6 +291,8 @@ static void gc_park_wait(void) {
                  */
                 g_park_watchdog_trips += 1;
                 g_mark_abort_cycles += 1;
+                g_mark_abort_park_wd += 1;
+                hao_trace("gc", "mark_abort reason=park_wd");
                 gc_stw_leave();
                 break;
             }
@@ -416,6 +439,8 @@ void hao_gc_os_block_leave(void) {
                 gc_mono_ms() - t0 >= GC_PARK_WATCHDOG_MS) {
                 g_park_watchdog_trips += 1;
                 g_mark_abort_cycles += 1;
+                g_mark_abort_park_wd += 1;
+                hao_trace("gc", "mark_abort reason=park_wd");
                 gc_stw_leave();
                 break;
             }
@@ -453,6 +478,8 @@ void hao_gc_os_block_disarm(void) {
                 gc_mono_ms() - t0 >= GC_PARK_WATCHDOG_MS) {
                 g_park_watchdog_trips += 1;
                 g_mark_abort_cycles += 1;
+                g_mark_abort_park_wd += 1;
+                hao_trace("gc", "mark_abort reason=park_wd");
                 gc_stw_leave();
                 break;
             }
@@ -624,11 +651,42 @@ static int gc_all_threads_scanned(int64_t self) {
  * v0.52 软 STW：等到齐或超时；**无论是否齐都扫已 park 者**，保持 request=1。
  * 返回 1=本轮目标已齐 park；0=未齐（计 incomplete，但不 leave、不放弃标记）。
  * total_ms：本轮等待预算。
+ * 调用前设 g_stw_soft_phase / g_stw_soft_attempt（v0.55.52 分相定位）。
  */
+static void gc_record_stw_incomplete(const GcThread* snap, int nsnap, int64_t self,
+                                     int targets, int parked, int missing) {
+    int os_miss = 0;
+    for (int i = 0; i < nsnap; ++i) {
+        if (snap[i].id == self) continue;
+        int live = 0;
+        for (int j = 0; j < gc_thread_count; ++j)
+            if (gc_threads[j].id == snap[i].id) { live = 1; break; }
+        if (!live) continue;
+        int is_parked = snap[i].parked_flag &&
+            __atomic_load_n(snap[i].parked_flag, __ATOMIC_ACQUIRE);
+        if (is_parked) continue;
+        if (snap[i].in_os_block_flag &&
+            __atomic_load_n(snap[i].in_os_block_flag, __ATOMIC_ACQUIRE))
+            os_miss++;
+    }
+    g_last_stw_phase = g_stw_soft_phase;
+    g_last_stw_attempt = g_stw_soft_attempt;
+    g_last_stw_targets = targets;
+    g_last_stw_parked = parked;
+    g_last_stw_missing = missing;
+    g_last_stw_os_block_missing = os_miss;
+    hao_trace("gc",
+              "stw_incomplete phase=%s attempt=%d missing=%d targets=%d parked=%d os_block=%d",
+              g_stw_soft_phase == GC_STW_PHASE_ROOT ? "root"
+                  : (g_stw_soft_phase == GC_STW_PHASE_TERM ? "term" : "?"),
+              g_stw_soft_attempt, missing, targets, parked, os_miss);
+}
+
 static int gc_stw_enter_and_scan_soft(int total_ms) {
     int64_t self = gc_os_tid();
     int round;
     int missing = 0;
+    int parked_now = 0;
     int64_t t0 = gc_mono_ms();
     if (total_ms <= 0) total_ms = GC_STW_TOTAL_MS;
 
@@ -680,8 +738,8 @@ static int gc_stw_enter_and_scan_soft(int total_ms) {
 
         {
             int tgt = 0;
-            int parked = gc_count_parked(snap, nsnap, self, &tgt);
-            missing = (tgt > parked) ? (tgt - parked) : 0;
+            parked_now = gc_count_parked(snap, nsnap, self, &tgt);
+            missing = (tgt > parked_now) ? (tgt - parked_now) : 0;
             targets = tgt;
         }
 
@@ -715,6 +773,11 @@ static int gc_stw_enter_and_scan_soft(int total_ms) {
 
     if (missing != 0 && targets > 0) {
         g_stw_incomplete++;
+        if (g_stw_soft_phase == GC_STW_PHASE_ROOT)
+            g_stw_incomplete_root++;
+        else if (g_stw_soft_phase == GC_STW_PHASE_TERM)
+            g_stw_incomplete_term++;
+        gc_record_stw_incomplete(snap, nsnap, self, targets, parked_now, missing);
         return 0;
     }
     return 1;
@@ -740,7 +803,7 @@ static void gc_worklist_reset(void);
 static void gc_bump_mark_epoch(void);
 
 /* v0.53：终止失败则 abort —— 禁止无限 MARK + 黑分配囤不可达对象 */
-static void gc_abort_mark_cycle(void) {
+static void gc_abort_mark_cycle(int reason) {
     if (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE))
         gc_stw_leave();
     __atomic_store_n(&gc_phase, GC_PHASE_IDLE, __ATOMIC_RELEASE);
@@ -751,6 +814,16 @@ static void gc_abort_mark_cycle(void) {
     gc_mark_major = 1;
     g_collect_want_major = 1;
     g_mark_abort_cycles += 1;
+    if (reason == GC_ABORT_ROOT)
+        g_mark_abort_root += 1;
+    else if (reason == GC_ABORT_TERM)
+        g_mark_abort_term += 1;
+    else if (reason == GC_ABORT_PARK_WD)
+        g_mark_abort_park_wd += 1;
+    hao_trace("gc", "mark_abort reason=%s",
+              reason == GC_ABORT_ROOT ? "root"
+                  : (reason == GC_ABORT_TERM ? "term"
+                         : (reason == GC_ABORT_PARK_WD ? "park_wd" : "?")));
     gc_apply_incomplete_pacing();
 }
 
@@ -1926,10 +1999,12 @@ void gc_collect_inner(char* regs, size_t regs_size) {
          * 旧行为「未齐仍 mark」在 accept/recv 的 os_block 竞态下会漏标 → 回收活对象 → 进程直接退出。
          */
         {
+            g_stw_soft_phase = GC_STW_PHASE_ROOT;
+            g_stw_soft_attempt = 0;
             int root_ok = gc_stw_enter_and_scan_soft(GC_STW_TOTAL_MS);
             gc_scanned_tid_add(self);
             if (!root_ok) {
-                gc_abort_mark_cycle();
+                gc_abort_mark_cycle(GC_ABORT_ROOT);
                 g_collect_c_hi = prev_c_hi;
                 return;
             }
@@ -1948,6 +2023,8 @@ void gc_collect_inner(char* regs, size_t regs_size) {
         int term_ok = 0;
         for (int attempt = 0; attempt < GC_STW_TERM_RETRIES; ++attempt) {
             gc_scanned_tid_clear();
+            g_stw_soft_phase = GC_STW_PHASE_TERM;
+            g_stw_soft_attempt = attempt;
             int soft_ok = gc_stw_enter_and_scan_soft(GC_STW_TERM_TOTAL_MS);
             gc_scanned_tid_add(self);
             gc_seed_roots_and_remset(regs, regs_size);
@@ -1967,7 +2044,7 @@ void gc_collect_inner(char* regs, size_t regs_size) {
         }
         if (!term_ok) {
             /* 禁止无限 MARK 黑囤：作废本轮色，下一轮从根重来 */
-            gc_abort_mark_cycle();
+            gc_abort_mark_cycle(GC_ABORT_TERM);
             g_collect_c_hi = prev_c_hi;
             return;
         }
@@ -2268,7 +2345,7 @@ void hao_gc_clear_finalizer(void* obj) {
 
 int64_t hao_gc_finalizer_runs(void) { return gc_finalizer_runs; }
 
-/* 写入 gc.GcStats：槽 0 vtable；1..19 与 GC.hao 字段声明序一致 */
+/* 写入 gc.GcStats：槽 0 vtable；1..31 与 GC.hao 字段声明序一致（v0.55.52 扩至 31） */
 void hao_gc_stats(void* obj) {
     if (!obj) return;
     int64_t* s = (int64_t*)obj;
@@ -2293,6 +2370,18 @@ void hao_gc_stats(void* obj) {
     s[18] = g_mark_worker_steps;
     s[19] = (int64_t)gc_remset_count; /* v0.55.2 */
     s[20] = g_park_watchdog_trips;    /* v0.55.11：park 超时强行放行 */
+    /* v0.55.52：分相 abort/incomplete + 末次未齐快照 */
+    s[21] = g_stw_incomplete_root;
+    s[22] = g_stw_incomplete_term;
+    s[23] = g_mark_abort_root;
+    s[24] = g_mark_abort_term;
+    s[25] = g_mark_abort_park_wd;
+    s[26] = (int64_t)g_last_stw_phase;
+    s[27] = (int64_t)g_last_stw_attempt;
+    s[28] = (int64_t)g_last_stw_targets;
+    s[29] = (int64_t)g_last_stw_parked;
+    s[30] = (int64_t)g_last_stw_missing;
+    s[31] = (int64_t)g_last_stw_os_block_missing;
     hao_gc_unlock();
 }
 

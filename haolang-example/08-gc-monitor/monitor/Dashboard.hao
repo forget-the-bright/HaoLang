@@ -33,6 +33,18 @@ class GcSnapshot {
     var markWorkerSteps: Long = 0;   // GC 私有 mark worker（v0.54）
     var remsetCount: Long = 0;       // 分代 remset 条目（v0.55.2；仅 minor）
     var parkWatchdogTrips: Long = 0; // park 超时强行放行（v0.55.11）
+    // v0.55.52：分相定位
+    var stwIncompleteRoot: Long = 0;
+    var stwIncompleteTerm: Long = 0;
+    var markAbortRoot: Long = 0;
+    var markAbortTerm: Long = 0;
+    var markAbortParkWd: Long = 0;
+    var lastStwPhase: Long = 0;
+    var lastStwAttempt: Long = 0;
+    var lastStwTargets: Long = 0;
+    var lastStwParked: Long = 0;
+    var lastStwMissing: Long = 0;
+    var lastStwOsBlockMissing: Long = 0;
 
     // ---- CPU / 线程 / 句柄 / 运行时长 ----
     var cpuPercent: Int = 0;         // 0～100；首次采样可能为 0
@@ -45,7 +57,7 @@ class GcSnapshot {
     var usagePct: Int = 0;
     var summary: String = "";
     var note: String = "";
-    var engine: String = "HaoLang GC v3（v0.55.22 invokeObj对标Java Method.invoke）+ os.Process";
+    var engine: String = "HaoLang GC v3（v0.55.52 STW abort 分相定位）+ os.Process";
 
     constructor() {
         this.refresh();
@@ -87,18 +99,34 @@ class GcSnapshot {
         this.markWorkerSteps = g.markWorkerSteps;
         this.remsetCount = g.remsetCount;
         this.parkWatchdogTrips = g.parkWatchdogTrips;
+        this.stwIncompleteRoot = g.stwIncompleteRoot;
+        this.stwIncompleteTerm = g.stwIncompleteTerm;
+        this.markAbortRoot = g.markAbortRoot;
+        this.markAbortTerm = g.markAbortTerm;
+        this.markAbortParkWd = g.markAbortParkWd;
+        this.lastStwPhase = g.lastStwPhase;
+        this.lastStwAttempt = g.lastStwAttempt;
+        this.lastStwTargets = g.lastStwTargets;
+        this.lastStwParked = g.lastStwParked;
+        this.lastStwMissing = g.lastStwMissing;
+        this.lastStwOsBlockMissing = g.lastStwOsBlockMissing;
         this.gcThreads = g.registeredThreads;
         this.summary = $"GC[v3] live={this.liveBytes}B heap={this.heapBytes}B threshold={this.threshold}B"
             + $" allocatedSince={this.allocatedSinceGc}B blocks={this.blockCount}"
             + $" collects={this.collectCount} minor={this.minorCount} major={this.majorCount}"
-            + $" stwIncomplete={this.stwIncomplete} concurrentMark={this.concurrentMarkCycles}"
-            + $" markAssist={this.markAssistSteps} markAbort={this.markAbortCycles}"
+            + $" stwIncomplete={this.stwIncomplete}(root={this.stwIncompleteRoot},term={this.stwIncompleteTerm})"
+            + $" concurrentMark={this.concurrentMarkCycles}"
+            + $" markAssist={this.markAssistSteps}"
+            + $" markAbort={this.markAbortCycles}(root={this.markAbortRoot},term={this.markAbortTerm},parkWd={this.markAbortParkWd})"
             + $" markWorker={this.markWorkerSteps} remset={this.remsetCount}"
-            + $" parkWd={this.parkWatchdogTrips}";
+            + $" parkWd={this.parkWatchdogTrips}"
+            + $" lastStw=phase{this.lastStwPhase}/miss{this.lastStwMissing}/{this.lastStwTargets}/os{this.lastStwOsBlockMissing}";
         if (this.note.length == 0) {
             this.note = "对标说明：工作集/专用内存来自 os.Process；"
                 + "heapBytes=当前堆压；liveBytes=上次成功 major 后存活；"
-                + "stwIncomplete=未齐 park；markAbort=终止未齐 abort；详文 docs/IR与GC契约.md。";
+                + "stwIncomplete/markAbort 同步涨且 abortRoot≈总量 ⇒ 根握手税；"
+                + "parkWd/abortParkWd 涨 ⇒ watchdog；term incomplete≫abort ⇒ 终止重试；"
+                + "详文 docs/IR与GC契约.md。";
         }
         var pct: Int = 0;
         if (this.threshold > 0) {

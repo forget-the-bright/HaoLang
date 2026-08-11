@@ -17,15 +17,16 @@
 | CPU 使用率 | `os.Process.cpuPercent` | 进程 CPU%（按核归一） |
 | 活跃线程数 | `os.Process.threadCount` | `Threads.Count` |
 | GC 注册线程 | `gc.GC.registeredThreads` | （STW 参与线程，额外） |
-| STW incomplete | `gc.GC.stwIncomplete` | 软 STW 未齐 park 计数；终止未齐则 abort MARK（见 `markAbortCycles`） |
-| mark abort | `gc.GC.markAbortCycles` | 终止未齐 abort 次数（v0.53+） |
+| STW incomplete | `gc.GC.stwIncomplete` + Root/Term 分相 | 软 STW 未齐；与 markAbort 同步涨且 abortRoot≈总量 ⇒ 根握手税（工程债） |
+| mark abort | `markAbortCycles` + Root/Term/ParkWd | abort MARK 分相（v0.55.52）；parkWd 涨看 watchdog |
+| last STW snap | `lastStwMissing`/`lastStwOsBlockMissing` | 末次未齐缺几人、其中 os_block 数（定位用） |
 | park watchdog | `parkWatchdogTrips`（stats） | park 超时强行放行次数（v0.55.11；正常应为 0） |
 | 突然全 pending | 进程不退、`parkWd=0` | 查是否为旧 binary；须 **v0.55.12** term-drain 放锁 |
 | 运行时长 | `os.Process.uptimeMs` | 进程存活时间 |
 
 GC（v0.55+）：Hao 帧走 **shadow 精确根**；park 扫 GPR + 有界 C 叶（v0.55.18）；minor 扫栈上 old 的 young 子；晋升挂 remset。协作软 STW + **并发 mark**。`/api/*` 默认短连接。详文 [`docs/IR与GC契约.md`](../../docs/IR与GC契约.md)。
 
-**压测注意**：进程仍在、内存很小、HTTP 一直不返回 → 优先查 `stwIncomplete` / `markAbortCycles` / `parkWatchdogTrips`（GC/STW 楔死），不是 OOM。须用**本机新编** `hao build` + 新 `libhaort.a`，勿用旧 `08-gc-monitor.exe`。
+**压测注意**：进程仍在、内存很小、HTTP 一直不返回 → 优先查分相 `markAbortRoot`/`Term`/`ParkWd` 与 `lastStw*`（GC/STW 楔死），不是 OOM。**两格同步涨且仍在 collect ≠ 必修 bug**（根未齐 abort 是故意的）。须用**本机新编** `hao build` + 新 `libhaort.a`，勿用旧 `08-gc-monitor.exe`。
 
 ## 运行
 
