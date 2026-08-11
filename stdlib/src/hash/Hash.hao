@@ -1,26 +1,81 @@
 package hash;
 
-extern func hao_hash_int(x: Int): Int = "hao_hash_int";
-extern func hao_hash_long(x: Long): Int = "hao_hash_long";
+// float/double 位模式哈希仍走 C（无 Hao 浮点 bitcast）
 extern func hao_hash_float(x: Double): Int = "hao_hash_float";
 extern func hao_hash_f32(x: Float): Int = "hao_hash_f32";
-extern func hao_hash_bool(x: Bool): Int = "hao_hash_bool";
-extern func hao_hash_str(x: String): Int = "hao_hash_str";
 
-func hashOf(x: Int): Int { return hao_hash_int(x); }
-func hashOf(x: UInt): Int { return hao_hash_int(x); }
-func hashOf(x: Long): Int { return hao_hash_long(x); }
-func hashOf(x: ULong): Int { return hao_hash_long(x); }
+// splitmix64 风格混合（v0.56：上移 Hao）
+func mix64(x: Long): Long {
+    var v = x;
+    v = v ^ (v >> 30);
+    v = v * -1085102592571150091; // 0xbf58476d1ce4e5b9
+    v = v ^ (v >> 27);
+    v = v * -7723592293116104311; // 0x94d049bb133111eb
+    v = v ^ (v >> 31);
+    return v;
+}
+
+func mixToInt(x: Long): Int {
+    val m = mix64(x);
+    val i: Int = m;
+    return i;
+}
+
+func hashOf(x: Int): Int {
+    val xl: Long = x;
+    return mixToInt(xl);
+}
+func hashOf(x: UInt): Int {
+    val xi: Int = x;
+    return hashOf(xi);
+}
+func hashOf(x: Long): Int {
+    return mixToInt(x);
+}
+func hashOf(x: ULong): Int {
+    val xl: Long = x;
+    return mixToInt(xl);
+}
 func hashOf(x: Float): Int { return hao_hash_f32(x); }
 func hashOf(x: Double): Int { return hao_hash_float(x); }
-func hashOf(x: Bool): Int { return hao_hash_bool(x); }
-func hashOf(x: Char): Int { return hao_hash_int(x); }
-func hashOf(x: String): Int { return hao_hash_str(x); }
+func hashOf(x: Bool): Int {
+    if (x) { return 1231; }
+    return 1237;
+}
+func hashOf(x: Char): Int {
+    val xi: Int = x;
+    return hashOf(xi);
+}
+func hashOf(x: String): Int {
+    val bytes = hao_str_get_bytes(x);
+    var h: Long = -3750763034362895579; // FNV offset basis
+    var i = 0;
+    while (i < bytes.length) {
+        val b: Int = bytes[i];
+        h = h ^ b;
+        h = h * 1099511628211;
+        i = i + 1;
+    }
+    val out: Int = h;
+    return out;
+}
 func hashOf(x: Object): Int { return x.hashCode(); }
-func hashOf(x: Byte): Int { return hao_hash_int(x); }
-func hashOf(x: SByte): Int { return hao_hash_int(x); }
-func hashOf(x: Short): Int { return hao_hash_int(x); }
-func hashOf(x: UShort): Int { return hao_hash_int(x); }
+func hashOf(x: Byte): Int {
+    val xi: Int = x;
+    return hashOf(xi);
+}
+func hashOf(x: SByte): Int {
+    val xi: Int = x;
+    return hashOf(xi);
+}
+func hashOf(x: Short): Int {
+    val xi: Int = x;
+    return hashOf(xi);
+}
+func hashOf(x: UShort): Int {
+    val xi: Int = x;
+    return hashOf(xi);
+}
 
 func equalsKey(a: Int, b: Int): Bool { return a == b; }
 func equalsKey(a: UInt, b: UInt): Bool { return a == b; }

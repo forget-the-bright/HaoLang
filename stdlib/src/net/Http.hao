@@ -195,8 +195,8 @@ public class Http {
 
     // 单字段头值：禁止任意 CR/LF（防头注入）。多行头块用 isSafeHeaderBlock。
     static func isSafeHeaderValue(s: String): Bool {
-        if (_httpByteIndexOf(s, "\r", 0) >= 0) { return false; }
-        if (_httpByteIndexOf(s, "\n", 0) >= 0) { return false; }
+        if (String.byteIndexOf(s, "\r", 0) >= 0) { return false; }
+        if (String.byteIndexOf(s, "\n", 0) >= 0) { return false; }
         return true;
     }
 
@@ -256,7 +256,7 @@ public class Http {
         var pos = 0;
         val n = _httpByteLen(headers);
         while (pos < n) {
-            var lineEnd = _httpByteIndexOf(headers, "\r\n", pos);
+            var lineEnd = String.byteIndexOf(headers, "\r\n", pos);
             if (lineEnd < 0) { lineEnd = n; }
             val line = _httpByteSlice(headers, pos, lineEnd);
             if (_httpByteLen(line) >= 17 && Http.asciiStartsWithCi(line, "transfer-encoding:")) {
@@ -299,10 +299,10 @@ public class Http {
         val n = _httpByteLen(rawBody);
         val lim = Http.maxBytesLimit;
         while (pos < n && _httpByteLen(out) < lim) {
-            val lineEnd = _httpByteIndexOf(rawBody, "\r\n", pos);
+            val lineEnd = String.byteIndexOf(rawBody, "\r\n", pos);
             if (lineEnd < 0) { break; }
             var sizeTok = _httpByteSlice(rawBody, pos, lineEnd);
-            val semi = _httpByteIndexOf(sizeTok, ";", 0);
+            val semi = String.byteIndexOf(sizeTok, ";", 0);
             if (semi >= 0) { sizeTok = _httpByteSlice(sizeTok, 0, semi); }
             val sz = Http.parseHexLen(String.valueOf(sizeTok).trim());
             if (sz < 0) { break; }
@@ -356,10 +356,10 @@ public class Http {
         var pos = 0;
         val n = _httpByteLen(rawBody);
         while (pos < n) {
-            val lineEnd = _httpByteIndexOf(rawBody, "\r\n", pos);
+            val lineEnd = String.byteIndexOf(rawBody, "\r\n", pos);
             if (lineEnd < 0) { return false; }
             var sizeTok = _httpByteSlice(rawBody, pos, lineEnd);
-            val semi = _httpByteIndexOf(sizeTok, ";", 0);
+            val semi = String.byteIndexOf(sizeTok, ";", 0);
             if (semi >= 0) { sizeTok = _httpByteSlice(sizeTok, 0, semi); }
             val sz = Http.parseHexLen(String.valueOf(sizeTok).trim());
             if (sz < 0) { return false; }
@@ -376,10 +376,10 @@ public class Http {
         var pos = 0;
         val n = _httpByteLen(rawBody);
         while (pos < n) {
-            val lineEnd = _httpByteIndexOf(rawBody, "\r\n", pos);
+            val lineEnd = String.byteIndexOf(rawBody, "\r\n", pos);
             if (lineEnd < 0) { return -1; }
             var sizeTok = _httpByteSlice(rawBody, pos, lineEnd);
-            val semi = _httpByteIndexOf(sizeTok, ";", 0);
+            val semi = String.byteIndexOf(sizeTok, ";", 0);
             if (semi >= 0) { sizeTok = _httpByteSlice(sizeTok, 0, semi); }
             val sz = Http.parseHexLen(String.valueOf(sizeTok).trim());
             if (sz < 0) { return -1; }
@@ -388,7 +388,7 @@ public class Http {
                 // trailers：直到空行 \r\n
                 while (pos <= n) {
                     if (pos >= n) { return pos; }
-                    val te = _httpByteIndexOf(rawBody, "\r\n", pos);
+                    val te = String.byteIndexOf(rawBody, "\r\n", pos);
                     if (te < 0) { return -1; }
                     if (te == pos) { return te + 2; }
                     pos = te + 2;
@@ -406,7 +406,7 @@ public class Http {
     static func completeMessageLen(s: String, readToClose: Bool, sawEof: Bool): Int {
         val n = _httpByteLen(s);
         if (n == 0) { return -1; }
-        val sep = _httpByteIndexOf(s, "\r\n\r\n", 0);
+        val sep = String.byteIndexOf(s, "\r\n\r\n", 0);
         if (sep < 0) {
             if (sawEof && readToClose) { return n; }
             return -1;
@@ -470,7 +470,7 @@ public class Http {
                 return forced2;
             }
             // 已知还差 CL body 时用 recvExact 一次凑满
-            val sep = _httpByteIndexOf(view, "\r\n\r\n", 0);
+            val sep = String.byteIndexOf(view, "\r\n\r\n", 0);
             if (sep >= 0) {
                 val head = _httpByteSlice(view, 0, sep);
                 val cl = Http.contentLengthOf(head);
@@ -533,7 +533,7 @@ public class Http {
         var pos = 0;
         val n = _httpByteLen(headers);
         while (pos < n) {
-            var lineEnd = _httpByteIndexOf(headers, "\r\n", pos);
+            var lineEnd = String.byteIndexOf(headers, "\r\n", pos);
             if (lineEnd < 0) { lineEnd = n; }
             val line = _httpByteSlice(headers, pos, lineEnd);
             val hit = Http.contentLengthOfLine(line);
@@ -555,7 +555,7 @@ public class Http {
 
     static func parseResponse(raw: String): HttpResponse {
         val resp = new HttpResponse();
-        val sep = _httpByteIndexOf(raw, "\r\n\r\n", 0);
+        val sep = String.byteIndexOf(raw, "\r\n\r\n", 0);
         var head = raw;
         var body = "";
         if (sep >= 0) {
@@ -744,11 +744,11 @@ public class HttpServer {
 
     // 自定义头块：禁止 \r\n\r\n 提前结束；每个 LF 须紧跟在 CR 后（防头注入）
     static func isSafeHeaderBlock(h: String): Bool {
-        if (_httpByteIndexOf(h, "\r\n\r\n", 0) >= 0) { return false; }
+        if (String.byteIndexOf(h, "\r\n\r\n", 0) >= 0) { return false; }
         var i = 0;
         val n = _httpByteLen(h);
         while (i < n) {
-            val lf = _httpByteIndexOf(h, "\n", i);
+            val lf = String.byteIndexOf(h, "\n", i);
             if (lf < 0) { break; }
             if (lf == 0) { return false; }
             if (_httpByteSlice(h, lf - 1, lf) != "\r") { return false; }
@@ -759,7 +759,7 @@ public class HttpServer {
 
     static func parseRequest(raw: String): HttpRequest {
         val req = new HttpRequest();
-        val sep = _httpByteIndexOf(raw, "\r\n\r\n", 0);
+        val sep = String.byteIndexOf(raw, "\r\n\r\n", 0);
         var head = raw;
         var body = "";
         if (sep >= 0) {
@@ -799,4 +799,3 @@ public class HttpServer {
 // HTTP 线协议按字节计量（与 HaoString.len / regex 包一致）
 extern func _httpByteLen(s: String): Int = "hao_str_byte_len";
 extern func _httpByteSlice(s: String, start: Int, end: Int): String = "hao_str_byte_slice";
-extern func _httpByteIndexOf(s: String, sub: String, from: Int): Int = "hao_str_byte_index_of";

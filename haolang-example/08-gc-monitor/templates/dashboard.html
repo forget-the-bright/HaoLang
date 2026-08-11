@@ -216,6 +216,18 @@
         <div class="value" id="lastStwPhase">{{lastStwPhase}}</div>
       </div>
       <div class="metric">
+        <div class="label">lastMissTid0<br>末次缺 park 首 tid</div>
+        <div class="value" id="lastMissTid0">{{lastMissTid0}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">lastMissMaxAgeMs<br>缺 park 距上次 SP 最大龄（-1=从未）</div>
+        <div class="value" id="lastMissMaxAgeMs">{{lastMissMaxAgeMs}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">lastFinalizerDiag<br>0无 1活对象 2abort跳过</div>
+        <div class="value" id="lastFinalizerDiag">{{lastFinalizerDiag}}</div>
+      </div>
+      <div class="metric">
         <div class="label">markWorkerSteps<br>GC 私有 mark worker（v0.54）</div>
         <div class="value" id="markWorkerSteps">{{markWorkerSteps}}</div>
       </div>
@@ -267,13 +279,15 @@
      "collectCount","finalizerRuns","finalizerSets","stwIncomplete","stwIncompleteRoot","stwIncompleteTerm",
      "stwMarkAllFallbacks","concurrentMarkCycles","markAssistSteps","markAbortCycles",
      "markAbortRoot","markAbortTerm","markAbortParkWd","lastStwPhase","lastStwOsBlockMissing",
+     "lastMissTid0","lastMissMaxAgeMs","lastFinalizerDiag",
      "markWorkerSteps"].forEach(function (id) {
       document.getElementById(id).textContent = data[id];
     });
     var missEl = document.getElementById("lastStwMissTgt");
     if (missEl) {
       missEl.textContent = String(data.lastStwMissing) + "/" + String(data.lastStwTargets);
-    }    const cpuEl = document.getElementById("cpuPercent");
+    }
+    const cpuEl = document.getElementById("cpuPercent");
     if (data.cpuReady) cpuEl.textContent = data.cpuPercent + "%";
     else cpuEl.textContent = "采样中…";
     document.getElementById("summary").textContent = data.summary;

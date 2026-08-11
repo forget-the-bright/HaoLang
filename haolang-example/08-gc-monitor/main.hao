@@ -42,7 +42,7 @@ func main() {
             if (abort > 128 || inc > 256) { pause = 5000; }
             sleep(pause);
             var timeEnd = time.now();
-            fmt.println($"执行完一次循环造垃圾数据{pause}: 开始时间-{timeBegin.format("yyyy-MM-dd HH:mm:ss")}-结束时间-{timeEnd.format("yyyy-MM-dd HH:mm:ss")}");
+           // fmt.println($"执行完一次循环造垃圾数据{pause}: 开始时间-{timeBegin.format("yyyy-MM-dd HH:mm:ss")}-结束时间-{timeEnd.format("yyyy-MM-dd HH:mm:ss")}");
         }
     });
 

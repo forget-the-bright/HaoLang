@@ -59,12 +59,59 @@ void hao_thread_sleep_ns(int64_t ns) {
 /* ============================================================
  *  线程
  * ============================================================ */
+/*
+ * Win x64：call 前 RSP%16==0，否则 libcmt vsprintf 的 movdqa 会 AV（av_addr=-1）。
+ * 对齐后经直接 call 进 C thunk；thunk 禁止尾调用，保证标准对齐序再间接调 Hao。
+ */
+#if defined(_WIN32) && (defined(__x86_64__) || defined(_M_X64))
+typedef struct HaoWin64Call1 {
+    void (*fn)(void*);
+    void* arg;
+} HaoWin64Call1;
+
+__attribute__((noinline, optnone))
+void hao_runtime_do_call1(void* p) {
+    HaoWin64Call1* c = (HaoWin64Call1*)p;
+    void (*fn)(void*) = c->fn;
+    void* arg = c->arg;
+    if (fn) fn(arg);
+    /* 阻止尾调用优化，确保本帧按 Win64 惯例对齐后再 call */
+    __asm__ __volatile__("" ::: "memory");
+}
+
+__attribute__((noinline))
+static void hao_win64_call1(void (*fn)(void*), void* arg) {
+    HaoWin64Call1 box;
+    box.fn = fn;
+    box.arg = arg;
+    HaoWin64Call1* p = &box;
+    __asm__ __volatile__(
+        "pushq %%rbx\n\t"
+        "movq %%rsp, %%rbx\n\t"
+        "andq $-16, %%rsp\n\t"
+        "subq $32, %%rsp\n\t"
+        "movq %[p], %%rcx\n\t"
+        "callq hao_runtime_do_call1\n\t"
+        "movq %%rbx, %%rsp\n\t"
+        "popq %%rbx\n\t"
+        :
+        : [p] "r"(p)
+        : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11",
+          "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "memory");
+}
+#endif
+
 /* 仅调用闭包；注册/根由调用方管理 */
 static void invoke_closure(void* env) {
     if (!env) return;
     void** e = (void**)env;
     void (*fn)(void*) = (void(*)(void*))e[0];
-    if (fn) fn(env);
+    if (!fn) return;
+#if defined(_WIN32) && (defined(__x86_64__) || defined(_M_X64))
+    hao_win64_call1(fn, env);
+#else
+    fn(env);
+#endif
 }
 
 /* 独立线程入口：已由 start 加根；此处注册线程、执行、去根并注销 */
@@ -76,7 +123,10 @@ static void run_closure_thread(void* env) {
 }
 
 #ifdef _WIN32
-static uint32_t thread_entry(void* arg) { run_closure_thread(arg); return 0; }
+static uint32_t thread_entry(void* arg) {
+    run_closure_thread(arg);
+    return 0;
+}
 #else
 static void* thread_entry(void* arg) { run_closure_thread(arg); return NULL; }
 #endif

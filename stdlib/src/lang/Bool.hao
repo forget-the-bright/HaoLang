@@ -57,11 +57,14 @@ class Boolean {
     }
 
     static func parse(s: String): Bool? {
-        return hao_parse_bool(s);
+        if (s == "true" || s == "TRUE" || s == "True") { return true; }
+        if (s == "false" || s == "FALSE" || s == "False") { return false; }
+        return null;
     }
 
     static func toStr(v: Bool): String {
-        return hao_bool_to_str(v);
+        if (v) { return "true"; }
+        return "false";
     }
 
     // false < true（对齐 Java Boolean.compare）
@@ -87,6 +90,6 @@ class Boolean {
     }
 
     override func toString(): String {
-        return hao_bool_to_str(this.value);
+        return Boolean.toStr(this.value);
     }
 }

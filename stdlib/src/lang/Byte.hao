@@ -40,7 +40,8 @@ class Byte {
     }
 
     static func toStr(v: Byte): String {
-        return hao_int_to_str(v);
+        val i: Int = v;
+        return Integer.toStr(i);
     }
 
     static func compare(a: Byte, b: Byte): Int {
@@ -64,6 +65,6 @@ class Byte {
     }
 
     override func toString(): String {
-        return hao_int_to_str(this.value);
+        return Byte.toStr(this.value);
     }
 }

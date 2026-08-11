@@ -1,11 +1,16 @@
 // HaoLang 标准库 —— reflect 包
-// meta / 槽位用 Long? / [Long]（8 字节），与指针宽及 invoke ABI 一致。
+// meta：NativeHandle 包永生 class meta（drop=NULL）。
+// invoke 槽位仍用 [Long]（8 字节位型），非资源指针。
 package reflect;
 
 import exception;
 
 class Class {
-    var meta: Long?;
+    var meta: NativeHandle;
+
+    constructor() {
+        this.meta = NativeHandle.empty();
+    }
 
     func name(): String {
         return hao_reflect_name(this.meta);
@@ -15,7 +20,7 @@ class Class {
     override func equals(o: Object): Bool {
         if (!(o is Class)) { return false; }
         val c = o as Class;
-        return this.meta == c.meta;
+        return hao_handle_raw_eq(this.meta, c.meta);
     }
     override func hashCode(): Int {
         return hao_reflect_meta_hash(this.meta);
@@ -176,7 +181,7 @@ class Class {
 
     // 类名 → 包路径：demo$web$api$Foo → demo/web/api；main 顶层 → ""
     func packagePath(): String {
-        if (this.meta == null) { return ""; }
+        if (!hao_handle_is_open(this.meta)) { return ""; }
         val n = this.name();
         var last = -1;
         var i = 0;
@@ -199,7 +204,7 @@ class Class {
 
     // 是否落在指定包或其嵌套子包（path 支持 demo/web、demo.web、demo$web$）
     func inPackage(path: String): Bool {
-        if (this.meta == null) { return false; }
+        if (!hao_handle_is_open(this.meta)) { return false; }
         val want = normalizePackagePrefix(path);
         if (want.length == 0) {
             // 空路径：仅 main 包（类名不含 $）
@@ -211,59 +216,77 @@ class Class {
 
     // Java: isAnnotationPresent(Anno.class) — Class 单例 / meta 身份 (v0.50.1)
     func isAnnotationPresent(annoClass: Class): Bool {
-        val wantN = annoClass.meta;
-        if (wantN == null) { return false; }
-        val want = wantN!!;
+        if (!hao_handle_is_open(annoClass.meta)) { return false; }
         val n = this.getAnnotationCount();
         var i = 0;
         while (i < n) {
             val am = hao_reflect_anno_class(this.meta, i);
-            if (am != null && am!! == want) { return true; }
+            if (hao_handle_raw_eq(am, annoClass.meta)) { return true; }
             i += 1;
         }
         return false;
     }
     func getAnnotationValueFor(annoClass: Class): String? {
-        val wantN = annoClass.meta;
-        if (wantN == null) { return null; }
-        val want = wantN!!;
+        if (!hao_handle_is_open(annoClass.meta)) { return null; }
         val n = this.getAnnotationCount();
         var i = 0;
         while (i < n) {
             val am = hao_reflect_anno_class(this.meta, i);
-            if (am != null && am!! == want) { return this.getAnnotationValue(i); }
+            if (hao_handle_raw_eq(am, annoClass.meta)) { return this.getAnnotationValue(i); }
             i += 1;
         }
         return null;
     }
     func isMethodAnnotationPresent(mi: Int, annoClass: Class): Bool {
-        val wantN = annoClass.meta;
-        if (wantN == null) { return false; }
-        val want = wantN!!;
+        if (!hao_handle_is_open(annoClass.meta)) { return false; }
         val n = this.getMethodAnnotationCount(mi);
         var i = 0;
         while (i < n) {
             val am = hao_reflect_method_anno_class(this.meta, mi, i);
-            if (am != null && am!! == want) { return true; }
+            if (hao_handle_raw_eq(am, annoClass.meta)) { return true; }
             i += 1;
         }
         return false;
     }
     func getMethodAnnotationValueFor(mi: Int, annoClass: Class): String? {
-        val wantN = annoClass.meta;
-        if (wantN == null) { return null; }
-        val want = wantN!!;
+        if (!hao_handle_is_open(annoClass.meta)) { return null; }
         val n = this.getMethodAnnotationCount(mi);
         var i = 0;
         while (i < n) {
             val am = hao_reflect_method_anno_class(this.meta, mi, i);
-            if (am != null && am!! == want) { return this.getMethodAnnotationValue(mi, i); }
+            if (hao_handle_raw_eq(am, annoClass.meta)) { return this.getMethodAnnotationValue(mi, i); }
             i += 1;
         }
         return null;
     }
+    // Java Class.isAssignableFrom(other)：other 是 this 或其子类，或实现了 this 接口
     func isAssignableFrom(other: Class): Bool {
-        return hao_reflect_is_assignable(this.meta, other.meta) != 0;
+        if (!hao_handle_is_open(this.meta) || !hao_handle_is_open(other.meta)) {
+            return false;
+        }
+        // 1) other 及父类链：身份等于 this（Class.equals / meta raw_eq）
+        var cur: Class? = other;
+        while (cur != null) {
+            val c = cur!!;
+            if (this.equals(c) || hao_handle_raw_eq(this.meta, c.meta)) {
+                return true;
+            }
+            cur = c.getSuperclass();
+        }
+        // 2) other 及父类链上的接口名 == this.getName()
+        val want = this.getName();
+        cur = other;
+        while (cur != null) {
+            val c = cur!!;
+            var i = 0;
+            val n = c.getInterfaceCount();
+            while (i < n) {
+                if (c.getInterface(i) == want) { return true; }
+                i += 1;
+            }
+            cur = c.getSuperclass();
+        }
+        return false;
     }
     func isInterface(): Bool {
         return hao_reflect_is_interface(this.meta) != 0;
@@ -275,7 +298,7 @@ class Class {
 
     // v0.32：接口名后缀匹配（同注解：短名 / . / $）
     func implementsEnding(shortName: String): Bool {
-        if (this.meta == null) { return false; }
+        if (!hao_handle_is_open(this.meta)) { return false; }
         var i = 0;
         while (i < this.getInterfaceCount()) {
             val iname = this.getInterface(i);
@@ -290,7 +313,7 @@ class Class {
     // v0.32：仅精确包（不含嵌套子包）。inPackage 会匹配子包。
     // 实现：前缀 want 匹配，且 want 之后的类名段不再含 `$`。
     func inPackageExact(path: String): Bool {
-        if (this.meta == null) { return false; }
+        if (!hao_handle_is_open(this.meta)) { return false; }
         val want = normalizePackagePrefix(path);
         val n = this.name();
         if (want.length == 0) {
@@ -309,9 +332,9 @@ class Class {
 // v0.50.1：每类型一个 Class 单例（对齐 Java Class 对象身份）。
 // 正规入口：TypeName.Class / getClass / typeOf / typeAt / classForName。
 // 勿手搓 new Class() 当令牌。
-// 注意：meta 的 Long? 存的是裸 meta 指针（非 hao_box_i64）；勿对 m 做
-// `if (m != null)` 智能转换，否则会按装箱 Long unbox 而崩溃。
-func classOfMeta(m: Long?): Class {
+// meta 为永生静态表包装句柄（hao_handle_wrap，drop=NULL）。
+// 身份比较用 hao_handle_raw_eq，勿比 Handle 对象指针。
+func classOfMeta(m: NativeHandle): Class {
     val existing = hao_reflect_class_mirror(m);
     if (existing != null) {
         return existing!! as Class;
@@ -427,44 +450,44 @@ func findTypesExact(packagePath: String, pred: Func<Class, Bool>): [Class] {
     return findTypes(packagePath, false, pred);
 }
 
-extern func hao_reflect_getclass(o: Object): Long? = "hao_reflect_getclass";
+extern func hao_reflect_getclass(o: Object): NativeHandle = "hao_reflect_getclass";
 extern func hao_reflect_type_count(): Int = "hao_reflect_type_count";
-extern func hao_reflect_type_at(i: Int): Long? = "hao_reflect_type_at";
-extern func hao_reflect_new_instance(m: Long?): Object? = "hao_reflect_new_instance";
-extern func hao_reflect_new_instance_args(m: Long?, args: [Long]): Object? = "hao_reflect_new_instance_args";
-extern func hao_reflect_has_factory(m: Long?): Int = "hao_reflect_has_factory";
-extern func hao_reflect_ctor_param_count(m: Long?): Int = "hao_reflect_ctor_param_count";
-extern func hao_reflect_ctor_param_type(m: Long?, i: Int): String = "hao_reflect_ctor_param_type";
-extern func hao_reflect_name(m: Long?): String = "hao_reflect_name";
-extern func hao_reflect_super(m: Long?): String = "hao_reflect_super";
-extern func hao_reflect_is_abstract(m: Long?): Int = "hao_reflect_is_abstract";
-extern func hao_reflect_is_enum(m: Long?): Int = "hao_reflect_is_enum";
-extern func hao_reflect_iface_count(m: Long?): Int = "hao_reflect_iface_count";
-extern func hao_reflect_iface_at(m: Long?, i: Int): String = "hao_reflect_iface_at";
-extern func hao_reflect_field_count(m: Long?): Int = "hao_reflect_field_count";
-extern func hao_reflect_field_name(m: Long?, i: Int): String = "hao_reflect_field_name";
-extern func hao_reflect_field_type(m: Long?, i: Int): String = "hao_reflect_field_type";
-extern func hao_reflect_method_count(m: Long?): Int = "hao_reflect_method_count";
-extern func hao_reflect_method_name(m: Long?, i: Int): String = "hao_reflect_method_name";
-extern func hao_reflect_method_param_count(m: Long?, name: String): Int = "hao_reflect_method_param_count";
-extern func hao_reflect_anno_count(m: Long?): Int = "hao_reflect_anno_count";
-extern func hao_reflect_anno_name(m: Long?, i: Int): String = "hao_reflect_anno_name";
-extern func hao_reflect_anno_value(m: Long?, i: Int): String = "hao_reflect_anno_value";
-extern func hao_reflect_method_anno_count(m: Long?, mi: Int): Int = "hao_reflect_method_anno_count";
-extern func hao_reflect_method_anno_name(m: Long?, mi: Int, ai: Int): String = "hao_reflect_method_anno_name";
-extern func hao_reflect_method_anno_value(m: Long?, mi: Int, ai: Int): String = "hao_reflect_method_anno_value";
-extern func hao_reflect_field_get(m: Long?, o: Object, name: String): String? = "hao_reflect_field_get";
-extern func hao_reflect_field_get_obj(m: Long?, o: Object, name: String): Object? = "hao_reflect_field_get_obj";
-extern func hao_reflect_field_set(m: Long?, o: Object, name: String, value: String): Int = "hao_reflect_field_set";
-extern func hao_reflect_method_return_type(m: Long?, name: String): String = "hao_reflect_method_return_type";
+extern func hao_reflect_type_at(i: Int): NativeHandle = "hao_reflect_type_at";
+extern func hao_reflect_new_instance(m: NativeHandle): Object? = "hao_reflect_new_instance";
+extern func hao_reflect_new_instance_args(m: NativeHandle, args: [Long]): Object? = "hao_reflect_new_instance_args";
+extern func hao_reflect_has_factory(m: NativeHandle): Int = "hao_reflect_has_factory";
+extern func hao_reflect_ctor_param_count(m: NativeHandle): Int = "hao_reflect_ctor_param_count";
+extern func hao_reflect_ctor_param_type(m: NativeHandle, i: Int): String = "hao_reflect_ctor_param_type";
+extern func hao_reflect_name(m: NativeHandle): String = "hao_reflect_name";
+extern func hao_reflect_super(m: NativeHandle): String = "hao_reflect_super";
+extern func hao_reflect_is_abstract(m: NativeHandle): Int = "hao_reflect_is_abstract";
+extern func hao_reflect_is_enum(m: NativeHandle): Int = "hao_reflect_is_enum";
+extern func hao_reflect_iface_count(m: NativeHandle): Int = "hao_reflect_iface_count";
+extern func hao_reflect_iface_at(m: NativeHandle, i: Int): String = "hao_reflect_iface_at";
+extern func hao_reflect_field_count(m: NativeHandle): Int = "hao_reflect_field_count";
+extern func hao_reflect_field_name(m: NativeHandle, i: Int): String = "hao_reflect_field_name";
+extern func hao_reflect_field_type(m: NativeHandle, i: Int): String = "hao_reflect_field_type";
+extern func hao_reflect_method_count(m: NativeHandle): Int = "hao_reflect_method_count";
+extern func hao_reflect_method_name(m: NativeHandle, i: Int): String = "hao_reflect_method_name";
+extern func hao_reflect_method_param_count(m: NativeHandle, name: String): Int = "hao_reflect_method_param_count";
+extern func hao_reflect_anno_count(m: NativeHandle): Int = "hao_reflect_anno_count";
+extern func hao_reflect_anno_name(m: NativeHandle, i: Int): String = "hao_reflect_anno_name";
+extern func hao_reflect_anno_value(m: NativeHandle, i: Int): String = "hao_reflect_anno_value";
+extern func hao_reflect_method_anno_count(m: NativeHandle, mi: Int): Int = "hao_reflect_method_anno_count";
+extern func hao_reflect_method_anno_name(m: NativeHandle, mi: Int, ai: Int): String = "hao_reflect_method_anno_name";
+extern func hao_reflect_method_anno_value(m: NativeHandle, mi: Int, ai: Int): String = "hao_reflect_method_anno_value";
+extern func hao_reflect_field_get(m: NativeHandle, o: Object, name: String): String? = "hao_reflect_field_get";
+extern func hao_reflect_field_get_obj(m: NativeHandle, o: Object, name: String): Object? = "hao_reflect_field_get_obj";
+extern func hao_reflect_field_set(m: NativeHandle, o: Object, name: String, value: String): Int = "hao_reflect_field_set";
+extern func hao_reflect_method_return_type(m: NativeHandle, name: String): String = "hao_reflect_method_return_type";
 
-extern func hao_reflect_invoke(m: Long?, o: Object, name: String, args: [Long]): Long = "hao_reflect_invoke";
-extern func hao_reflect_invoke_obj(m: Long?, o: Object, name: String, args: [Long]): Object? = "hao_reflect_invoke_obj";
-extern func hao_reflect_invoke_str(m: Long?, o: Object, name: String, args: [Long]): String? = "hao_reflect_invoke_str";
-extern func hao_reflect_invoke_bool(m: Long?, o: Object, name: String, args: [Long]): Bool = "hao_reflect_invoke_bool";
-extern func hao_reflect_invoke_double(m: Long?, o: Object, name: String, args: [Long]): Double = "hao_reflect_invoke_double";
-extern func hao_reflect_invoke_float(m: Long?, o: Object, name: String, args: [Long]): Float = "hao_reflect_invoke_float";
-extern func hao_reflect_invoke_void(m: Long?, o: Object, name: String, args: [Long]): Unit = "hao_reflect_invoke_void";
+extern func hao_reflect_invoke(m: NativeHandle, o: Object, name: String, args: [Long]): Long = "hao_reflect_invoke";
+extern func hao_reflect_invoke_obj(m: NativeHandle, o: Object, name: String, args: [Long]): Object? = "hao_reflect_invoke_obj";
+extern func hao_reflect_invoke_str(m: NativeHandle, o: Object, name: String, args: [Long]): String? = "hao_reflect_invoke_str";
+extern func hao_reflect_invoke_bool(m: NativeHandle, o: Object, name: String, args: [Long]): Bool = "hao_reflect_invoke_bool";
+extern func hao_reflect_invoke_double(m: NativeHandle, o: Object, name: String, args: [Long]): Double = "hao_reflect_invoke_double";
+extern func hao_reflect_invoke_float(m: NativeHandle, o: Object, name: String, args: [Long]): Float = "hao_reflect_invoke_float";
+extern func hao_reflect_invoke_void(m: NativeHandle, o: Object, name: String, args: [Long]): Unit = "hao_reflect_invoke_void";
 
 // 实参编组助手（槽内仍是 Long）；返回值请走 invokeObj，勿长期用 objOf 藏指针
 extern func ptrOfStr(s: String): Long = "hao_reflect_ptrtoint";
@@ -476,11 +499,10 @@ extern func bitsDbl(i: Long): Double = "hao_reflect_bits_dbl";
 extern func fltBits(f: Float): Long = "hao_reflect_flt_bits";
 extern func bitsFlt(i: Long): Float = "hao_reflect_bits_flt";
 
-extern func hao_reflect_anno_class(m: Long?, i: Int): Long? = "hao_reflect_anno_class";
-extern func hao_reflect_method_anno_class(m: Long?, mi: Int, ai: Int): Long? = "hao_reflect_method_anno_class";
-extern func hao_reflect_is_assignable(a: Long?, b: Long?): Int = "hao_reflect_is_assignable";
-extern func hao_reflect_is_interface(m: Long?): Int = "hao_reflect_is_interface";
-extern func hao_reflect_is_annotation(m: Long?): Int = "hao_reflect_is_annotation";
-extern func hao_reflect_meta_hash(m: Long?): Int = "hao_reflect_meta_hash";
-extern func hao_reflect_class_mirror(m: Long?): Object? = "hao_reflect_class_mirror";
-extern func hao_reflect_set_class_mirror(m: Long?, obj: Object): Object = "hao_reflect_set_class_mirror";
+extern func hao_reflect_anno_class(m: NativeHandle, i: Int): NativeHandle = "hao_reflect_anno_class";
+extern func hao_reflect_method_anno_class(m: NativeHandle, mi: Int, ai: Int): NativeHandle = "hao_reflect_method_anno_class";
+extern func hao_reflect_is_interface(m: NativeHandle): Int = "hao_reflect_is_interface";
+extern func hao_reflect_is_annotation(m: NativeHandle): Int = "hao_reflect_is_annotation";
+extern func hao_reflect_meta_hash(m: NativeHandle): Int = "hao_reflect_meta_hash";
+extern func hao_reflect_class_mirror(m: NativeHandle): Object? = "hao_reflect_class_mirror";
+extern func hao_reflect_set_class_mirror(m: NativeHandle, obj: Object): Object = "hao_reflect_set_class_mirror";

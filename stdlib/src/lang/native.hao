@@ -3,32 +3,14 @@
 // ============================================================
 package lang;
 
-extern func hao_int_to_str(v: Int): String = "hao_int_to_str";
-extern func hao_long_to_str(v: Long): String = "hao_long_to_str";
-extern func hao_uint_to_str(v: UInt): String = "hao_uint_to_str";
-extern func hao_ulong_to_str(v: ULong): String = "hao_ulong_to_str";
 extern func hao_float_to_str(v: Float): String = "hao_float_to_str";
 extern func hao_double_to_str(v: Double): String = "hao_double_to_str";
-extern func hao_bool_to_str(v: Bool): String = "hao_bool_to_str";
-extern func hao_char_to_str(v: Char): String = "hao_char_to_str";
-extern func hao_parse_int(s: String): Int? = "hao_parse_int";
-extern func hao_parse_long(s: String): Long? = "hao_parse_long";
-extern func hao_parse_uint(s: String): UInt? = "hao_parse_uint";
-extern func hao_parse_ulong(s: String): ULong? = "hao_parse_ulong";
 extern func hao_parse_float(s: String): Float? = "hao_parse_float";
 extern func hao_parse_double(s: String): Double? = "hao_parse_double";
-extern func hao_parse_bool(s: String): Bool? = "hao_parse_bool";
 extern func hao_str_len(s: String): Long = "hao_str_len";
-extern func hao_str_is_empty(s: String): Bool = "hao_str_is_empty";
-extern func hao_str_substring(s: String, start: Int, end: Int): String = "hao_str_substring";
-extern func hao_str_index_of(s: String, sub: String): Int = "hao_str_index_of";
-extern func hao_str_index_of_from(s: String, sub: String, from: Int): Int = "hao_str_index_of_from";
-extern func hao_str_last_index_of(s: String, sub: String): Int = "hao_str_last_index_of";
-extern func hao_str_contains(s: String, sub: String): Bool = "hao_str_contains";
-extern func hao_str_starts_with(s: String, prefix: String): Bool = "hao_str_starts_with";
-extern func hao_str_ends_with(s: String, suffix: String): Bool = "hao_str_ends_with";
+extern func hao_str_byte_len(s: String): Int = "hao_str_byte_len";
+extern func hao_str_byte_of_cp(s: String, cpIdx: Int): Int = "hao_str_byte_of_cp";
+extern func hao_str_byte_slice(s: String, start: Int, end: Int): String = "hao_str_byte_slice";
 extern func hao_str_char_at(s: String, i: Long): Char = "hao_str_char_at";
-extern func hao_str_trim(s: String): String = "hao_str_trim";
-extern func hao_str_to_upper(s: String): String = "hao_str_to_upper";
-extern func hao_str_to_lower(s: String): String = "hao_str_to_lower";
-extern func hao_str_compare(a: String, b: String): Int = "hao_str_compare";
+extern func hao_str_get_bytes(s: String): [Byte] = "hao_str_get_bytes";
+extern func hao_str_from_byte_arr(arr: [Byte]): String = "hao_str_from_byte_arr";

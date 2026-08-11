@@ -5,25 +5,19 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.55.52**（定位发现十八期：STW abort 分相定位；软 STW 工程债仍开）
-- 测试基线：`test/suite` **1014** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.55.52
+- 当前版本：**v0.56.2**（P5 + IR↔Handle 同步门禁；套件基线 1027）
+- 测试基线：`test/suite` **1027** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` 28/28；`hao version` = 0.56.2
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
-- **下一批（默认）**：扩 IROps（cast/gep/select）清 Expr 残留——见 [`记忆文档.md`](记忆文档.md) 第 10 章
+- **下一批（默认）**：IR concat epic / miss tid / 功能轨——见 [`记忆文档.md`](记忆文档.md) 第 10 章
+- **P5 独立冒烟 + IR 同步门禁**：`powershell -File script/win/p5_smoke.ps1` → `P5_SMOKE+IR_SYNC OK`
 
 ---
 
 ## 文档怎么用
 
-| 文档 | 给谁 | 写什么 |
-|------|------|--------|
-| [`README.md`](README.md)（本文件） | 用户 | 介绍、快速开始、命令表、限制摘要、构建入口（详文链 docs） |
-| [`docs/hao命令.md`](docs/hao命令.md) | 用户 | **`hao` 命令详解**：build/run/mod/test/fmt…；**包管理**参数/环境变量/生效方式；`hao test` 对标 `go test` |
-| [`docs/hao语法.md`](docs/hao语法.md) | 用户 | **语法与语义说明**（原理、限制）；对标 Go / Java / C# |
-| [`记忆文档.md`](记忆文档.md) | 接手 AI | **工作规则**、设计决策摘要、代码地图、下一批 |
-| [`docs/IR与GC契约.md`](docs/IR与GC契约.md) | 改 IRGen / GC | **埋点、流程、规则、指标**（GC 权威详文） |
-| [`docs/项目时间线/`](docs/项目时间线/索引.md) | 查历史 | 各版本做了什么（按十位合订，如 `0.20.*`～`0.29.*`） |
-| [`docs/坑债.md`](docs/坑债.md) | 排障 / 清债 | 踩坑表 + 将就债 |
-| [`docs/文档治理.md`](docs/文档治理.md) | 写文档时 | 职责边界、批末写哪里、禁止事项 |
+完整职责地图、批末写哪里、禁止事项：**仅**见 [`docs/文档治理.md`](docs/文档治理.md)。
+
+常用入口：[`docs/hao命令.md`](docs/hao命令.md)（CLI/包管理）· [`docs/hao语法.md`](docs/hao语法.md)（语义）· [`docs/类型属性.md`](docs/类型属性.md)（值/引用/GC 属性）· [`记忆文档.md`](记忆文档.md)（规则/下一批）· [`docs/项目时间线/索引.md`](docs/项目时间线/索引.md)（历史）· [`docs/坑债.md`](docs/坑债.md)（排障）· [`docs/IR与GC契约.md`](docs/IR与GC契约.md)（GC 实现）。
 
 **贡献者硬性约定**（全文见记忆文档第 1 章）：全程中文；测试绿后立刻按文档治理更新；改源码先 `.bak`；不做将就。
 
@@ -58,7 +52,7 @@
 | 10 | 自举 | ⬜ 待开始 |
 
 **已完成的里程碑**（详见 [`docs/项目时间线/`](docs/项目时间线/索引.md)）：
-… → **v0.48.0** `HAO_REPO` → **v0.49.0** Web 补全（当时基线 **972**，历史；当前验收见抬头 **1011**）。
+… → **v0.48.0** `HAO_REPO` → **v0.49.0** Web 补全（当时基线 **972**，历史；当前验收见抬头基线）。
 
 ---
 
@@ -201,7 +195,7 @@ bash script/test.sh --rebuild-all   # 强制全量重编（改编译器/运行�
 powershell -ExecutionPolicy Bypass -File script\win\negcheck.ps1   # 反向：须 28/28 编译拒绝
 ```
 
-套件共 **1011** 行 stdout，全部通过。改 stdlib / 语法后务必 `--rebuild-all`（增量不查 stdlib `.hao` mtime）。
+套件共 **1015** 行 stdout，全部通过。改 stdlib / 语法后务必 `--rebuild-all`（增量不查 stdlib `.hao` mtime）。
 
 **做新特性的工作流**：写单文件临时验证 → 合并进 `test/suite/` → 归档到 `test/oldcase/`。套件文件与覆盖面见目录 `test/suite/`（不必在 README 维护长表）。
 
@@ -271,7 +265,7 @@ hao build test\hello.hao --target linux-amd64 -o hello
 ├── haolang-example/        **用户向示例库**（hello / 特性 / 多文件 / Web / 项目 / 测试）
 ├── 记忆文档.md             AI 工作规则与设计决策（权威）
 ├── test/
-│   ├── suite/              多文件集成套件（基线 1011 行；含 demo/web、corp 多包）
+│   ├── suite/              多文件集成套件（基线见抬头；含 demo/web、corp 多包）
 │   ├── oldcase/            归档旧单文件（net.hao 等可专项冒烟）
 │   └── syntax.hao          语法解析覆盖（只 parse）
 ├── lib/                    外部依赖与工具链（LLVM/ANTLR/sysroot/win CRT）
@@ -322,7 +316,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 ## 十一、已知限制
 
 
-- GC（**v0.55.10**）：可达性主路径已交付；concurrent sweep 为停顿排期。详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)。
+- GC：可达性主路径已交付；concurrent sweep 为停顿排期。能力面见抬头版本；详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)。
 - 已有真正 **`Byte`（0～255）**、**`Char`（Unicode 码点 i32）** 与紧凑数组；String = `ptr`→`HaoString{len,cap,data[]}`，`.length`/`s[i]` 按码点。
 - **泛型接口已实现（v0.18.0）**：`Iterable<T>`/`Iterator<T>`；`toArray()` 仍作兜底。
 - **反射**：类型自省 + 字段读写 + 注解（含 value 等参数）+ **方法 invoke**（含 `invokeFloat`）已有；运行时动态定义类/成员需 VM，后续。
@@ -364,8 +358,8 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | **v0.55.52** 定位十八期；**v0.55.51** 定位十七期；**v0.55.50** 定位十六期；**v0.55.49** 定位十五期；**v0.55.48** 定位十四期；**v0.55.47** 定位十三期；**v0.55.46** 定位十二期；**v0.55.45** 定位十一期；**v0.55.44** 定位十期 |
-| 🔥 **下一批（默认开干）** | 扩 IROps（cast/gep/select）清 Expr 残留（记忆文档 §I） |
+| ✅ 已完成 | **v0.55.56** 文档全局治理；**v0.55.55** monitor 50RPS CRT；**v0.55.54** monitor AV 栈对齐；**v0.55.53** 定位十九期；**v0.55.52** 定位十八期；**v0.55.51** 定位十七期；**v0.55.50** 定位十六期 |
+| 🔥 **下一批（默认开干）** | 据 miss tid 收握手税 / 扩 IROps（cast/gep/select）清 Expr 残留（记忆文档 §I） |
 | 其后 | I0/I3/I4 dbg（挂 IROps）→ Sema/作用域机（后置）→ select / sweep → 自举 |
 
 实现步骤见 [`记忆文档.md` 第 10 章](记忆文档.md)；历史见 [`docs/项目时间线/`](docs/项目时间线/索引.md)。

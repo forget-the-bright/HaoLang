@@ -27,11 +27,66 @@ class Long {
     }
 
     static func parse(s: String): Long? {
-        return hao_parse_long(s);
+        if (s.length == 0) { return null; }
+        var i = 0;
+        var neg = false;
+        if (s[0] == '-') {
+            neg = true;
+            i = 1;
+            if (s.length == 1) { return null; }
+        } else if (s[0] == '+') {
+            i = 1;
+            if (s.length == 1) { return null; }
+        }
+        var acc: Long = 0;
+        var any = false;
+        while (i < s.length) {
+            val c = s[i];
+            if (c < '0' || c > '9') { return null; }
+            val d: Int = c - 48;
+            // 溢出：acc > MAX/10 或 ==MAX/10 且 digit 过大
+            if (!neg) {
+                if (acc > Long.MAX_VALUE / 10) { return null; }
+                if (acc == Long.MAX_VALUE / 10 && d > 7) { return null; }
+                acc = acc * 10 + d;
+            } else {
+                if (acc > Long.MAX_VALUE / 10) { return null; }
+                if (acc == Long.MAX_VALUE / 10) {
+                    if (d > 8) { return null; }
+                    if (d == 8) {
+                        // 仅允许完整 MIN：-9223372036854775808
+                        if (i + 1 != s.length) { return null; }
+                        return Long.MIN_VALUE;
+                    }
+                }
+                acc = acc * 10 + d;
+            }
+            any = true;
+            i = i + 1;
+        }
+        if (!any) { return null; }
+        if (neg) { return 0 - acc; }
+        return acc;
     }
 
     static func toStr(v: Long): String {
-        return hao_long_to_str(v);
+        if (v == 0) { return "0"; }
+        if (v == Long.MIN_VALUE) { return "-9223372036854775808"; }
+        var neg = false;
+        var x = v;
+        if (v < 0) {
+            neg = true;
+            x = 0 - x;
+        }
+        var r = "";
+        while (x > 0) {
+            val d: Int = x % 10;
+            val ch: Char = 48 + d;
+            r = Character.toStr(ch) + r;
+            x = x / 10;
+        }
+        if (neg) { return "-" + r; }
+        return r;
     }
 
     static func compare(a: Long, b: Long): Int {
@@ -45,7 +100,6 @@ class Long {
     }
 
     override func hashCode(): Int {
-        // 与 hash.hashOf(Long) 同算法（splitmix 低 32 位）
         return hash.hashOf(this.value);
     }
 
@@ -56,6 +110,6 @@ class Long {
     }
 
     override func toString(): String {
-        return hao_long_to_str(this.value);
+        return Long.toStr(this.value);
     }
 }

@@ -1,9 +1,10 @@
 # HaoLang 语言语法与语义说明
 
 > **读者**：语言使用者、从 Go / Java / C# 迁移的开发者  
-> **版本**：随根目录 `VERSION`（当前 **0.55.10**）；能力面见 [`../记忆文档.md`](../记忆文档.md) 第 3 章；GC 详文 [`IR与GC契约.md`](IR与GC契约.md)  
+> **版本**：随根目录 `VERSION`；能力面见 [`../记忆文档.md`](../记忆文档.md) 第 3 章；GC 详文 [`IR与GC契约.md`](IR与GC契约.md)  
 > **从哪进来**：项目首页 [`../README.md`](../README.md) 第四节（摘要）链到本文；命令 / 包管理见 [`hao命令.md`](hao命令.md)。  
 > **本文侧重**：规则、原理、限制与对标 Go / Java / C#（**不写**完整 CLI）。  
+> **类型生命周期属性表**（GcManaged / IsReference / …）：[`类型属性.md`](类型属性.md)。  
 > **反向门禁**：`script/win/negcheck.ps1`（须 28/28）。设计决策见 [`记忆文档.md`](../记忆文档.md) 第 5 章；特性/库速查见第 3～4 章。
 
 ---
@@ -15,7 +16,7 @@ HaoLang（好语言）是**静态类型、编译至原生机器码**的语言：
 | 维度 | 选择 |
 |------|------|
 | 执行模型 | AOT → LLVM IR → clang/lld → 单文件原生可执行文件 |
-| 内存 | 自带 GC（v0.55.10：可达性主路径 + while/for 提升 + remset 仅 minor + 精确根/spill/块尾/`?.`/`??`/装箱 + 皮带成对 + 诚实双轨 + 混合屏障 + mark worker；详文 [`IR与GC契约.md`](IR与GC契约.md)） |
+| 内存 | 自带 GC（可达性主路径 + 精确根/spill/皮带 + 混合屏障 + 软 STW + mark worker；详文 [`IR与GC契约.md`](IR与GC契约.md)；能力面随 `VERSION`） |
 | 包模型 | **目录即包**（Go 风格），清单用 `haoproject.json` |
 | 并发关键字 | **`haoroutine`**（禁止称 goroutine） |
 | 泛型 | **单态化**（C++/Rust 路线，非 JVM 擦除） |
@@ -79,6 +80,25 @@ func main(args: [String]): Int { return 0; }
 
 ## 4. 类型系统
 
+### 4.0 类型生命周期分类（值 / 引用 / 裸指针）
+
+语言在**生命周期与 GC**上固定三类（详表见 [`类型属性.md`](类型属性.md)）：
+
+| 分类 | 语言例子 | 要点 |
+|------|----------|------|
+| **值类型** | `Int`/`Long`/`Bool`/`Char`/`Float`… | 复制即独立；赋值不写屏障；非堆指针 |
+| **引用类型** | `String`、`[T]`、`class`、`interface`、`Func` | 语言值是托管堆指针；局部挂根；堆写须屏障 |
+| **原生不安全指针** | （无正式一等类型；目标为句柄内藏针） | **不**参与 GC；禁止出 FFI 桥；见类型属性表 §4～§5 |
+
+补充（易混点）：
+
+- **`String`** 是引用类型，不是值类型；`String?` 的 null 是指针 0。  
+- **`[T]`**：数组**对象**永远是引用；元素是值还是引用取决于 `T`（对标 Java `int[]` / `String[]`）。  
+- **值类型 `T?`（如 `Int?`）**：语义是可空值，实现装箱进堆（GcManaged），**语言分类上仍不是引用类型**。  
+- **FFI**：C 字符串须拷贝为 Hao `String`；C 资源指针须 **`NativeHandle`**（已落地：fs/net/regex）——见 [`方法论/FFI与运行时分层隔离.md`](方法论/FFI与运行时分层隔离.md)。
+
+完整对照 `TypeKind`、隐式判定 vs 一等属性、去 C 化路线：**仅** [`类型属性.md`](类型属性.md)。
+
 ### 4.1 内建数值与逻辑
 
 | 类型 | 位宽/表示 | 有无符号 | 备注 |
@@ -92,7 +112,7 @@ func main(args: [String]): Int { return 0; }
 | `Float` / `Double` | f32 / f64 | | |
 | `Bool` | **存 i8（0/1）** | | 条件用 i1；**勿当 C 的 1-bit 存储模型理解** |
 | `Char` | i32 码点 | | 与 Int 同宽但语义不同；`println` 有专用重载 |
-| `String` | ptr → 堆头 | | `HaoString{len,cap,data[]}`；`.length`/`[i]` 为**码点** |
+| `String` | ptr → 堆头 | | 头+`[Byte]` UTF-8；`.length`/`[i]` 码点；`byteLength`/`getBytes` |
 | `Unit` | （无值） | | 类似 void / Go 的无返回 |
 
 **原理要点**
@@ -154,6 +174,8 @@ val forced = s!!;          // null → panic
 | 概念 | Hao | Go | Java | C# |
 |------|-----|-----|------|-----|
 | 默认整数 | `Int` (32) | `int` (平台)/显式 | `int` | `int` |
+| 值 / 引用 | 值类型 vs 引用（§4.0）；无正式裸指针类型 | 值语义为主 + 指针显式 | 原始类型 vs 引用类型 | 值类型 vs 引用类型 |
+| `int` / `String` / `int[]` | `Int` / `String` / `[Int]`（数组对象是引用） | `int` / `string` / `[]int` | `int` / `String` / `int[]` | `int` / `string` / `int[]` |
 | 字符串长度 | **码点** | 字节（`len`）/ rune | UTF-16 code unit | UTF-16 |
 | 可空 | `T?` 一等 | 指针 / 多返回 | 引用默认可 null + Optional | `T?`（可空值类型/引用注解） |
 | 装箱 | 显式包装 / `T?` | 少用装箱 | 自动装箱 | 装箱+可空 |
@@ -570,7 +592,7 @@ extern func ntohs(x: Int): Int = "ntohs" @link("ws2_32");
 6. **无** `i128`/`u128`；对象字段槽仍偏宽（非紧凑打包）。  
 7. **Map 满表**可抛异常；注意 `growthEnabled`。  
 8. **跨包 `internal` 必拒**。  
-9. **String 下标/长度是码点**；HTTP `Content-Length` 等按 UTF-8 **字节**（库内已区分）。  
+9. **String 下标/长度是码点**；字节数用 `byteLength()` / `getBytes()`；HTTP `Content-Length` 等按 UTF-8 **字节**（库内已区分）。  
 10. **发行**须带齐 stdlib 与 llvm/sysroot，不能只拷编译器。
 
 完整限制摘要：README「已知限制」+ 记忆文档第 9 章；踩坑：[`坑债.md`](坑债.md)。

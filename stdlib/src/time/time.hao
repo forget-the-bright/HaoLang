@@ -1,23 +1,175 @@
 // HaoLang 标准库 —— time 包
 // 时间戳为 Unix 纳秒（Long）；时区偏移为秒（Int）。
+// 字段/格式化：Hao 民用历（无 gmtime）；时钟底座仍走 C。
 package time;
 
 class Time {
     var ts: Long = 0;
     var offset: Int = 0;
 
-    func getYear(): Int { return hao_time_field(this.ts, this.offset, 0); }
-    func getMonth(): Int { return hao_time_field(this.ts, this.offset, 1); }
-    func getDay(): Int { return hao_time_field(this.ts, this.offset, 2); }
-    func getHour(): Int { return hao_time_field(this.ts, this.offset, 3); }
-    func getMinute(): Int { return hao_time_field(this.ts, this.offset, 4); }
-    func getSecond(): Int { return hao_time_field(this.ts, this.offset, 5); }
-    func getWeekday(): Int { return hao_time_field(this.ts, this.offset, 6); }
-    func getDayOfYear(): Int { return hao_time_field(this.ts, this.offset, 7); }
+    // 本地秒：ts/1e9 + offset（Int→Long 显式加宽）
+    func localSec(): Long {
+        val offL: Long = this.offset;
+        return this.ts / 1000000000 + offL;
+    }
+
+    // 自 Unix 纪元起的整天数（负时向 -∞ 取整；/ 为向零时用 (sec-86399)/86400）
+    func epochDay(): Long {
+        val sec = this.localSec();
+        if (sec >= 0) { return sec / 86400; }
+        return (sec - 86399) / 86400;
+    }
+
+    // Howard Hinnant civil_from_days → 年/月/日写入 out[0..2]
+    func fillCivil(out: [Int]) {
+        var z = this.epochDay() + 719468;
+        var era: Long = 0;
+        if (z >= 0) { era = z / 146097; }
+        else { era = (z - 146096) / 146097; }
+        val doe: Long = z - era * 146097;
+        val yoe: Long = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        var y: Long = yoe + era * 400;
+        val doy: Long = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        val mp: Long = (5 * doy + 2) / 153;
+        val d: Long = doy - (153 * mp + 2) / 5 + 1;
+        var m: Long = 0;
+        if (mp < 10) { m = mp + 3; } else { m = mp - 9; }
+        if (m <= 2) { y = y + 1; }
+        val yi: Int = y;
+        val mi: Int = m;
+        val di: Int = d;
+        out[0] = yi;
+        out[1] = mi;
+        out[2] = di;
+    }
+
+    func sod(): Long {
+        val sec = this.localSec();
+        var rem: Long = sec % 86400;
+        if (rem < 0) { rem = rem + 86400; }
+        return rem;
+    }
+
+    func getYear(): Int {
+        var a: [Int] = [0, 0, 0];
+        this.fillCivil(a);
+        return a[0];
+    }
+    func getMonth(): Int {
+        var a: [Int] = [0, 0, 0];
+        this.fillCivil(a);
+        return a[1];
+    }
+    func getDay(): Int {
+        var a: [Int] = [0, 0, 0];
+        this.fillCivil(a);
+        return a[2];
+    }
+    func getHour(): Int {
+        val h: Int = this.sod() / 3600;
+        return h;
+    }
+    func getMinute(): Int {
+        val m: Int = (this.sod() % 3600) / 60;
+        return m;
+    }
+    func getSecond(): Int {
+        val s: Int = this.sod() % 60;
+        return s;
+    }
+    // 0=周日 … 6=周六（1970-01-01 周四）
+    func getWeekday(): Int {
+        var w = (this.epochDay() + 4) % 7;
+        if (w < 0) { w = w + 7; }
+        val wi: Int = w;
+        return wi;
+    }
+    func getDayOfYear(): Int {
+        var a: [Int] = [0, 0, 0];
+        this.fillCivil(a);
+        val y = a[0];
+        val m = a[1];
+        val d = a[2];
+        var leap = false;
+        if (y % 400 == 0) { leap = true; }
+        else if (y % 100 == 0) { leap = false; }
+        else if (y % 4 == 0) { leap = true; }
+        var doy = d;
+        if (m > 1) { doy = doy + 31; }
+        if (m > 2) {
+            if (leap) { doy = doy + 29; } else { doy = doy + 28; }
+        }
+        if (m > 3) { doy = doy + 31; }
+        if (m > 4) { doy = doy + 30; }
+        if (m > 5) { doy = doy + 31; }
+        if (m > 6) { doy = doy + 30; }
+        if (m > 7) { doy = doy + 31; }
+        if (m > 8) { doy = doy + 31; }
+        if (m > 9) { doy = doy + 30; }
+        if (m > 10) { doy = doy + 31; }
+        if (m > 11) { doy = doy + 30; }
+        return doy;
+    }
     func unixNano(): Long { return this.ts; }
     func unixSecond(): Long { return this.ts / 1000000000; }
+
+    func padN(v: Int, width: Int): String {
+        var s = Integer.toStr(v);
+        while (s.length < width) {
+            s = Character.toStr(48) + s; // '0'
+        }
+        return s;
+    }
+
     func format(pattern: String): String {
-        return hao_time_format(this.ts, this.offset, pattern);
+        var a: [Int] = [0, 0, 0];
+        this.fillCivil(a);
+        val y = a[0];
+        val mo = a[1];
+        val d = a[2];
+        val h = this.getHour();
+        val mi = this.getMinute();
+        val se = this.getSecond();
+        var ms: Long = this.ts % 1000000000;
+        if (ms < 0) { ms = ms + 1000000000; }
+        ms = ms / 1000000;
+        val msi: Int = ms;
+        var out = "";
+        val n = pattern.length;
+        var i = 0;
+        while (i < n) {
+            val c = pattern[i];
+            var tok = 1;
+            while (i + tok < n && pattern[i + tok] == c) {
+                tok = tok + 1;
+            }
+            if (c == 'y' && tok >= 4) {
+                out = out + this.padN(y, 4);
+                i = i + 4;
+            } else if (c == 'M' && tok >= 2) {
+                out = out + this.padN(mo, 2);
+                i = i + 2;
+            } else if (c == 'd' && tok >= 2) {
+                out = out + this.padN(d, 2);
+                i = i + 2;
+            } else if (c == 'H' && tok >= 2) {
+                out = out + this.padN(h, 2);
+                i = i + 2;
+            } else if (c == 'm' && tok >= 2) {
+                out = out + this.padN(mi, 2);
+                i = i + 2;
+            } else if (c == 's' && tok >= 2) {
+                out = out + this.padN(se, 2);
+                i = i + 2;
+            } else if (c == 'S' && tok >= 3) {
+                out = out + this.padN(msi, 3);
+                i = i + 3;
+            } else {
+                out = out + Character.toStr(c);
+                i = i + 1;
+            }
+        }
+        return out;
     }
 }
 
@@ -37,5 +189,3 @@ func nowUtc(): Time {
 
 extern func hao_time_now_ns(): Long = "hao_time_now_ns";
 extern func hao_time_offset(): Int = "hao_time_offset";
-extern func hao_time_field(ts: Long, offset: Int, field: Int): Int = "hao_time_field";
-extern func hao_time_format(ts: Long, offset: Int, pattern: String): String = "hao_time_format";

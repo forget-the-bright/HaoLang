@@ -182,7 +182,7 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         HaoLangParser::ExprContext* sendArg = nullptr;
         std::vector<HaoLangParser::StatementContext*> body;
         // 预求值
-        std::string hPtr;             // Long? 盒 ptr（channel.h）
+        std::string hPtr;             // NativeHandle*（channel.h；非 Long? 藏针）
         std::string sendBits;         // i64
         std::string outAlloca;        // recv 用 i64 alloca
         TypePtr bindType;

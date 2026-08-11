@@ -87,16 +87,14 @@ func v19TimeTest() {
 //  （不分配），避免 GC 竞态；真正运行会分配对象的并发任务需 GC v2
 //  （线程暂停 + 精确扫描）支持。
 func v19ThreadTest() {
-    var counter: Long? = null;
-    counter = 0;
+    val counter = sync.hao_sync_cell_new();
     val t1 = new thread.Thread();
     t1.start({ sync.atomicAdd(counter, 1); });
     t1.join();                                    // 等待 worker 结束
-    fmt.println("thread " + (counter ?? 0));      // thread 1
+    fmt.println("thread " + sync.atomicAdd(counter, 0));      // thread 1
     thread.sleep(10);                             // 睡眠毫秒
 
-    var poolCount: Long? = null;
-    poolCount = 0;
+    val poolCount = sync.hao_sync_cell_new();
     val pool = thread.newPool(2);
     var i: Int = 0;
     while (i < 4) {
@@ -104,5 +102,5 @@ func v19ThreadTest() {
         i = i + 1;
     }
     pool.shutdown();
-    fmt.println("pool " + (poolCount ?? 0));      // pool 4
+    fmt.println("pool " + sync.atomicAdd(poolCount, 0));      // pool 4
 }

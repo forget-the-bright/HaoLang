@@ -1,7 +1,7 @@
 /*
  * HaoLang 运行时 —— 正则（v0.28）
  * ------------------------------------------------------------
- *  自包含回溯树匹配，零外部库。Pattern 句柄存于 Long?（8 字节 GC 块）。
+ *  自包含回溯树匹配，零外部库。Pattern 经 NativeHandle 代理 NFA（C 拥有；Handle 代理释放）。
  *  支持：字面量 . * + ? | () 捕获 [] \d\w\s 及常用转义 ^ $
  *  下标按 UTF-8 字节（与 HaoString.len 一致）。
  */
@@ -393,11 +393,12 @@ static HaoReProg* re_compile_str(const char* pat, int32_t plen) {
     return prog;
 }
 
-static void re_store(int64_t* unit, HaoReProg* p) {
-    *unit = (int64_t)(uintptr_t)p;
+static void hao_regex_drop(void* raw) {
+    if (raw) free(raw);
 }
-static HaoReProg* re_load(const int64_t* unit) {
-    return (HaoReProg*)(uintptr_t)(*unit);
+
+static HaoReProg* re_load(HaoNativeHandle* h) {
+    return (HaoReProg*)hao_handle_raw(h);
 }
 
 /* 将交错 caps 写入 Matcher 侧 [Int] 元素区；out_* 为 NULL 则跳过 */
@@ -435,108 +436,129 @@ static int re_try_at(HaoReProg* p, const char* text, int32_t tlen, int32_t from,
     return 1;
 }
 
-/* 清扫回调：块已摘链，勿再 clear_finalizer；只释放原生 NFA */
-static void hao_regex_unit_finalize(void* user) {
-    int64_t* unit = (int64_t*)user;
-    if (!unit) return;
-    HaoReProg* p = re_load(unit);
-    if (p) free(p);
-    *unit = 0;
-}
-
-int8_t hao_regex_compile(int64_t* unit, HaoString* pattern) {
-    if (!unit || !pattern) return 0;
-    /* 对齐 channel：同一句柄盒禁止 remake（须先 free/close） */
-    if (re_load(unit)) return 0;
-    hao_gc_add_root(pattern); /* set_finalizer 持锁窗口；禁 is_heap_ptr 前置 */
-    HaoReProg* prog = re_compile_str(pattern->data, pattern->len);
+int8_t hao_regex_compile(HaoNativeHandle* h, HaoString* pattern) {
+    char* pat_c;
+    int32_t plen;
+    HaoReProg* prog;
+    if (!h || !pattern) return 0;
+    /* 同一句柄禁止 remake（须先 free/close） */
+    if (re_load(h)) return 0;
+    hao_gc_add_root(h);
+    hao_gc_add_root(pattern);
+    plen = hao_str_byte_len(pattern);
+    pat_c = hao_ffi_dup_cstr(pattern);
+    prog = re_compile_str(pat_c, plen);
+    free(pat_c);
+    hao_gc_remove_root(pattern);
     if (!prog) {
-        hao_gc_remove_root(pattern);
+        hao_gc_remove_root(h);
         return 0;
     }
-    re_store(unit, prog);
-    hao_gc_set_finalizer(unit, hao_regex_unit_finalize);
-    hao_gc_remove_root(pattern);
+    hao_handle_attach(h, prog, hao_regex_drop);
+    hao_gc_remove_root(h);
     return 1;
 }
 
-int32_t hao_regex_group_count(int64_t* unit) {
-    HaoReProg* p = re_load(unit);
+int32_t hao_regex_group_count(HaoNativeHandle* h) {
+    HaoReProg* p = re_load(h);
     if (!p) return 0;
     return p->ncaps;
 }
 
 /* 捕获写入调用方 [Int] 元素区；prog 不共享状态。cap_* 可为 NULL。 */
-int8_t hao_regex_search_into(int64_t* unit, HaoString* text, int32_t from,
+int8_t hao_regex_search_into(HaoNativeHandle* h, HaoString* text, int32_t from,
                              int32_t* cap_s, int32_t* cap_e) {
-    HaoReProg* p = re_load(unit);
+    HaoReProg* p = re_load(h);
     int32_t tlen;
     int anchored;
     int32_t pos;
+    char* text_c;
     if (!p || !text || from < 0) return 0;
-    tlen = text->len;
-    if (from > tlen) return 0;
-
-    p->steps = 0; /* 整次 search 共用步数预算 */
-    anchored = re_starts_with_bol(p->root);
-    for (pos = from; pos <= tlen; pos++) {
-        int32_t end = -1;
-        if (re_try_at(p, text->data, tlen, pos, &end, cap_s, cap_e))
-            return 1;
-        if (anchored) break;
-        if (p->steps > HAO_RE_MAX_STEPS) break;
+    hao_gc_add_root(text);
+    tlen = hao_str_byte_len(text);
+    if (from > tlen) {
+        hao_gc_remove_root(text);
+        return 0;
     }
-    return 0;
-}
+    text_c = hao_ffi_dup_cstr(text);
+    hao_gc_remove_root(text);
 
-int8_t hao_regex_search(int64_t* unit, HaoString* text, int32_t from,
-                        int64_t* mstart, int64_t* mend) {
-    HaoReProg* p = re_load(unit);
-    int32_t tlen;
-    int anchored;
-    int32_t pos;
-    if (!p || !text || from < 0) return 0;
-    tlen = text->len;
-    if (from > tlen) return 0;
     p->steps = 0;
     anchored = re_starts_with_bol(p->root);
     for (pos = from; pos <= tlen; pos++) {
         int32_t end = -1;
-        if (re_try_at(p, text->data, tlen, pos, &end, NULL, NULL)) {
-            if (mstart) *mstart = (int64_t)pos;
-            if (mend) *mend = (int64_t)end;
+        if (re_try_at(p, text_c, tlen, pos, &end, cap_s, cap_e)) {
+            free(text_c);
             return 1;
         }
         if (anchored) break;
         if (p->steps > HAO_RE_MAX_STEPS) break;
     }
+    free(text_c);
     return 0;
 }
 
-/* Matcher：写入 cap_s/cap_e */
-int8_t hao_regex_search_simple(int64_t* unit, HaoString* text, int32_t from,
-                               int32_t* cap_s, int32_t* cap_e) {
-    return hao_regex_search_into(unit, text, from, cap_s, cap_e);
-}
-
-int8_t hao_regex_fullmatch_into(int64_t* unit, HaoString* text,
-                                int32_t* cap_s, int32_t* cap_e) {
-    HaoReProg* p = re_load(unit);
-    int32_t end = -1;
-    if (!p || !text) return 0;
+int8_t hao_regex_search(HaoNativeHandle* h, HaoString* text, int32_t from,
+                        int64_t* mstart, int64_t* mend) {
+    HaoReProg* p = re_load(h);
+    int32_t tlen;
+    int anchored;
+    int32_t pos;
+    char* text_c;
+    if (!p || !text || from < 0) return 0;
+    hao_gc_add_root(text);
+    tlen = hao_str_byte_len(text);
+    if (from > tlen) {
+        hao_gc_remove_root(text);
+        return 0;
+    }
+    text_c = hao_ffi_dup_cstr(text);
+    hao_gc_remove_root(text);
     p->steps = 0;
-    if (!re_try_at(p, text->data, text->len, 0, &end, cap_s, cap_e)) return 0;
-    return end == text->len ? 1 : 0;
+    anchored = re_starts_with_bol(p->root);
+    for (pos = from; pos <= tlen; pos++) {
+        int32_t end = -1;
+        if (re_try_at(p, text_c, tlen, pos, &end, NULL, NULL)) {
+            if (mstart) *mstart = (int64_t)pos;
+            if (mend) *mend = (int64_t)end;
+            free(text_c);
+            return 1;
+        }
+        if (anchored) break;
+        if (p->steps > HAO_RE_MAX_STEPS) break;
+    }
+    free(text_c);
+    return 0;
 }
 
-int8_t hao_regex_fullmatch(int64_t* unit, HaoString* text) {
-    return hao_regex_fullmatch_into(unit, text, NULL, NULL);
+int8_t hao_regex_search_simple(HaoNativeHandle* h, HaoString* text, int32_t from,
+                               int32_t* cap_s, int32_t* cap_e) {
+    return hao_regex_search_into(h, text, from, cap_s, cap_e);
 }
 
-void hao_regex_free(int64_t* unit) {
-    if (!unit) return;
-    hao_gc_clear_finalizer(unit);
-    HaoReProg* p = re_load(unit);
-    if (p) free(p);
-    *unit = 0;
+int8_t hao_regex_fullmatch_into(HaoNativeHandle* h, HaoString* text,
+                                int32_t* cap_s, int32_t* cap_e) {
+    HaoReProg* p = re_load(h);
+    int32_t end = -1;
+    int32_t tlen;
+    char* text_c;
+    int8_t ok;
+    if (!p || !text) return 0;
+    hao_gc_add_root(text);
+    tlen = hao_str_byte_len(text);
+    text_c = hao_ffi_dup_cstr(text);
+    hao_gc_remove_root(text);
+    p->steps = 0;
+    ok = re_try_at(p, text_c, tlen, 0, &end, cap_s, cap_e) && end == tlen ? 1 : 0;
+    free(text_c);
+    return ok;
+}
+
+int8_t hao_regex_fullmatch(HaoNativeHandle* h, HaoString* text) {
+    return hao_regex_fullmatch_into(h, text, NULL, NULL);
+}
+
+void hao_regex_free(HaoNativeHandle* h) {
+    if (!h) return;
+    hao_handle_close(h);
 }

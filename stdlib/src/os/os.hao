@@ -1,6 +1,7 @@
 // HaoLang 标准库 —— os 系统库（v0.12.0；v0.23.0 并入 path/io）
 // ----------------------------------------------
-//  文件读写 / 路径 / 环境变量 / 进程。基于 C 标准库，跨平台。
+//  文件读写 / 路径 / 环境变量 / 进程。
+//  v0.55.62：readFile/writeFile/exists 上移 Hao（经 FileStream）；C 只留薄 libc。
 //
 //  用法：
 //      import os;
@@ -13,13 +14,36 @@
 package os;
 
 // 读取文件全部内容；失败返回 null
-public extern func readFile(path: String): String? = "hao_os_readfile";
+public func readFile(path: String): String? {
+    val fs = FileStream.open(path, "rb");
+    if (fs == null) {
+        return null;
+    }
+    val data = fs!!.readAll();
+    fs!!.close();
+    return data;
+}
 
 // 写文件（覆盖）；成功返回 true，失败返回 false
-public extern func writeFile(path: String, content: String): Bool = "hao_os_writefile";
+public func writeFile(path: String, content: String): Bool {
+    val fs = FileStream.open(path, "wb");
+    if (fs == null) {
+        return false;
+    }
+    val ok = fs!!.writeAll(content);
+    fs!!.close();
+    return ok;
+}
 
 // 文件是否存在
-public extern func exists(path: String): Bool = "hao_os_exists";
+public func exists(path: String): Bool {
+    val fs = FileStream.open(path, "rb");
+    if (fs == null) {
+        return false;
+    }
+    fs!!.close();
+    return true;
+}
 
 // 读取环境变量；不存在返回 null
 public extern func getenv(name: String): String? = "hao_os_getenv";

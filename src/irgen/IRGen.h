@@ -256,6 +256,9 @@ private:
     // Object 类型身份 API；每类型一份常量，经 ensureInit 填单例）
     void ensureClassStaticField(const ClassInfoPtr& ci);
     void synthesizeClassStaticFields();
+    // v0.56.1+：TypeName.Class ← classOfMeta(hao_handle_wrap(@T.meta))
+    // 禁把裸 HaoClassMeta* 当 NativeHandle 传入（改 Handle ABI 必须同步本路径）
+    std::string emitClassOfMetaFromRawMeta(const ClassInfoPtr& ci);
     // 在静态成员访问 / new 前发射惰性初始化调用（仅当 hasStaticInit）
     void emitStaticEnsureInit(const ClassInfoPtr& ci);
 
@@ -548,6 +551,7 @@ private:
     std::string fieldPtr(const std::string& objIR, int slot);
 
     // GC v3：引用 / 装箱可空视为堆指针
+/** 与 Type::isGcManaged 同义（docs/类型属性.md）；历史名保留。 */
     static bool isGcPointerType(const TypePtr& t);
     // 类实例字段位图（slot i 为 GC 指针则 bit i=1；vtable 槽不在 fields 中）
     static int64_t objectPtrBitmap(const ClassInfo* ci);

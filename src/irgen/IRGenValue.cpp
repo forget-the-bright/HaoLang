@@ -410,17 +410,17 @@ Value IRGen::toStringValue(const Value& v) {
         case TypeKind::String:
             return v;
         case TypeKind::Long:
-            return Value(emitCall("ptr", "@hao_long_to_str", "i64 " + v.ir),
+            return Value(emitCall("ptr", "@lang$Long.toStr", "i64 " + v.ir),
                          Type::makeString());
         case TypeKind::ULong:
         case TypeKind::UIntPtr:
-            return Value(emitCall("ptr", "@hao_ulong_to_str", "i64 " + v.ir),
+            return Value(emitCall("ptr", "@lang$ULong.toStr", "i64 " + v.ir),
                          Type::makeString());
         case TypeKind::Int:
-            return Value(emitCall("ptr", "@hao_int_to_str", "i32 " + v.ir),
+            return Value(emitCall("ptr", "@lang$Integer.toStr", "i32 " + v.ir),
                          Type::makeString());
         case TypeKind::UInt:
-            return Value(emitCall("ptr", "@hao_uint_to_str", "i32 " + v.ir),
+            return Value(emitCall("ptr", "@lang$UInt.toStr", "i32 " + v.ir),
                          Type::makeString());
         case TypeKind::SByte:
         case TypeKind::Byte:
@@ -436,10 +436,10 @@ Value IRGen::toStringValue(const Value& v) {
             return Value(emitCall("ptr", "@hao_float_to_str", "float " + v.ir),
                          Type::makeString());
         case TypeKind::Bool:
-            return Value(emitCall("ptr", "@hao_bool_to_str", "i8 " + v.ir),
+            return Value(emitCall("ptr", "@lang$Boolean.toStr", "i8 " + v.ir),
                          Type::makeString());
         case TypeKind::Char:
-            return Value(emitCall("ptr", "@hao_char_to_str", "i32 " + v.ir),
+            return Value(emitCall("ptr", "@lang$Character.toStr", "i32 " + v.ir),
                          Type::makeString());
         default:
             return Value();
@@ -453,7 +453,7 @@ std::string IRGen::fieldPtr(const std::string& objIR, int slot) {
 }
 
 bool IRGen::isGcPointerType(const TypePtr& t) {
-    return t && (t->isReferenceType() || t->isBoxedNullable());
+    return t && t->isGcManaged();
 }
 
 int64_t IRGen::objectPtrBitmap(const ClassInfo* ci) {

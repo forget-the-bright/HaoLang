@@ -240,6 +240,7 @@ public class HttpApp {
     //   2) 仅自动 new 无参构造（canNewInstance）；多参请 registerNewArgs / register。
     //   3) 可扩展条件用 scanWhere / reflect.findTypes（谓词自定）。
     func scan(packagePath: String): Int {
+        //fmt.println(packagePath);
         return this.scanWhere(packagePath, { t ->
             t.isAnnotationPresent(Controller.Class)
         });

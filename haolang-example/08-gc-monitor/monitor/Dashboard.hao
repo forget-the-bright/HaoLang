@@ -45,6 +45,14 @@ class GcSnapshot {
     var lastStwParked: Long = 0;
     var lastStwMissing: Long = 0;
     var lastStwOsBlockMissing: Long = 0;
+    // v0.55.53：缺 park 身份 + finalizer 发现
+    var lastMissTidCount: Long = 0;
+    var lastMissTid0: Long = 0;
+    var lastMissTid1: Long = 0;
+    var lastMissMaxAgeMs: Long = -1;
+    var finalizerSkipAbort: Long = 0;
+    var finalizerLiveAtSweep: Long = 0;
+    var lastFinalizerDiag: Long = 0;
 
     // ---- CPU / 线程 / 句柄 / 运行时长 ----
     var cpuPercent: Int = 0;         // 0～100；首次采样可能为 0
@@ -57,7 +65,7 @@ class GcSnapshot {
     var usagePct: Int = 0;
     var summary: String = "";
     var note: String = "";
-    var engine: String = "HaoLang GC v3（v0.55.52 STW abort 分相定位）+ os.Process";
+    var engine: String = "HaoLang GC v3（v0.55.53 缺 park tid/龄）+ os.Process";
 
     constructor() {
         this.refresh();
@@ -110,6 +118,13 @@ class GcSnapshot {
         this.lastStwParked = g.lastStwParked;
         this.lastStwMissing = g.lastStwMissing;
         this.lastStwOsBlockMissing = g.lastStwOsBlockMissing;
+        this.lastMissTidCount = g.lastMissTidCount;
+        this.lastMissTid0 = g.lastMissTid0;
+        this.lastMissTid1 = g.lastMissTid1;
+        this.lastMissMaxAgeMs = g.lastMissMaxAgeMs;
+        this.finalizerSkipAbort = g.finalizerSkipAbort;
+        this.finalizerLiveAtSweep = g.finalizerLiveAtSweep;
+        this.lastFinalizerDiag = g.lastFinalizerDiag;
         this.gcThreads = g.registeredThreads;
         this.summary = $"GC[v3] live={this.liveBytes}B heap={this.heapBytes}B threshold={this.threshold}B"
             + $" allocatedSince={this.allocatedSinceGc}B blocks={this.blockCount}"
@@ -120,12 +135,14 @@ class GcSnapshot {
             + $" markAbort={this.markAbortCycles}(root={this.markAbortRoot},term={this.markAbortTerm},parkWd={this.markAbortParkWd})"
             + $" markWorker={this.markWorkerSteps} remset={this.remsetCount}"
             + $" parkWd={this.parkWatchdogTrips}"
-            + $" lastStw=phase{this.lastStwPhase}/miss{this.lastStwMissing}/{this.lastStwTargets}/os{this.lastStwOsBlockMissing}";
+            + $" lastStw=phase{this.lastStwPhase}/miss{this.lastStwMissing}/{this.lastStwTargets}/os{this.lastStwOsBlockMissing}"
+            + $" missTid0={this.lastMissTid0} missAgeMs={this.lastMissMaxAgeMs}"
+            + $" finDiag={this.lastFinalizerDiag}(skipAbort={this.finalizerSkipAbort},liveFin={this.finalizerLiveAtSweep})";
         if (this.note.length == 0) {
             this.note = "对标说明：工作集/专用内存来自 os.Process；"
                 + "heapBytes=当前堆压；liveBytes=上次成功 major 后存活；"
                 + "stwIncomplete/markAbort 同步涨且 abortRoot≈总量 ⇒ 根握手税；"
-                + "parkWd/abortParkWd 涨 ⇒ watchdog；term incomplete≫abort ⇒ 终止重试；"
+                + "missTid0/missAgeMs 定位缺 park 线程；finDiag 1=对象仍活 2=abort 跳过；"
                 + "详文 docs/IR与GC契约.md。";
         }
         var pct: Int = 0;

@@ -59,6 +59,19 @@ func stringCharTest() {
     fmt.println(w.indexOf("a", 100));       // -1
     fmt.println(String.valueOf("你好Hi").indexOf("Hi", 1)); // 2
 
+    // v0.55.59 P2a：isEmpty/contains/startsWith/endsWith 组合上移 Hao
+    fmt.println(String.valueOf("").isEmpty());      // true
+    fmt.println(String.valueOf("ab").isEmpty());    // false
+    fmt.println(w.contains("cd"));                  // true
+    fmt.println(w.contains("zz"));                  // false
+    fmt.println(w.startsWith("ab"));                // true
+    fmt.println(w.endsWith("ef"));                  // true
+    fmt.println(w.startsWith(""));                  // true
+    fmt.println(w.endsWith(""));                    // true
+    val zh = String.valueOf("你好Hi");
+    fmt.println(zh.startsWith("你"));               // true
+    fmt.println(zh.endsWith("Hi"));                 // true
+
     // 反向：越界索引
     val bad: Char = "ab"[9];
     fmt.println(bad == -1);   // true
@@ -83,4 +96,12 @@ func stringCharTest() {
     nc = '好';
     fmt.println(nc!! == '好');              // true
     fmt.println(nc ?? 'X');                 // 好
+
+    // v0.55.60：UTF-8 [Byte] 载荷 API（getBytes 为拷贝）
+    val hi = String.valueOf("Hi");
+    fmt.println(hi.byteLength());           // 2
+    val bytes = hi.getBytes();
+    fmt.println(bytes.length);              // 2
+    fmt.println(String.fromBytes(bytes).toString()); // Hi
+    fmt.println(String.valueOf("你好").byteLength()); // 6
 }

@@ -28,8 +28,7 @@ func systemTest() {
     m.unlock();
     fmt.println("unlocked");
 
-    var counter: Long? = null;
-    counter = 0;
+    val counter = sync.hao_sync_cell_new();
     fmt.println(sync.atomicAdd(counter, 5));      // 5
     fmt.println(sync.atomicFetchAdd(counter, 3)); // 5
     fmt.println(sync.atomicExchange(counter, 100)); // 8

@@ -37,7 +37,8 @@ class UShort {
     }
 
     static func toStr(v: UShort): String {
-        return hao_int_to_str(v);
+        val i: Int = v;
+        return Integer.toStr(i);
     }
 
     static func compare(a: UShort, b: UShort): Int {
@@ -61,6 +62,6 @@ class UShort {
     }
 
     override func toString(): String {
-        return hao_int_to_str(this.value);
+        return UShort.toStr(this.value);
     }
 }

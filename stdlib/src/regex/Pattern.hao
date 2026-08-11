@@ -23,19 +23,18 @@ class RegexException : exception.Exception {
 }
 
 class Pattern {
-    var handle: Long? = null;
+    var handle: NativeHandle;
     var source: String = "";
 
     constructor() {
-        this.handle = 0;
+        this.handle = NativeHandle.empty();
         this.source = "";
     }
 
-    // 编译模式；句柄盒不可 remake（须新 Pattern 或先 close）。
+    // 编译模式；句柄不可 remake（须新 Pattern 或先 close）。
     static func compile(re: String): Pattern {
         val p = new Pattern();
         p.source = re;
-        p.handle = 0;
         if (!_compile(p.handle, re)) {
             throw new RegexException("invalid regex: " + re);
         }
@@ -52,7 +51,6 @@ class Pattern {
     // 释放原生 NFA；可重复调用。GC 不可达时也会 finalizer 释放；显式 close 仍推荐。
     func close() {
         _free(this.handle);
-        this.handle = 0;
     }
 
     // 尝试写入本句柄；已有 NFA 时返回 false（禁止 remake，须先 close）。
@@ -209,11 +207,11 @@ class Matcher {
     }
 }
 
-extern func _compile(h: Long?, pattern: String): Bool = "hao_regex_compile";
-extern func _free(h: Long?): Unit = "hao_regex_free";
-extern func _groupCount(h: Long?): Int = "hao_regex_group_count";
-extern func _search(h: Long?, text: String, from: Int, capS: [Int], capE: [Int]): Bool = "hao_regex_search_simple";
-extern func _fullmatch(h: Long?, text: String): Bool = "hao_regex_fullmatch";
-extern func _fullmatchInto(h: Long?, text: String, capS: [Int], capE: [Int]): Bool = "hao_regex_fullmatch_into";
+extern func _compile(h: NativeHandle, pattern: String): Bool = "hao_regex_compile";
+extern func _free(h: NativeHandle): Unit = "hao_regex_free";
+extern func _groupCount(h: NativeHandle): Int = "hao_regex_group_count";
+extern func _search(h: NativeHandle, text: String, from: Int, capS: [Int], capE: [Int]): Bool = "hao_regex_search_simple";
+extern func _fullmatch(h: NativeHandle, text: String): Bool = "hao_regex_fullmatch";
+extern func _fullmatchInto(h: NativeHandle, text: String, capS: [Int], capE: [Int]): Bool = "hao_regex_fullmatch_into";
 extern func _byteSlice(s: String, start: Int, end: Int): String = "hao_str_byte_slice";
 extern func _byteLen(s: String): Int = "hao_str_byte_len";

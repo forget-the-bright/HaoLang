@@ -38,7 +38,8 @@ class Short {
     }
 
     static func toStr(v: Short): String {
-        return hao_int_to_str(v);
+        val i: Int = v;
+        return Integer.toStr(i);
     }
 
     static func compare(a: Short, b: Short): Int {
@@ -62,6 +63,6 @@ class Short {
     }
 
     override func toString(): String {
-        return hao_int_to_str(this.value);
+        return Short.toStr(this.value);
     }
 }

@@ -31,10 +31,17 @@ __declspec(allocate(".CRT$XIU"))
 static int (*hao_console_init_ptr)(void) = hao_console_init;
 #endif /* _WIN32 */
 
-/* fmt.println(String) — HaoString* */
+/* fmt.println(String) — 出桥拷贝后再 fputs（禁借 GC 堆内 cstr） */
 void hao_println_str(HaoString* s) {
-    fputs(s ? s->data : "null", stdout);
+    char* tmp;
+    if (!s) {
+        fputs("null\n", stdout);
+        return;
+    }
+    tmp = hao_ffi_dup_cstr(s);
+    fputs(tmp ? tmp : "null", stdout);
     fputc('\n', stdout);
+    free(tmp);
 }
 
 void hao_println_sbyte(int8_t v) {
@@ -82,13 +89,41 @@ void hao_println_bool(int8_t v) {
     fputc('\n', stdout);
 }
 
-/* fmt.println(Char) — 打印 UTF-8 字形 */
+/* fmt.println(Char) — 打印 UTF-8 字形（本地编码，不经 hao_char_to_str） */
 void hao_println_char(int32_t cp) {
-    HaoString* s = hao_char_to_str(cp);
-    fputs(s ? s->data : "?", stdout);
+    char buf[8];
+    int n;
+    if (cp < 0) cp = 0xFFFD;
+    if (cp <= 0x7F) { buf[0] = (char)cp; n = 1; }
+    else if (cp <= 0x7FF) {
+        buf[0] = (char)(0xC0 | (cp >> 6));
+        buf[1] = (char)(0x80 | (cp & 0x3F));
+        n = 2;
+    } else if (cp <= 0xFFFF) {
+        buf[0] = (char)(0xE0 | (cp >> 12));
+        buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[2] = (char)(0x80 | (cp & 0x3F));
+        n = 3;
+    } else {
+        if (cp > 0x10FFFF) cp = 0xFFFD;
+        buf[0] = (char)(0xF0 | (cp >> 18));
+        buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[3] = (char)(0x80 | (cp & 0x3F));
+        n = 4;
+    }
+    buf[n] = '\0';
+    fputs(buf, stdout);
     fputc('\n', stdout);
 }
 
 void hao_print_str(HaoString* s) {
-    fputs(s ? s->data : "null", stdout);
+    char* tmp;
+    if (!s) {
+        fputs("null", stdout);
+        return;
+    }
+    tmp = hao_ffi_dup_cstr(s);
+    fputs(tmp ? tmp : "null", stdout);
+    free(tmp);
 }

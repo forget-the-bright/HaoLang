@@ -55,6 +55,8 @@ func gcApiTest() {
         fmt.println(g.markAbortCycles == g.markAbortRoot + g.markAbortTerm + g.markAbortParkWd);
         fmt.println(g.stwIncomplete == g.stwIncompleteRoot + g.stwIncompleteTerm);
         fmt.println(g.lastStwPhase >= 0 && g.lastStwMissing >= 0);
+        // v0.55.53：缺 park tid/龄 + finalizer 发现面可读（不要求 runs>0 / incomplete==0）
+        fmt.println(g.lastMissTidCount >= 0 && g.lastMissMaxAgeMs >= -1 && g.lastFinalizerDiag >= 0);
     }
     fmt.println(os.Process.workingSetBytes() > 0); // true
     fmt.println(os.Process.handleCount() > 0); // true

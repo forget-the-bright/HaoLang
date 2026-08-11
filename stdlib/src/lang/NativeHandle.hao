@@ -1,0 +1,23 @@
+// ============================================================
+//  lang.NativeHandle —— C 原生资源代理句柄（v0.55.61）
+// ------------------------------------------------------------
+//  类型名用于标注「不透明句柄引用」。真实对象由 hao_handle_alloc
+//  以 GC_OPAQUE 创建（无虚表）；禁止对句柄做虚方法/is 判定。
+//  关闭请调 hao_handle_close(h) 或各库 close 包装。
+//  权责：raw 属 C；Handle 只代理释放一次。
+// ============================================================
+package lang;
+
+class NativeHandle {
+    // 勿用 new：得到带虚表的类对象，不能当资源句柄。
+    constructor() {}
+
+    static func empty(): NativeHandle {
+        return hao_handle_alloc();
+    }
+}
+
+extern func hao_handle_alloc(): NativeHandle = "hao_handle_alloc";
+extern func hao_handle_close(h: NativeHandle): Unit = "hao_handle_close";
+extern func hao_handle_is_open(h: NativeHandle): Bool = "hao_handle_is_open";
+extern func hao_handle_raw_eq(a: NativeHandle, b: NativeHandle): Bool = "hao_handle_raw_eq";

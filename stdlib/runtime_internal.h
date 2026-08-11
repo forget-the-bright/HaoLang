@@ -28,7 +28,7 @@
  * ============================================================ */
 
 /* 扫描种类（存在 GCBlock.scan_kind） */
-#define GC_KIND_OPAQUE  0   /* 叶：String / 值类型 box，用户区无堆指针 */
+#define GC_KIND_OPAQUE  0   /* 叶：值类型 box / 无堆指针载荷；String 头已改 SLOTS */
 #define GC_KIND_SLOTS   1   /* 对象/闭包：scan_meta 为最多 32 槽位图；>32 槽走 FULL */
 #define GC_KIND_ARRAY   2   /* 数组：scan_meta 低位 is_ptr；扫元素区 */
 #define GC_KIND_FULL    3   /* 过渡：整块用户区保守扫 */
@@ -149,13 +149,7 @@ void hao_gc_os_block_leave(void);
 void hao_gc_os_block_arm(void);
 void hao_gc_os_block_disarm(void);
 
-/* channel（runtime_channel.c）：句柄在 Long? 盒；载荷 i64；堆指针入队挂根 */
-int8_t  hao_chan_make(int64_t* unit, int32_t capacity);
-int32_t hao_chan_send(int64_t* unit, int64_t bits);
-int64_t hao_chan_recv(int64_t* unit);
-int32_t hao_chan_try_send(int64_t* unit, int64_t bits);
-int32_t hao_chan_try_recv(int64_t* unit, int64_t* out);
-void    hao_chan_close(int64_t* unit);
+/* channel 声明见下方 NativeHandle 之后 */
 
 /* ============================================================
  *  动态库加载（runtime_dynload.c，5.12）
@@ -266,34 +260,85 @@ void*   hao_array_push(void* arr, int64_t value);
 int64_t hao_array_pop(void* arr);
 
 /* ============================================================
- *  字符串堆头（runtime_string.c）—— 语言 String = HaoString*
+ *  字符串（runtime_string.c）—— 语言 String = HaoString*
+ *  头：GC_SLOTS 两槽；slot0 → UTF-8 [Byte]（cap≥len+1，data[len]=NUL）；
+ *  slot1：码点缓存（-1=未算）。禁止再写旧一体 {len,cap,data[]}。
  * ============================================================ */
 typedef struct HaoString {
-    int32_t len;
-    int32_t cap;
-    char    data[];
+    void*   bytes;   /* [Byte] 元素指针；GC 引用 */
+    int64_t cp_len;  /* 缓存码点数；-1 未知 */
 } HaoString;
 
 HaoString* hao_str_alloc(int32_t byte_len);
 HaoString* hao_str_from_cstr(const char* c);
 HaoString* hao_str_from_bytes(const char* bytes, int32_t byte_len);
-HaoString* hao_char_to_str(int32_t cp);
+/* 桥私有：GC 堆内 cstr。对外 FFI 禁止；出桥用 hao_ffi_dup_*。
+ * 审计清单（同步读自身串，禁跨 safepoint/线程）：
+ *   runtime_string.c（内部算法）、runtime_hash.c（仅浮点位模式，无 cstr）、
+ *   hao_ffi_dup_* 实现本身。
+ * 填 Hao 自有缓冲：runtime_fs/net/os fread|recv → hao_str_data（已挂根）。
+ * 出桥拷贝：fs/os/net/regex/print/time/float parse/reflect 名比对 → hao_ffi_dup_*。 */
 const char* hao_str_cstr(const HaoString* s);
+/* 可写载荷（填 Hao 自有缓冲）；禁止作为对外合法「借出堆内指针」模式——出桥用 hao_ffi_dup_* */
+char*       hao_str_data(HaoString* s);
 HaoString* hao_str_byte_slice(HaoString* s, int32_t start, int32_t end);
 int32_t hao_str_byte_len(HaoString* s);
-/* 字节下标 indexOf；from 起搜；未找到 -1 */
-int32_t hao_str_byte_index_of(HaoString* s, HaoString* sub, int32_t from);
-/* 码点下标 indexOf；from 起搜；未找到 -1（Java 对齐） */
-int32_t hao_str_index_of_from(HaoString* s, HaoString* sub, int32_t from);
-int32_t hao_str_index_of(HaoString* s, HaoString* sub);
+/* 码点下标 → 字节下标；越界 -1（substring Hao 原语） */
+int32_t hao_str_byte_of_cp(HaoString* s, int32_t cp_idx);
+/* 在 cap 内调整内容长度并写 NUL；供 recv/read 截断 */
+void    hao_str_set_byte_len(HaoString* s, int32_t n);
+/* 公开 API：拷贝为 [Byte]；从 [Byte] 建串 */
+void*      hao_str_get_bytes(HaoString* s);
+HaoString* hao_str_from_byte_arr(void* arr);
 
-void* hao_parse_int(HaoString* s);
-void* hao_parse_long(HaoString* s);
-void* hao_parse_uint(HaoString* s);
-void* hao_parse_ulong(HaoString* s);
+/* float/double 永久 libc（强制 dup）；整型/布尔已上移 Hao */
 void* hao_parse_float(HaoString* s);
 void* hao_parse_double(HaoString* s);
-void* hao_parse_bool(HaoString* s);
+
+/* ============================================================
+ *  NativeHandle（runtime_handle.c）—— C 资源代理句柄
+ *  raw 属 C 运行时；Handle 只保证有且仅一次 drop（代理释放，非接管分配器）。
+ *  布局 OPAQUE：raw/drop 不参与 GC 扫描。
+ * ============================================================ */
+typedef void (*HaoNativeDrop)(void* raw);
+
+typedef struct HaoNativeHandle {
+    void*         raw;     /* C 资源；非 GC 指针 */
+    HaoNativeDrop drop;    /* 释放回调；可为 NULL */
+    int32_t       closed;  /* 1=已关闭/空 */
+    int32_t       _pad;
+} HaoNativeHandle;
+
+/* 空句柄（raw=NULL, closed=1）；供 Hao 侧预分配 */
+HaoNativeHandle* hao_handle_alloc(void);
+/* 显式关闭；可重复调用 */
+void             hao_handle_close(HaoNativeHandle* h);
+/* 挂接资源（先 close 旧）；安装 finalizer */
+void             hao_handle_attach(HaoNativeHandle* h, void* raw, HaoNativeDrop drop);
+/* 桥内取 raw；已关闭返回 NULL */
+void*            hao_handle_raw(HaoNativeHandle* h);
+int8_t           hao_handle_is_open(HaoNativeHandle* h);
+/* 包装永生/外部 raw（drop 空）；比较 raw；sync 原子胞 */
+HaoNativeHandle* hao_handle_wrap(void* raw);
+int8_t           hao_handle_raw_eq(HaoNativeHandle* a, HaoNativeHandle* b);
+HaoNativeHandle* hao_sync_cell_new(void);
+int64_t          hao_sync_atomic_add(HaoNativeHandle* h, int64_t delta);
+int64_t          hao_sync_atomic_fetch_add(HaoNativeHandle* h, int64_t delta);
+int64_t          hao_sync_atomic_exchange(HaoNativeHandle* h, int64_t value);
+int8_t           hao_sync_atomic_compare_exchange(HaoNativeHandle* h, int64_t expected,
+                                                  int64_t desired);
+
+/* channel（runtime_channel.c）：NativeHandle 代理 HaoChan*；载荷 i64；堆指针入队挂根 */
+int8_t  hao_chan_make(HaoNativeHandle* h, int32_t capacity);
+int32_t hao_chan_send(HaoNativeHandle* h, int64_t bits);
+int64_t hao_chan_recv(HaoNativeHandle* h);
+int32_t hao_chan_try_send(HaoNativeHandle* h, int64_t bits);
+int32_t hao_chan_try_recv(HaoNativeHandle* h, int64_t* out);
+void    hao_chan_close(HaoNativeHandle* h);
+
+/* FFI 拷贝隔离：返回 malloc 缓冲（属 C），调用方 free */
+char* hao_ffi_dup_cstr(HaoString* s);
+void* hao_ffi_dup_bytes(const void* p, size_t n); /* malloc(n) 拷贝；n==0 仍返回非 NULL 空块或 NULL */
 
 /* ============================================================
  *  值类型可空装箱（runtime_box.c）

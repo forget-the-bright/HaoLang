@@ -1,23 +1,22 @@
 // ============================================================
-//  os.FileStream —— 文件流（v0.28）
-//  文本读写 + 二进制 [Byte]；句柄 Long? 存 FILE*
+//  os.FileStream —— 文件流（v0.55.61：NativeHandle 代理 FILE*）
+//  文本读写 + 二进制 [Byte]；v0.55.62：readAll/writeAll 供 os 业务上移
 // ============================================================
 package os;
 
 public class FileStream {
-    var handle: Long? = null;
+    var handle: NativeHandle;
 
     static val SEEK_SET: Int = 0;
     static val SEEK_CUR: Int = 1;
     static val SEEK_END: Int = 2;
 
     constructor() {
-        this.handle = 0;
+        this.handle = NativeHandle.empty();
     }
 
     static func open(path: String, mode: String): FileStream? {
         val fs = new FileStream();
-        fs.handle = 0;
         if (!_fsOpen(fs.handle, path, mode)) {
             return null;
         }
@@ -55,14 +54,58 @@ public class FileStream {
     func flush(): Bool {
         return _fsFlush(this.handle);
     }
+
+    // 读至 EOF（对齐原 hao_os_readfile：过大/失败 null；空文件 ""）
+    func readAll(): String? {
+        if (!this.seek(0, FileStream.SEEK_END)) {
+            return null;
+        }
+        val sz = this.tell();
+        if (sz < 0) {
+            return null;
+        }
+        // INT32_MAX - 1：与 C 上限及 hao_fs_read_str 一致
+        if (sz > 2147483646) {
+            return null;
+        }
+        if (!this.seek(0, FileStream.SEEK_SET)) {
+            return null;
+        }
+        if (sz == 0) {
+            return "";
+        }
+        // Long→Int：已上界校验；经十进制往返避免窄化语法
+        val nOpt = Integer.parse(Long.toStr(sz));
+        if (nOpt == null) {
+            return null;
+        }
+        val n = nOpt!!;
+        val data = this.read(n);
+        if (data == null) {
+            return null;
+        }
+        // 对齐 C：期望读满但 got==0 且 sz>0 → null
+        if (_fsByteLen(data!!) == 0 && n > 0) {
+            return null;
+        }
+        return data;
+    }
+
+    // 覆盖写全量；字节数须等于 content 的 UTF-8 字节长
+    func writeAll(content: String): Bool {
+        val want = _fsByteLen(content);
+        val w = this.write(content);
+        return w == want;
+    }
 }
 
-extern func _fsOpen(h: Long?, path: String, mode: String): Bool = "hao_fs_open";
-extern func _fsClose(h: Long?): Int = "hao_fs_close";
-extern func _fsWriteStr(h: Long?, data: String): Int = "hao_fs_write_str";
-extern func _fsReadStr(h: Long?, max: Int): String? = "hao_fs_read_str";
-extern func _fsWriteBytes(h: Long?, data: [Byte]): Int = "hao_fs_write_bytes";
-extern func _fsReadBytes(h: Long?, max: Int): [Byte] = "hao_fs_read_bytes";
-extern func _fsSeek(h: Long?, off: Long, whence: Int): Bool = "hao_fs_seek";
-extern func _fsTell(h: Long?): Long = "hao_fs_tell";
-extern func _fsFlush(h: Long?): Bool = "hao_fs_flush";
+extern func _fsOpen(h: NativeHandle, path: String, mode: String): Bool = "hao_fs_open";
+extern func _fsClose(h: NativeHandle): Int = "hao_fs_close";
+extern func _fsWriteStr(h: NativeHandle, data: String): Int = "hao_fs_write_str";
+extern func _fsReadStr(h: NativeHandle, max: Int): String? = "hao_fs_read_str";
+extern func _fsWriteBytes(h: NativeHandle, data: [Byte]): Int = "hao_fs_write_bytes";
+extern func _fsReadBytes(h: NativeHandle, max: Int): [Byte] = "hao_fs_read_bytes";
+extern func _fsSeek(h: NativeHandle, off: Long, whence: Int): Bool = "hao_fs_seek";
+extern func _fsTell(h: NativeHandle): Long = "hao_fs_tell";
+extern func _fsFlush(h: NativeHandle): Bool = "hao_fs_flush";
+extern func _fsByteLen(s: String): Int = "hao_str_byte_len";

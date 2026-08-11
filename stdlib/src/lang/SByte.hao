@@ -38,7 +38,8 @@ class SByte {
     }
 
     static func toStr(v: SByte): String {
-        return hao_int_to_str(v);
+        val i: Int = v;
+        return Integer.toStr(i);
     }
 
     static func compare(a: SByte, b: SByte): Int {
@@ -62,6 +63,6 @@ class SByte {
     }
 
     override func toString(): String {
-        return hao_int_to_str(this.value);
+        return SByte.toStr(this.value);
     }
 }

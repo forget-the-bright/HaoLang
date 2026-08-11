@@ -1,5 +1,7 @@
 // ============================================================
 //  HaoLang 类型系统（v0.27：+ Char 码点；String=ptr→HaoString 头）
+//  v0.55.58：语言可见四属性 isValueType / isGcManaged / isUnsafePointer
+//            （口径 docs/类型属性.md；与 isReferenceType 配套）
 // ============================================================
 #pragma once
 
@@ -125,6 +127,31 @@ public:
                kind == TypeKind::Interface || kind == TypeKind::Array ||
                kind == TypeKind::Func || kind == TypeKind::TypeParam;
     }
+
+    // ------------------------------------------------------------
+    //  语言可见类型属性（docs/类型属性.md）
+    //  IsValueType ⟂ IsReference；值类型 T? 仍是值（语义），但 GcManaged。
+    // ------------------------------------------------------------
+
+    /** IsValueType：复制即独立；含值类型可空（Int? 等）；与 isReferenceType 互斥。 */
+    bool isValueType() const {
+        if (isReferenceType()) return false;
+        if (kind == TypeKind::Unit || kind == TypeKind::Unknown) return false;
+        return isInteger() || isFloating() || kind == TypeKind::Bool;
+    }
+
+    /** GcManaged：语言值是指向 GC 堆对象的指针（引用类型或值类型装箱块）。 */
+    bool isGcManaged() const {
+        return isReferenceType() || isBoxedNullable();
+    }
+
+    /**
+     * IsUnsafePointer：原生裸指针，不参与 GC。
+     * 当前无对应 TypeKind，恒 false（不对用户开放）。
+     * 资源路径正式方案：lang.NativeHandle（isGcManaged；内部才持裸针；v0.55.61）。
+     * 禁止用 UIntPtr/Long?/extern ptr 冒充资源句柄。
+     */
+    bool isUnsafePointer() const { return false; }
 
     // 整数族（含无符号、UIntPtr、Char 码点）
     bool isInteger() const {

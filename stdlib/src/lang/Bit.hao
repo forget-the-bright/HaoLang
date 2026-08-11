@@ -270,6 +270,6 @@ class Bit {
     }
 
     override func toString(): String {
-        return hao_long_to_str(this.value);
+        return Long.toStr(this.value);
     }
 }

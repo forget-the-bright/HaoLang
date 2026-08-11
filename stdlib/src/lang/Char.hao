@@ -30,8 +30,38 @@ class Character {
         return this.value;
     }
 
+    // UTF-8 编码 → fromBytes（v0.56：删 hao_char_to_str）
     static func toStr(v: Char): String {
-        return hao_char_to_str(v);
+        var cp: Int = v;
+        if (cp < 0) { cp = 0xFFFD; }
+        if (cp > 0x10FFFF) { cp = 0xFFFD; }
+        var arr: [Byte] = [];
+        if (cp <= 0x7F) {
+            val b: Byte = cp;
+            arr += b;
+        } else if (cp <= 0x7FF) {
+            val b0: Byte = 0xC0 | (cp >> 6);
+            val b1: Byte = 0x80 | (cp & 0x3F);
+            arr += b0;
+            arr += b1;
+        } else if (cp <= 0xFFFF) {
+            val b0: Byte = 0xE0 | (cp >> 12);
+            val b1: Byte = 0x80 | ((cp >> 6) & 0x3F);
+            val b2: Byte = 0x80 | (cp & 0x3F);
+            arr += b0;
+            arr += b1;
+            arr += b2;
+        } else {
+            val b0: Byte = 0xF0 | (cp >> 18);
+            val b1: Byte = 0x80 | ((cp >> 12) & 0x3F);
+            val b2: Byte = 0x80 | ((cp >> 6) & 0x3F);
+            val b3: Byte = 0x80 | (cp & 0x3F);
+            arr += b0;
+            arr += b1;
+            arr += b2;
+            arr += b3;
+        }
+        return hao_str_from_byte_arr(arr);
     }
 
     static func compare(a: Char, b: Char): Int {
@@ -55,6 +85,6 @@ class Character {
     }
 
     override func toString(): String {
-        return hao_char_to_str(this.value);
+        return Character.toStr(this.value);
     }
 }

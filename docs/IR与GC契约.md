@@ -1,4 +1,4 @@
-# IR ↔ GC 契约（v0.55.10+ 权威说明）
+# IR ↔ GC 契约（权威说明）
 
 > **读者**：改 IRGen / runtime_gc / 写屏障 / STW 的人。  
 > **地位**：GC 埋点、流程、规则的**唯一详文**；记忆文档 §5.4 只保留摘要并链到本文。  
@@ -57,7 +57,7 @@ flowchart TD
 
 | 阶段 | STW？ | 持锁要点 |
 |------|-------|----------|
-| Mark setup | 软根 STW；**未齐则 abort**（禁漏根进 mark） | 先开屏障再扫根；分相 `IncompleteRoot`/`AbortRoot`（v0.55.52） |
+| Mark setup | 软根 STW；**未齐则 abort**（禁漏根进 mark） | 先开屏障再扫根；分相 + miss tid/龄（v0.55.52～53） |
 | 并发 mark | 否 | drain 每 16 步可放锁；**2 条 GC 私有 worker** 同锁取灰 |
 | 终止 | 软 STW，**必须齐** | 重扫根+双轨；未齐计 `IncompleteTerm`；失败 `AbortTerm` |
 | Sweep | **保持 STW**（v0.55.15；禁边扫边 leave） | 终止成功后 sweep 完再 leave |
@@ -154,7 +154,11 @@ flowchart TD
 
 **STW abort 分相定位（v0.55.52）**：`stwIncompleteRoot/Term`、`markAbortRoot/Term/ParkWd` + 末次 `lastStw*`；`HAO_GC_TRACE` 打 `stw_incomplete`/`mark_abort`。压测两格同步涨可分类；**软 STW 工程债仍开**（未压 incomplete→0；S1e 判定跳过补丁）。
 
-**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口（统一 helper 等）；真实 C 叶槽 / 跨线程 VERIFY；软 STW 根握手税收紧（据分相）。
+**Win64 栈对齐 / CRT movdqa（v0.55.54 / v0.55.55）**：缺 **S128** 时 Hao IR 不保 16B 栈对齐；子线程/`collect` 路径进 libcmt `snprintf` 会 `movdqa` AV（`av_addr=-1`）。0.55.54：S128、trampoline、itoa、TRACE 避 snprintf。0.55.55：再去掉 `hao_time_format` 与 STW `miss_tids` 拼串的 `snprintf`；压测须用新编 exe（勿仓库根旧 `08-gc-monitor.exe`）。**非** soft-STW incomplete→0。
+
+**缺 park tid/龄 + finalizer 发现面（v0.55.53）**：末次 `lastMissTid*`/`lastMissMaxAgeMs`；TRACE `miss_tids=`/`miss_age_ms=`。`finalizerSkipAbort`/`finalizerLiveAtSweep`/`lastFinalizerDiag`（1=仍活 2=abort 跳过）。**非** §18.2④ 全文（无 PC→`.hao`）；S2e 判定跳过补丁；软 STW 工程债仍开。
+
+**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口（统一 helper 等）；真实 C 叶槽 / 跨线程 VERIFY；软 STW 根握手税收紧（据 miss tid）；§18.2④ PC→源码行。
 
 ### 4.4 分配
 
@@ -178,7 +182,7 @@ flowchart TD
 | channel send/try_send | **先 `hao_gc_add_root_if_heap` 再 chan_lock**（整型载荷勿进根表） |
 | `hao_str_trim` / `to_upper` / `to_lower` / `byte_slice` / `hao_make_args` | 分配前直接 `add_root`（禁 `is_heap_ptr` 前置） |
 | `hao_regex_compile` | pattern 成对挂根 |
-| `hao_sync_lock` | 自旋失败路径 safepoint |
+| Mutex / 原子自旋 | Hao CAS 失败路径 `hao_gc_safepoint`（删 `hao_sync_lock`） |
 | finalizer | 回调后仍可达 → 挂回堆，否则 free |
 | mark worker | **持锁外**启动；勿用 `hao_pool`；**不** `gc_register_thread` |
 
@@ -196,15 +200,17 @@ flowchart TD
 | `markWorkerSteps` | **GC 私有 worker** 推进灰块数（v0.54） |
 | `stwIncomplete` / `markAbortCycles` | 握手失败总量 |
 | `stwIncompleteRoot`/`Term` · `markAbortRoot`/`Term`/`ParkWd` | 分相（v0.55.52）；不变量 abort 总量=三分相之和 |
+| `lastMissTid*` · `lastMissMaxAgeMs` | 末次缺 park 身份/龄（v0.55.53；非 PC→源码） |
+| `finalizerSkipAbort` · `finalizerLiveAtSweep` · `lastFinalizerDiag` | finalizer 发现面（v0.55.53；禁以 runs>0 为压测绿） |
 | `lastStwPhase`/`Missing`/`Targets`/`OsBlockMissing` | 末次未齐 sticky 快照（定位用） |
-| `HAO_GC_TRACE=1` | `[hao:gc] stw_incomplete …` / `mark_abort reason=…` |
+| `HAO_GC_TRACE=1` | `[hao:gc] stw_incomplete … miss_tids=… miss_age_ms=…` / `mark_abort` / `finalizer_skip`/`finalizer_diag` |
 | `remsetCount` | 分代 remset 条目数（**仅服务 minor**；major 不 seed） |
 
 ---
 
 ## 7. 与 Go 的对齐 / 有意差异
 
-| 点 | Hao（v0.55.10） | Go 方向 |
+| 点 | Hao（当前；随 `VERSION`） | Go 方向 |
 |----|--------------|---------|
 | 可达性 + 三色 + 混合屏障 | ✅ 主路径 | ✅ |
 | 短 STW 根/终止 | 软 STW + 超时 abort | 更短 |
@@ -230,7 +236,8 @@ GC 只认**可达性**：从根沿指针摸得到 = 存活；摸不到 = 可回�
 | 清除白色 | 终止齐后 sweep；失败 abort（bump epoch，非假死借口） | **已做** |
 | 写屏障 | 混合（Yuasa old + Dijkstra new）；IDLE remset | **已做** |
 | C runtime 帧 | 有界保守叶 + 显式 `add_root` 皮带 | **诚实边界**（混合语言税） |
-| 软 STW abort | 单轮可能不回收，靠下一轮；压测两格同步涨多为根握手税（非计数器 bug） | **工程债**（v0.55.52 已可分相定位；未压 incomplete→0） |
+| 软 STW abort | 单轮可能不回收，靠下一轮；压测两格同步涨多为根握手税（非计数器 bug） | **工程债**（v0.55.53 已可 miss tid/龄；未压 incomplete→0） |
+| Win64 栈对齐 | 子线程/收集路径 CRT `movdqa` AV（`av_addr=-1`） | **v0.55.54/55** 已薄修热路径；其它 CRT 仍须保齐；禁根目录旧 exe |
 | 并发 drain 上限 | 步数/时间封顶，防密分配屏障活锁拖死 HTTP（v0.55.11） | **已做** |
 | 终止握手 | STW 内只 seed/判空，放行后再并发 drain（v0.55.13；取代 STW 下长 drain） | **已做** |
 | root 协作锁 | `add_root*`/`remove_root` 走 safepoint+STW 让出（v0.55.13） | **已做** |

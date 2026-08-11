@@ -20,6 +20,8 @@
 | STW incomplete | `gc.GC.stwIncomplete` + Root/Term 分相 | 软 STW 未齐；与 markAbort 同步涨且 abortRoot≈总量 ⇒ 根握手税（工程债） |
 | mark abort | `markAbortCycles` + Root/Term/ParkWd | abort MARK 分相（v0.55.52）；parkWd 涨看 watchdog |
 | last STW snap | `lastStwMissing`/`lastStwOsBlockMissing` | 末次未齐缺几人、其中 os_block 数（定位用） |
+| miss park tid/龄 | `lastMissTid0`/`lastMissMaxAgeMs` | 末次缺 park 线程 tid + 距上次 SP 龄（v0.55.53；非 PC→源码） |
+| finalizer diag | `lastFinalizerDiag`/`finalizerSkipAbort`/`finalizerLiveAtSweep` | runs=0 时区分「仍活」vs「abort 跳过」（v0.55.53） |
 | park watchdog | `parkWatchdogTrips`（stats） | park 超时强行放行次数（v0.55.11；正常应为 0） |
 | 突然全 pending | 进程不退、`parkWd=0` | 查是否为旧 binary；须 **v0.55.12** term-drain 放锁 |
 | 运行时长 | `os.Process.uptimeMs` | 进程存活时间 |

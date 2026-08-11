@@ -3,8 +3,8 @@
 // ------------------------------------------------------------
 //  文件名 String.hao。
 //
-//  HaoLang 的 String 是引用类型：ptr → HaoString{len,cap,data[]}（UTF-8，
-//  llvm 为 ptr），【不是】值类型：
+//  HaoLang 的 String 是引用类型：头对象 GC_SLOTS + UTF-8 [Byte] 载荷
+//  （cap≥len+1，尾 NUL 供 FFI），【不是】值类型：
 //    - String? 的 null 就是指针 0（零开销），非空即堆头指针
 //    - .length / charAt / s[i] 按 Unicode 码点（不是字节）
 //    - 本类是「API / Object 包装」：集中暴露方法表；需要 Object 时装箱
@@ -33,8 +33,8 @@
 //  ═══════════════════════════════════════════════════════════
 //    length / isEmpty / substring / indexOf / indexOf(sub,from) / lastIndexOf
 //    contains / startsWith / endsWith / charAt→Char / trim / toUpperCase / toLowerCase
-//    hashCode / equals / toString
-//  【静态】valueOf / fromInt / fromDouble / fromBool / compare
+//    byteLength / getBytes（拷贝） / hashCode / equals / toString
+//  【静态】valueOf / fromInt / fromDouble / fromBool / fromBytes / compare
 //
 //  不包装时调用：String.valueOf(s).substring(0, 2) / .indexOf(sub, from)
 //  或内建："hi".length / "hi"[0]
@@ -54,10 +54,10 @@ class String {
         return new lang.String(s);
     }
     static func fromInt(n: Int): lang.String {
-        return new lang.String(hao_int_to_str(n));
+        return new lang.String(Integer.toStr(n));
     }
     static func fromLong(n: Long): lang.String {
-        return new lang.String(hao_long_to_str(n));
+        return new lang.String(Long.toStr(n));
     }
     static func fromFloat(f: Float): lang.String {
         return new lang.String(hao_float_to_str(f));
@@ -66,52 +66,195 @@ class String {
         return new lang.String(hao_double_to_str(d));
     }
     static func fromBool(b: Bool): lang.String {
-        return new lang.String(hao_bool_to_str(b));
+        return new lang.String(Boolean.toStr(b));
+    }
+    // 从 UTF-8 [Byte] 建串（不要求尾 NUL；工厂内部补）
+    static func fromBytes(arr: [Byte]): lang.String {
+        return new lang.String(hao_str_from_byte_arr(arr));
     }
 
+    // 字典序：按码点比较（合法 UTF-8 下与字节序一致）
     static func compare(a: String, b: String): Int {
-        return hao_str_compare(a, b);
+        val na = a.length;
+        val nb = b.length;
+        var n = na;
+        if (nb < n) { n = nb; }
+        var i = 0;
+        while (i < n) {
+            val ca = a[i];
+            val cb = b[i];
+            if (ca < cb) { return -1; }
+            if (ca > cb) { return 1; }
+            i = i + 1;
+        }
+        if (na < nb) { return -1; }
+        if (na > nb) { return 1; }
+        return 0;
+    }
+
+    // 字节下标 indexOf（Http 报文等）；from 起搜；未找到 -1
+    static func byteIndexOf(s: String, sub: String, from: Int): Int {
+        val a = hao_str_get_bytes(s);
+        val b = hao_str_get_bytes(sub);
+        val sl = a.length;
+        val subl = b.length;
+        var f = from;
+        if (f < 0) { f = 0; }
+        if (subl == 0) {
+            if (f > sl) { return sl; }
+            return f;
+        }
+        if (f > sl - subl) { return -1; }
+        val lim = sl - subl;
+        var i = f;
+        while (i <= lim) {
+            var ok = true;
+            var j = 0;
+            while (j < subl) {
+                if (a[i + j] != b[j]) { ok = false; break; }
+                j = j + 1;
+            }
+            if (ok) { return i; }
+            i = i + 1;
+        }
+        return -1;
     }
 
     func length(): Int {
         return this.value.length;
     }
+    // UTF-8 字节数（不含尾 NUL）
+    func byteLength(): Int {
+        return hao_str_byte_len(this.value);
+    }
+    // 公开 API：返回载荷拷贝（不可变契约，对齐 Java getBytes）
+    func getBytes(): [Byte] {
+        return hao_str_get_bytes(this.value);
+    }
+    // v0.56：查询/substring/大小写上移 Hao；C 留 IR 原语 char_at/byte_of_cp/byte_slice
     func isEmpty(): Bool {
-        return hao_str_is_empty(this.value);
+        return this.value.length == 0;
     }
     func substring(start: Int, end: Int): String {
-        return hao_str_substring(this.value, start, end);
+        val s = this.value;
+        var a = start;
+        var b = end;
+        val n = s.length;
+        if (a < 0) { a = 0; }
+        if (b < a) { b = a; }
+        if (a > n) { a = n; }
+        if (b > n) { b = n; }
+        var b0 = hao_str_byte_of_cp(s, a);
+        var b1 = hao_str_byte_of_cp(s, b);
+        if (b0 < 0) { b0 = 0; }
+        if (b1 < 0) { b1 = hao_str_byte_len(s); }
+        return hao_str_byte_slice(s, b0, b1);
     }
     func indexOf(sub: String): Int {
-        return hao_str_index_of(this.value, sub);
+        return this.indexOf(sub, 0);
     }
     // Java String.indexOf(str, fromIndex)：码点下标起搜
     func indexOf(sub: String, from: Int): Int {
-        return hao_str_index_of_from(this.value, sub, from);
+        val n = this.value.length;
+        val m = sub.length;
+        var f = from;
+        if (f < 0) { f = 0; }
+        if (m == 0) {
+            if (f > n) { return n; }
+            return f;
+        }
+        if (f >= n) { return -1; }
+        if (m > n) { return -1; }
+        val lim = n - m;
+        var i = f;
+        while (i <= lim) {
+            if (this.substring(i, i + m) == sub) {
+                return i;
+            }
+            i = i + 1;
+        }
+        return -1;
     }
     func lastIndexOf(sub: String): Int {
-        return hao_str_last_index_of(this.value, sub);
+        val n = this.value.length;
+        val m = sub.length;
+        if (m == 0) { return n; }
+        if (m > n) { return -1; }
+        var last = -1;
+        val lim = n - m;
+        var i = 0;
+        while (i <= lim) {
+            if (this.substring(i, i + m) == sub) {
+                last = i;
+            }
+            i = i + 1;
+        }
+        return last;
     }
     func contains(sub: String): Bool {
-        return hao_str_contains(this.value, sub);
+        return this.indexOf(sub) >= 0;
     }
     func startsWith(prefix: String): Bool {
-        return hao_str_starts_with(this.value, prefix);
+        val n = prefix.length;
+        if (n == 0) { return true; }
+        if (n > this.value.length) { return false; }
+        return this.substring(0, n) == prefix;
     }
     func endsWith(suffix: String): Bool {
-        return hao_str_ends_with(this.value, suffix);
+        val n = suffix.length;
+        val m = this.value.length;
+        if (n == 0) { return true; }
+        if (n > m) { return false; }
+        return this.substring(m - n, m) == suffix;
     }
     func charAt(i: Int): Char {
-        return hao_str_char_at(this.value, i);
+        return this.value[i];
     }
+    // ASCII 空白（空格/制表/换行/回车）；按码点扫
     func trim(): String {
-        return hao_str_trim(this.value);
+        val n = this.value.length;
+        var a = 0;
+        var b = n;
+        while (a < b) {
+            val c = this.value[a];
+            if (c != ' ' && c != '\t' && c != '\n' && c != '\r') { break; }
+            a = a + 1;
+        }
+        while (b > a) {
+            val c = this.value[b - 1];
+            if (c != ' ' && c != '\t' && c != '\n' && c != '\r') { break; }
+            b = b - 1;
+        }
+        return this.substring(a, b);
     }
+    // ASCII a–z → A–Z；其余码点原样
     func toUpperCase(): String {
-        return hao_str_to_upper(this.value);
+        var r = "";
+        val n = this.value.length;
+        var i = 0;
+        while (i < n) {
+            var c = this.value[i];
+            if (c >= 'a' && c <= 'z') {
+                c = c - 32;
+            }
+            r = r + c;
+            i = i + 1;
+        }
+        return r;
     }
     func toLowerCase(): String {
-        return hao_str_to_lower(this.value);
+        var r = "";
+        val n = this.value.length;
+        var i = 0;
+        while (i < n) {
+            var c = this.value[i];
+            if (c >= 'A' && c <= 'Z') {
+                c = c + 32;
+            }
+            r = r + c;
+            i = i + 1;
+        }
+        return r;
     }
 
     override func hashCode(): Int {

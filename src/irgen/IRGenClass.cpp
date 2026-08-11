@@ -982,6 +982,8 @@ void IRGen::emitClassMeta() {
                 std::string metaPtr = "null";
                 if (!a.className.empty() && classes_.count(a.className)) {
                     auto aci = classes_[a.className];
+                    // C 静态表 HaoAnnoMeta.classMeta 存裸 @T.meta（非 Handle）；
+                    // Hao 读侧 hao_reflect_anno_class → wrap_meta。禁在此写 Handle。
                     if (aci && aci->hasVTable)
                         metaPtr = "@" + a.className + ".meta";
                 }
@@ -2589,6 +2591,13 @@ void IRGen::synthesizeClassStaticFields() {
     }
 }
 
+std::string IRGen::emitClassOfMetaFromRawMeta(const ClassInfoPtr& ci) {
+    // 唯一合法合成入口：永生静态 meta → NativeHandle → classOfMeta
+    std::string mh = emitCall("ptr", "@hao_handle_wrap",
+                              "ptr @" + ci->name + ".meta");
+    return emitCall("ptr", "@reflect$classOfMeta", "ptr " + mh);
+}
+
 void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
     bool hasCtor = ci->staticCtorNode != nullptr;
     bool hasRuntimeField = false;
@@ -2628,10 +2637,9 @@ void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
     clearDebugLoc();
     emitSafepoint();
 
-    // 合成 TypeName.Class ← classOfMeta(@T.meta)（枚举/普通类共用）
+    // 合成 TypeName.Class（经 emitClassOfMetaFromRawMeta，强制 Handle 包装）
     if (hasClassToken) {
-        std::string tok = emitCall("ptr", "@reflect$classOfMeta",
-                                   "ptr @" + ci->name + ".meta");
+        std::string tok = emitClassOfMetaFromRawMeta(ci);
         emitGlobalGcStore("@" + ci->name + ".Class", tok,
                           Type::makeClass("reflect$Class"));
     }

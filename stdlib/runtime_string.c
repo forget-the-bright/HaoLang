@@ -1,17 +1,13 @@
 /*
- * HaoLang 运行时 —— 字符串（v0.27 HaoString 堆头）
+ * HaoLang 运行时 —— 字符串（v0.55.60：头对象 + UTF-8 [Byte]）
  * ------------------------------------------------------------
  *  语言 String / String? = HaoString*（null = 空指针）。
- *  堆头：{len, cap, data[]}，data 为 UTF-8 + NUL（便于 C FFI）。
+ *  头：GC_SLOTS{ bytes→[Byte], cp_len }；载荷 cap≥len+1 且 data[len]=NUL。
  *  .length / charAt / 下标：Unicode 码点语义。
  */
 #include "runtime_internal.h"
 #include <limits.h>
 #include <errno.h>
-
-#ifndef offsetof
-#define offsetof(t, m) ((size_t)&(((t*)0)->m))
-#endif
 
 /* ---- UTF-8 辅助 ---- */
 
@@ -93,46 +89,55 @@ static int utf8_encode(int32_t cp, char out[4]) {
     return 4;
 }
 
-/* 字节下标 → 码点下标 */
-static int32_t utf8_cp_index_of_byte(const char* s, int32_t n, int32_t byte_idx) {
-    if (byte_idx < 0) return -1;
-    if (byte_idx > n) byte_idx = n;
-    int32_t i = 0, cps = 0;
-    while (i < byte_idx && i < n) {
-        unsigned char c = (unsigned char)s[i];
-        if (c < 0x80) i += 1;
-        else if ((c & 0xE0) == 0xC0) i += 2;
-        else if ((c & 0xF0) == 0xE0) i += 3;
-        else if ((c & 0xF8) == 0xF0) i += 4;
-        else i += 1;
-        cps++;
-    }
-    return cps;
+/* ---- 局部访问载荷 ---- */
+
+static char* sdata(HaoString* s) {
+    return (s && s->bytes) ? (char*)s->bytes : NULL;
+}
+
+static int32_t sblen(HaoString* s) {
+    if (!s || !s->bytes) return 0;
+    return (int32_t)hao_array_len(s->bytes);
+}
+
+/* 公开：码点下标 → 字节下标（substring Hao 原语）；越界 -1 */
+int32_t hao_str_byte_of_cp(HaoString* s, int32_t cp_idx) {
+    if (!s) return cp_idx == 0 ? 0 : -1;
+    char* d = sdata(s);
+    int32_t n = sblen(s);
+    return utf8_byte_of_cp(d ? d : "", n, cp_idx);
 }
 
 /* ---- 分配 / 构造 ---- */
 
 HaoString* hao_str_alloc(int32_t byte_len) {
     if (byte_len < 0) byte_len = 0;
-    /* cap = byte_len+1 须落在 int32；并防 size_t 溢出 */
+    /* cap = byte_len+1 须落在 int32 */
     if (byte_len >= INT32_MAX) byte_len = INT32_MAX - 1;
-    size_t hdr = offsetof(HaoString, data);
-    if (hdr > SIZE_MAX - (size_t)byte_len - 1) {
-        fputs("panic: 字符串过大\n", stderr);
-        exit(1);
-    }
-    size_t sz = hdr + (size_t)byte_len + 1;
-    HaoString* s = (HaoString*)gc_alloc_ex(sz, GC_KIND_OPAQUE, 0);
-    s->len = byte_len;
-    s->cap = byte_len + 1;
-    s->data[byte_len] = '\0';
+
+    void* arr = hao_array_new((int64_t)byte_len + 1, 1, 0);
+    hao_gc_add_root(arr);
+    ((char*)arr)[byte_len] = '\0';
+    *(int64_t*)((char*)arr - HAO_ARR_LEN_OFF) = (int64_t)byte_len;
+
+    /* bitmap bit0：slot0 bytes 为 GC 指针 */
+    HaoString* s = (HaoString*)hao_object_new(2, 1);
+    hao_gc_add_root(s);
+    hao_gc_barrier(&s->bytes, arr);
+    s->bytes = arr;
+    s->cp_len = -1;
+    hao_gc_remove_root(arr);
+    hao_gc_remove_root(s);
     return s;
 }
 
 HaoString* hao_str_from_bytes(const char* bytes, int32_t byte_len) {
     if (byte_len < 0) byte_len = 0;
     HaoString* s = hao_str_alloc(byte_len);
-    if (byte_len > 0 && bytes) memcpy(s->data, bytes, (size_t)byte_len);
+    if (byte_len > 0 && bytes) {
+        char* d = sdata(s);
+        if (d) memcpy(d, bytes, (size_t)byte_len);
+    }
     return s;
 }
 
@@ -147,16 +152,41 @@ HaoString* hao_str_from_cstr(const char* c) {
 }
 
 const char* hao_str_cstr(const HaoString* s) {
-    return s ? s->data : NULL;
+    /* 桥私有：返回 GC 堆内字节指针。
+     * 禁止：作为对外合法 FFI 模式借给 libc / 跨 safepoint / 跨线程长期持有。
+     * 合法出桥：hao_ffi_dup_cstr / hao_ffi_dup_bytes。
+     * 审计允许：runtime_* 内同步读自身串（hash/parse/reflect 名比对）；填 Hao 自有缓冲用 hao_str_data。
+     * 审计清单见 runtime_internal.h「cstr/data 桥私有调用约定」。 */
+    if (!s || !s->bytes) return NULL;
+    return (const char*)s->bytes;
+}
+
+char* hao_str_data(HaoString* s) {
+    /* 仅「写入本串已挂根缓冲」；禁止导出给 C 长期持有 */
+    return sdata(s);
+}
+
+void hao_str_set_byte_len(HaoString* s, int32_t n) {
+    if (!s || !s->bytes) return;
+    int64_t cap = hao_array_cap(s->bytes);
+    if (cap < 1) return;
+    if (n < 0) n = 0;
+    if ((int64_t)n >= cap) n = (int32_t)(cap - 1);
+    char* d = (char*)s->bytes;
+    d[n] = '\0';
+    *(int64_t*)((char*)s->bytes - HAO_ARR_LEN_OFF) = (int64_t)n;
+    s->cp_len = -1;
 }
 
 HaoString* hao_str_byte_slice(HaoString* s, int32_t start, int32_t end) {
     if (!s) return hao_str_from_cstr("");
     hao_gc_add_root(s);
+    int32_t len = sblen(s);
+    char* d = sdata(s);
     if (start < 0) start = 0;
-    if (end > s->len) end = s->len;
+    if (end > len) end = len;
     if (end < start) end = start;
-    HaoString* r = hao_str_from_bytes(s->data + start, end - start);
+    HaoString* r = hao_str_from_bytes(d ? d + start : "", end - start);
     if (r) hao_gc_add_root(r); /* 摘 s 前挂新串，防并发 collect */
     hao_gc_remove_root(s);
     if (r) hao_gc_remove_root(r);
@@ -164,25 +194,7 @@ HaoString* hao_str_byte_slice(HaoString* s, int32_t start, int32_t end) {
 }
 
 int32_t hao_str_byte_len(HaoString* s) {
-    return s ? s->len : 0;
-}
-
-/* 子串首次出现的字节下标；未找到 -1。from 为起始字节（夹紧）。 */
-int32_t hao_str_byte_index_of(HaoString* s, HaoString* sub, int32_t from) {
-    if (!s) s = hao_str_from_cstr("");
-    if (!sub || sub->len == 0) {
-        if (from < 0) from = 0;
-        if (from > s->len) from = s->len;
-        return from;
-    }
-    if (from < 0) from = 0;
-    if (sub->len > s->len || from > s->len - sub->len) return -1;
-    int32_t lim = s->len - sub->len;
-    for (int32_t i = from; i <= lim; i++) {
-        if (memcmp(s->data + i, sub->data, (size_t)sub->len) == 0)
-            return i;
-    }
-    return -1;
+    return sblen(s);
 }
 
 /* ---- 拼接 / 转串 ---- */
@@ -192,13 +204,12 @@ HaoString* hao_str_concat(HaoString* a, HaoString* b) {
     const char* db;
     int32_t la, lb;
     if (!a) { da = "null"; la = 4; }
-    else { da = a->data; la = a->len; }
+    else { da = sdata(a); la = sblen(a); if (!da) { da = ""; la = 0; } }
     if (!b) { db = "null"; lb = 4; }
-    else { db = b->data; lb = b->len; }
+    else { db = sdata(b); lb = sblen(b); if (!db) { db = ""; lb = 0; } }
     if (la < 0) la = 0;
     if (lb < 0) lb = 0;
     /* 有符号相加溢出会变成负数，hao_str_alloc 夹成 0 后仍 memcpy → 堆破坏 */
-    /* hao_str_alloc 最大载荷 INT32_MAX-1；允许 ==INT32_MAX 会被夹紧后 memcpy 越界 */
     if ((uint64_t)(uint32_t)la + (uint64_t)(uint32_t)lb > (uint64_t)(INT32_MAX - 1)) {
         fprintf(stderr, "panic: string concat length overflow\n");
         abort();
@@ -207,11 +218,13 @@ HaoString* hao_str_concat(HaoString* a, HaoString* b) {
     if (a) hao_gc_add_root(a);
     if (b) hao_gc_add_root(b);
     HaoString* r = hao_str_alloc(la + lb);
-    /* alloc 后可能移动语义不适用；仍从原指针读 data（未压缩移动） */
-    if (a) { da = a->data; la = a->len; if (la < 0) la = 0; }
-    if (b) { db = b->data; lb = b->len; if (lb < 0) lb = 0; }
-    memcpy(r->data, da, (size_t)la);
-    memcpy(r->data + la, db, (size_t)lb);
+    if (a) { da = sdata(a); la = sblen(a); if (la < 0) la = 0; if (!da) { da = ""; la = 0; } }
+    if (b) { db = sdata(b); lb = sblen(b); if (lb < 0) lb = 0; if (!db) { db = ""; lb = 0; } }
+    char* rd = sdata(r);
+    if (rd) {
+        memcpy(rd, da, (size_t)la);
+        memcpy(rd + la, db, (size_t)lb);
+    }
     /* 新串须先入根再摘 a/b：否则并发 STW 只见旧根、扫掉 r → str_len UAF */
     if (r) hao_gc_add_root(r);
     if (a) hao_gc_remove_root(a);
@@ -220,29 +233,8 @@ HaoString* hao_str_concat(HaoString* a, HaoString* b) {
     return r;
 }
 
-HaoString* hao_int_to_str(int32_t v) {
-    char buf[32];
-    int n = snprintf(buf, sizeof buf, "%d", (int)v);
-    return hao_str_from_bytes(buf, n);
-}
-
-HaoString* hao_long_to_str(int64_t v) {
-    char buf[32];
-    int n = snprintf(buf, sizeof buf, "%lld", (long long)v);
-    return hao_str_from_bytes(buf, n);
-}
-
-HaoString* hao_uint_to_str(uint32_t v) {
-    char buf[32];
-    int n = snprintf(buf, sizeof buf, "%u", (unsigned)v);
-    return hao_str_from_bytes(buf, n);
-}
-
-HaoString* hao_ulong_to_str(uint64_t v) {
-    char buf[32];
-    int n = snprintf(buf, sizeof buf, "%llu", (unsigned long long)v);
-    return hao_str_from_bytes(buf, n);
-}
+/* 手写十进制，避开 Win64 栈未齐时 libcmt snprintf 的 movdqa AV（v0.55.54）
+ * 仅供 float/double toStr 旁路不再需要；整型 toStr 已上移 Hao。 */
 
 HaoString* hao_float_to_str(float v) {
     char buf[64];
@@ -253,17 +245,6 @@ HaoString* hao_float_to_str(float v) {
 HaoString* hao_double_to_str(double v) {
     char buf[64];
     int n = snprintf(buf, sizeof buf, "%g", v);
-    return hao_str_from_bytes(buf, n);
-}
-
-HaoString* hao_bool_to_str(int8_t v) {
-    return hao_str_from_cstr(v ? "true" : "false");
-}
-
-/* Char 码点 → 单字符 UTF-8 串 */
-HaoString* hao_char_to_str(int32_t cp) {
-    char buf[4];
-    int n = utf8_encode(cp, buf);
     return hao_str_from_bytes(buf, n);
 }
 
@@ -285,251 +266,98 @@ int64_t hao_str_len(HaoString* s) {
         fflush(stderr);
         abort();
     }
-    return (int64_t)utf8_cp_count(s->data, s->len);
+    if (s->cp_len >= 0) return s->cp_len;
+    char* d = sdata(s);
+    int32_t n = sblen(s);
+    int64_t cps = (int64_t)utf8_cp_count(d ? d : "", n);
+    s->cp_len = cps;
+    return cps;
 }
 
 int8_t hao_str_eq(HaoString* a, HaoString* b) {
     if (a == b) return 1;
     if (!a || !b) return 0;
-    if (a->len != b->len) return 0;
-    return memcmp(a->data, b->data, (size_t)a->len) == 0 ? 1 : 0;
+    int32_t la = sblen(a), lb = sblen(b);
+    if (la != lb) return 0;
+    char* da = sdata(a);
+    char* db = sdata(b);
+    if (!da || !db) return la == 0 ? 1 : 0;
+    return memcmp(da, db, (size_t)la) == 0 ? 1 : 0;
 }
 
-int8_t hao_str_is_empty(HaoString* s) {
-    return (!s || s->len == 0) ? 1 : 0;
-}
-
-/* [start, end) 半开，按码点；越界钳制 */
-HaoString* hao_str_substring(HaoString* s, int32_t start, int32_t end) {
-    if (!s) return hao_str_from_cstr("");
-    /* 直接挂根；禁止先 is_heap_ptr（其内 safepoint） */
-    hao_gc_add_root(s);
-    int32_t cps = utf8_cp_count(s->data, s->len);
-    if (start < 0) start = 0;
-    if (end < start) end = start;
-    if (start > cps) start = cps;
-    if (end > cps) end = cps;
-    int32_t b0 = utf8_byte_of_cp(s->data, s->len, start);
-    int32_t b1 = utf8_byte_of_cp(s->data, s->len, end);
-    if (b0 < 0) b0 = 0;
-    if (b1 < 0) b1 = s->len;
-    HaoString* r = hao_str_from_bytes(s->data + b0, b1 - b0);
-    if (r) hao_gc_add_root(r);
-    hao_gc_remove_root(s);
-    if (r) hao_gc_remove_root(r);
-    return r;
-}
-
-/* 码点下标 from 起搜；对齐 Java String.indexOf(sub, fromIndex) */
-int32_t hao_str_index_of_from(HaoString* s, HaoString* sub, int32_t from) {
-    if (!s) s = hao_str_from_cstr("");
-    int32_t cps = utf8_cp_count(s->data, s->len);
-    if (from < 0) from = 0;
-    if (!sub || sub->len == 0) {
-        return from > cps ? cps : from;
-    }
-    if (from >= cps) return -1;
-    if (sub->len > s->len) return -1;
-    int32_t b0 = utf8_byte_of_cp(s->data, s->len, from);
-    if (b0 < 0) b0 = 0;
-    /* 用 s->len - sub->len 作上界，避免 i+sub->len 在接近 INT32_MAX 时有符号回绕 */
-    int32_t lim = s->len - sub->len;
-    for (int32_t i = b0; i <= lim; i++) {
-        if (memcmp(s->data + i, sub->data, (size_t)sub->len) == 0)
-            return utf8_cp_index_of_byte(s->data, s->len, i);
-    }
-    return -1;
-}
-
-int32_t hao_str_index_of(HaoString* s, HaoString* sub) {
-    return hao_str_index_of_from(s, sub, 0);
-}
-
-int32_t hao_str_last_index_of(HaoString* s, HaoString* sub) {
-    if (!s) s = hao_str_from_cstr("");
-    if (!sub || sub->len == 0) return utf8_cp_count(s->data, s->len);
-    if (sub->len > s->len) return -1;
-    int32_t last = -1;
-    int32_t lim = s->len - sub->len;
-    for (int32_t i = 0; i <= lim; i++) {
-        if (memcmp(s->data + i, sub->data, (size_t)sub->len) == 0)
-            last = utf8_cp_index_of_byte(s->data, s->len, i);
-    }
-    return last;
-}
-
-int8_t hao_str_contains(HaoString* s, HaoString* sub) {
-    return hao_str_index_of(s, sub) >= 0 ? 1 : 0;
-}
-
-int8_t hao_str_starts_with(HaoString* s, HaoString* prefix) {
-    if (!s) return (!prefix || prefix->len == 0) ? 1 : 0;
-    if (!prefix || prefix->len == 0) return 1;
-    if (prefix->len > s->len) return 0;
-    return memcmp(s->data, prefix->data, (size_t)prefix->len) == 0 ? 1 : 0;
-}
-
-int8_t hao_str_ends_with(HaoString* s, HaoString* suffix) {
-    if (!s) return (!suffix || suffix->len == 0) ? 1 : 0;
-    if (!suffix || suffix->len == 0) return 1;
-    if (suffix->len > s->len) return 0;
-    return memcmp(s->data + (s->len - suffix->len), suffix->data,
-                  (size_t)suffix->len) == 0 ? 1 : 0;
-}
+/* v0.56：substring / char_to_str / byte_index_of 已上移 Hao；char_at 仍供 IR s[i] */
 
 /* 按码点下标取 Char；越界 -1 */
 int32_t hao_str_char_at(HaoString* s, int64_t i) {
     /* 码点下标用 i64 入参，避免语言侧 Long 经 i32 截断后静默错位 */
     if (!s || i < 0 || i > (int64_t)INT32_MAX) return -1;
     int32_t ii = (int32_t)i;
-    int32_t b = utf8_byte_of_cp(s->data, s->len, ii);
-    if (b < 0 || b >= s->len) return -1;
+    char* d = sdata(s);
+    int32_t n = sblen(s);
+    if (!d) return -1;
+    int32_t b = utf8_byte_of_cp(d, n, ii);
+    if (b < 0 || b >= n) return -1;
     int32_t pos = b;
-    return utf8_decode(s->data, s->len, &pos);
+    return utf8_decode(d, n, &pos);
 }
 
-HaoString* hao_str_trim(HaoString* s) {
-    if (!s) return hao_str_from_cstr("");
-    hao_gc_add_root(s);
-    int32_t a = 0, b = s->len;
-    while (a < b) {
-        char c = s->data[a];
-        if (c != ' ' && c != '\t' && c != '\n' && c != '\r') break;
-        a++;
+/* 公开 getBytes：拷贝载荷（不含尾 NUL） */
+void* hao_str_get_bytes(HaoString* s) {
+    int32_t n = sblen(s);
+    char* d = sdata(s);
+    if (s) hao_gc_add_root(s);
+    void* arr = hao_array_new((int64_t)n, 1, 0);
+    if (n > 0 && d && arr) memcpy(arr, d, (size_t)n);
+    if (s) hao_gc_remove_root(s);
+    return arr;
+}
+
+/* 从 [Byte] 建串；逻辑长度 = 数组 len，工厂补尾 NUL */
+HaoString* hao_str_from_byte_arr(void* arr) {
+    if (!arr) return hao_str_from_cstr("");
+    hao_gc_add_root(arr);
+    int64_t n64 = hao_array_len(arr);
+    if (n64 < 0) n64 = 0;
+    if (n64 > (int64_t)(INT32_MAX - 1)) {
+        hao_gc_remove_root(arr);
+        fputs("panic: byte 数组过长无法建串\n", stderr);
+        exit(1);
     }
-    while (b > a) {
-        char c = s->data[b - 1];
-        if (c != ' ' && c != '\t' && c != '\n' && c != '\r') break;
-        b--;
-    }
-    HaoString* r = hao_str_from_bytes(s->data + a, b - a);
-    if (r) hao_gc_add_root(r);
-    hao_gc_remove_root(s);
-    if (r) hao_gc_remove_root(r);
-    return r;
+    HaoString* s = hao_str_from_bytes((const char*)arr, (int32_t)n64);
+    hao_gc_remove_root(arr);
+    return s;
 }
 
-HaoString* hao_str_to_upper(HaoString* s) {
-    if (!s) return hao_str_from_cstr("");
-    hao_gc_add_root(s);
-    HaoString* r = hao_str_alloc(s->len);
-    for (int32_t i = 0; i < s->len; i++) {
-        char c = s->data[i];
-        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
-        r->data[i] = c;
-    }
-    if (r) hao_gc_add_root(r);
-    hao_gc_remove_root(s);
-    if (r) hao_gc_remove_root(r);
-    return r;
-}
-
-HaoString* hao_str_to_lower(HaoString* s) {
-    if (!s) return hao_str_from_cstr("");
-    hao_gc_add_root(s);
-    HaoString* r = hao_str_alloc(s->len);
-    for (int32_t i = 0; i < s->len; i++) {
-        char c = s->data[i];
-        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-        r->data[i] = c;
-    }
-    if (r) hao_gc_add_root(r);
-    hao_gc_remove_root(s);
-    if (r) hao_gc_remove_root(r);
-    return r;
-}
-
-int32_t hao_str_compare(HaoString* a, HaoString* b) {
-    const char* da = a ? a->data : "";
-    const char* db = b ? b->data : "";
-    int32_t la = a ? a->len : 0;
-    int32_t lb = b ? b->len : 0;
-    int32_t n = la < lb ? la : lb;
-    int c = memcmp(da, db, (size_t)n);
-    if (c < 0) return -1;
-    if (c > 0) return 1;
-    if (la < lb) return -1;
-    if (la > lb) return 1;
-    return 0;
-}
-
-/* ---- 解析（入参 HaoString*；内部用 data）---- */
-
-void* hao_parse_int(HaoString* s) {
-    const char* p = hao_str_cstr(s);
-    if (!p || !*p) return NULL;
-    char* end = NULL;
-    long long v = strtoll(p, &end, 10);
-    if (end == p || (end && *end != '\0')) return NULL;
-    if (v < (long long)INT32_MIN || v > (long long)INT32_MAX) return NULL;
-    return hao_box_i32((int32_t)v);
-}
-
-void* hao_parse_long(HaoString* s) {
-    const char* p = hao_str_cstr(s);
-    if (!p || !*p) return NULL;
-    char* end = NULL;
-    errno = 0;
-    long long v = strtoll(p, &end, 10);
-    if (end == p || (end && *end != '\0')) return NULL;
-    if (errno == ERANGE) return NULL;
-    return hao_box_i64((int64_t)v);
-}
-
-void* hao_parse_uint(HaoString* s) {
-    const char* p = hao_str_cstr(s);
-    if (!p || !*p) return NULL;
-    if (p[0] == '-') return NULL;
-    char* end = NULL;
-    errno = 0;
-    unsigned long long v = strtoull(p, &end, 10);
-    if (end == p || (end && *end != '\0')) return NULL;
-    if (errno == ERANGE || v > 4294967295ULL) return NULL;
-    return hao_box_i32((int32_t)(uint32_t)v);
-}
-
-void* hao_parse_ulong(HaoString* s) {
-    const char* p = hao_str_cstr(s);
-    if (!p || !*p) return NULL;
-    if (p[0] == '-') return NULL;
-    char* end = NULL;
-    errno = 0;
-    unsigned long long v = strtoull(p, &end, 10);
-    if (end == p || (end && *end != '\0')) return NULL;
-    if (errno == ERANGE) return NULL;
-    return hao_box_i64((int64_t)v);
-}
+/* ---- 解析（float/double 留 C：dup 出桥后再 strto*）---- */
 
 void* hao_parse_double(HaoString* s) {
-    const char* p = hao_str_cstr(s);
-    if (!p || !*p) return NULL;
+    char* p = hao_ffi_dup_cstr(s);
     char* end = NULL;
+    double v;
+    if (!p || !*p) { free(p); return NULL; }
     errno = 0;
-    double v = strtod(p, &end);
-    if (end == p || (end && *end != '\0')) return NULL;
-    if (errno == ERANGE) return NULL;
+    v = strtod(p, &end);
+    if (end == p || (end && *end != '\0') || errno == ERANGE) {
+        free(p);
+        return NULL;
+    }
+    free(p);
     return hao_box_f64(v);
 }
 
 void* hao_parse_float(HaoString* s) {
-    const char* p = hao_str_cstr(s);
-    if (!p || !*p) return NULL;
+    char* p = hao_ffi_dup_cstr(s);
     char* end = NULL;
+    float v;
+    if (!p || !*p) { free(p); return NULL; }
     errno = 0;
-    float v = strtof(p, &end);
-    if (end == p || (end && *end != '\0')) return NULL;
-    if (errno == ERANGE) return NULL;
+    v = strtof(p, &end);
+    if (end == p || (end && *end != '\0') || errno == ERANGE) {
+        free(p);
+        return NULL;
+    }
+    free(p);
     return hao_box_f32(v);
-}
-
-void* hao_parse_bool(HaoString* s) {
-    const char* p = hao_str_cstr(s);
-    if (!p) return NULL;
-    if (strcmp(p, "true") == 0 || strcmp(p, "TRUE") == 0 || strcmp(p, "True") == 0)
-        return hao_box_i32(1);
-    if (strcmp(p, "false") == 0 || strcmp(p, "FALSE") == 0 || strcmp(p, "False") == 0)
-        return hao_box_i32(0);
-    return NULL;
 }
 
 void* hao_make_args(int argc, char** argv) {

@@ -11,6 +11,8 @@
  *  解析字符串），对基本类型与 String 字段完全可用。
  */
 #include "runtime_internal.h"
+#include <errno.h>
+#include <limits.h>
 
 /* 字段元数据（全部字段用 8 字节，避免 C/LLVM 结构体对齐差异） */
 typedef struct {
@@ -70,13 +72,29 @@ typedef void* (*HaoFactoryFn)(void*);
 extern HaoClassMeta* hao_all_metas[];
 static const HaoClassMeta** g_metas = (const HaoClassMeta**)hao_all_metas;
 
+/* v0.56：对外 API 入参为 NativeHandle；内部解包永生 meta（drop 空） */
+static void* meta_raw(HaoNativeHandle* h) {
+    return hao_handle_raw(h);
+}
+static HaoNativeHandle* wrap_meta(void* meta) {
+    return hao_handle_wrap(meta);
+}
+
+
+
 /* 从对象反查类元数据：读槽位 0 的虚表指针，线性查找 */
-void* hao_reflect_getclass(void* obj) {
-    if (!obj) return NULL;
+HaoNativeHandle* hao_reflect_getclass(void* obj) {
+    if (!obj) return wrap_meta(NULL);
+    /* 与 field_get 对齐：非堆/已回收 → 清晰 panic，避免错位 CRT AV 被 loc 读成神秘 UAF */
+    if (!hao_gc_expect_heap_object(obj)) {
+        fprintf(stderr, "panic: reflect getclass 非对象/已回收 obj=%p\n", obj);
+        fflush(stderr);
+        abort();
+    }
     void* vt = *(void**)obj;
     for (const HaoClassMeta** m = g_metas; m && *m; ++m)
-        if ((*m)->vtablePtr == vt) return (void*)*m;
-    return NULL;
+        if ((*m)->vtablePtr == vt) return wrap_meta((void*)*m);
+    return wrap_meta(NULL);
 }
 
 /* ---- 全局类型表 / 无参实例化（v0.30 包扫描）---- */
@@ -86,24 +104,26 @@ int32_t hao_reflect_type_count(void) {
     return n;
 }
 
-void* hao_reflect_type_at(int32_t i) {
-    if (i < 0) return NULL;
+HaoNativeHandle* hao_reflect_type_at(int32_t i) {
+    if (i < 0) return wrap_meta(NULL);
     int32_t n = 0;
     for (const HaoClassMeta** m = g_metas; m && *m; ++m) {
-        if (n == i) return (void*)*m;
+        if (n == i) return wrap_meta((void*)*m);
         n++;
     }
-    return NULL;
+    return wrap_meta(NULL);
 }
 
-void* hao_reflect_new_instance(void* meta) {
+void* hao_reflect_new_instance(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     if (!m || !m->factory) return NULL;
     if (m->ctorParamCount != 0) return NULL; /* 有参须走 new_instance_args */
     return ((HaoFactoryFn)m->factory)(NULL);
 }
 
-void* hao_reflect_new_instance_args(void* meta, int64_t* argSlots) {
+void* hao_reflect_new_instance_args(HaoNativeHandle* h, int64_t* argSlots) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     if (!m || !m->factory) return NULL;
     if (m->ctorParamCount == 0)
@@ -113,17 +133,20 @@ void* hao_reflect_new_instance_args(void* meta, int64_t* argSlots) {
     return ((HaoFactoryFn)m->factory)(argSlots);
 }
 
-int32_t hao_reflect_has_factory(void* meta) {
+int32_t hao_reflect_has_factory(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     return (m && m->factory) ? 1 : 0;
 }
 
-int32_t hao_reflect_ctor_param_count(void* meta) {
+int32_t hao_reflect_ctor_param_count(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     return m ? (int32_t)m->ctorParamCount : 0;
 }
 
-HaoString* hao_reflect_ctor_param_type(void* meta, int32_t i) {
+HaoString* hao_reflect_ctor_param_type(HaoNativeHandle* h, int32_t i) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     if (!m || i < 0 || i >= m->ctorParamCount || !m->ctorParamTypes)
         return hao_str_from_cstr("");
@@ -139,66 +162,82 @@ static const HaoFieldMeta* find_field(const HaoClassMeta* m, const char* name) {
 }
 
 /* ---- 元数据字符串访问器（供 reflect.hao 调用；返回 HaoString*）---- */
-HaoString* hao_reflect_name(void* meta) {
+HaoString* hao_reflect_name(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     return hao_str_from_cstr(meta ? ((const HaoClassMeta*)meta)->name : "");
 }
-HaoString* hao_reflect_super(void* meta) {
+HaoString* hao_reflect_super(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     return hao_str_from_cstr(meta ? ((const HaoClassMeta*)meta)->superName : "");
 }
-int32_t hao_reflect_is_abstract(void* meta) {
+int32_t hao_reflect_is_abstract(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     return meta ? ((const HaoClassMeta*)meta)->isAbstract : 0;
 }
-int32_t hao_reflect_is_enum(void* meta) {
+int32_t hao_reflect_is_enum(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     return meta ? ((const HaoClassMeta*)meta)->isEnum : 0;
 }
-int32_t hao_reflect_iface_count(void* meta) {
+int32_t hao_reflect_iface_count(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     return meta ? ((const HaoClassMeta*)meta)->ifaceCount : 0;
 }
-HaoString* hao_reflect_iface_at(void* meta, int32_t i) {
+HaoString* hao_reflect_iface_at(HaoNativeHandle* h, int32_t i) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     if (!m || i < 0 || i >= m->ifaceCount) return hao_str_from_cstr("");
     return hao_str_from_cstr(m->ifaces[i] ? m->ifaces[i] : "");
 }
-int32_t hao_reflect_field_count(void* meta) {
+int32_t hao_reflect_field_count(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     return meta ? ((const HaoClassMeta*)meta)->fieldCount : 0;
 }
-HaoString* hao_reflect_field_name(void* meta, int32_t i) {
+HaoString* hao_reflect_field_name(HaoNativeHandle* h, int32_t i) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     if (!m || i < 0 || i >= m->fieldCount) return hao_str_from_cstr("");
     return hao_str_from_cstr(m->fields[i].name ? m->fields[i].name : "");
 }
-HaoString* hao_reflect_field_type(void* meta, int32_t i) {
+HaoString* hao_reflect_field_type(HaoNativeHandle* h, int32_t i) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     if (!m || i < 0 || i >= m->fieldCount) return hao_str_from_cstr("");
     return hao_str_from_cstr(m->fields[i].typeStr ? m->fields[i].typeStr : "");
 }
-int32_t hao_reflect_method_count(void* meta) {
+int32_t hao_reflect_method_count(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     return meta ? ((const HaoClassMeta*)meta)->methodCount : 0;
 }
-HaoString* hao_reflect_method_name(void* meta, int32_t i) {
+HaoString* hao_reflect_method_name(HaoNativeHandle* h, int32_t i) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     if (!m || i < 0 || i >= m->methodCount) return hao_str_from_cstr("");
     return hao_str_from_cstr(m->methods[i].name ? m->methods[i].name : "");
 }
-int32_t hao_reflect_anno_count(void* meta) {
+int32_t hao_reflect_anno_count(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     return meta ? ((const HaoClassMeta*)meta)->annoCount : 0;
 }
-HaoString* hao_reflect_anno_name(void* meta, int32_t i) {
+HaoString* hao_reflect_anno_name(HaoNativeHandle* h, int32_t i) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     if (!m || i < 0 || i >= m->annoCount) return hao_str_from_cstr("");
     return hao_str_from_cstr(m->annos[i].name ? m->annos[i].name : "");
 }
-HaoString* hao_reflect_anno_value(void* meta, int32_t i) {
+HaoString* hao_reflect_anno_value(HaoNativeHandle* h, int32_t i) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     if (!m || i < 0 || i >= m->annoCount) return hao_str_from_cstr("");
     return hao_str_from_cstr(m->annos[i].value ? m->annos[i].value : "");
 }
-int32_t hao_reflect_method_anno_count(void* meta, int32_t mi) {
+int32_t hao_reflect_method_anno_count(HaoNativeHandle* h, int32_t mi) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     if (!m || mi < 0 || mi >= m->methodCount) return 0;
     return (int32_t)m->methods[mi].annoCount;
 }
-HaoString* hao_reflect_method_anno_name(void* meta, int32_t mi, int32_t ai) {
+HaoString* hao_reflect_method_anno_name(HaoNativeHandle* h, int32_t mi, int32_t ai) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     if (!m || mi < 0 || mi >= m->methodCount) return hao_str_from_cstr("");
     const HaoMethodMeta* mm = &m->methods[mi];
@@ -206,7 +245,8 @@ HaoString* hao_reflect_method_anno_name(void* meta, int32_t mi, int32_t ai) {
         return hao_str_from_cstr("");
     return hao_str_from_cstr(mm->annos[ai].name ? mm->annos[ai].name : "");
 }
-HaoString* hao_reflect_method_anno_value(void* meta, int32_t mi, int32_t ai) {
+HaoString* hao_reflect_method_anno_value(HaoNativeHandle* h, int32_t mi, int32_t ai) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     if (!m || mi < 0 || mi >= m->methodCount) return hao_str_from_cstr("");
     const HaoMethodMeta* mm = &m->methods[mi];
@@ -215,75 +255,51 @@ HaoString* hao_reflect_method_anno_value(void* meta, int32_t mi, int32_t ai) {
     return hao_str_from_cstr(mm->annos[ai].value ? mm->annos[ai].value : "");
 }
 
-void* hao_reflect_anno_class(void* meta, int32_t i) {
+HaoNativeHandle* hao_reflect_anno_class(HaoNativeHandle* h, int32_t i) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
-    if (!m || i < 0 || i >= m->annoCount || !m->annos) return NULL;
-    return m->annos[i].classMeta;
+    if (!m || i < 0 || i >= m->annoCount || !m->annos) return wrap_meta(NULL);
+    return wrap_meta(m->annos[i].classMeta);
 }
 
-void* hao_reflect_method_anno_class(void* meta, int32_t mi, int32_t ai) {
+HaoNativeHandle* hao_reflect_method_anno_class(HaoNativeHandle* h, int32_t mi, int32_t ai) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
-    if (!m || mi < 0 || mi >= m->methodCount) return NULL;
+    if (!m || mi < 0 || mi >= m->methodCount) return wrap_meta(NULL);
     const HaoMethodMeta* mm = &m->methods[mi];
-    if (ai < 0 || ai >= mm->annoCount || !mm->annos) return NULL;
-    return mm->annos[ai].classMeta;
+    if (ai < 0 || ai >= mm->annoCount || !mm->annos) return wrap_meta(NULL);
+    return wrap_meta(mm->annos[ai].classMeta);
 }
 
-static const HaoClassMeta* find_meta_by_name(const char* name) {
-    if (!name || !name[0]) return NULL;
-    for (const HaoClassMeta** m = g_metas; m && *m; ++m)
-        if ((*m)->name && strcmp((*m)->name, name) == 0) return *m;
-    return NULL;
-}
-
-/* Java Class.isAssignableFrom(other)：other 可否赋给 this（other 是 this 的子类型） */
-int32_t hao_reflect_is_assignable(void* a, void* b) {
-    const HaoClassMeta* A = (const HaoClassMeta*)a;
-    const HaoClassMeta* B = (const HaoClassMeta*)b;
-    if (!A || !B) return 0;
-    for (const HaoClassMeta* cur = B; cur; ) {
-        if (cur == A) return 1;
-        if (!cur->superName || !cur->superName[0]) break;
-        cur = find_meta_by_name(cur->superName);
-    }
-    /* 接口：若 A 名出现在 B 的接口表中 */
-    for (const HaoClassMeta* cur = B; cur; ) {
-        for (int64_t i = 0; i < cur->ifaceCount; ++i) {
-            if (cur->ifaces && cur->ifaces[i] && A->name &&
-                strcmp(cur->ifaces[i], A->name) == 0)
-                return 1;
-        }
-        if (!cur->superName || !cur->superName[0]) break;
-        cur = find_meta_by_name(cur->superName);
-    }
-    return 0;
-}
-
-int32_t hao_reflect_is_interface(void* meta) {
-    (void)meta;
+int32_t hao_reflect_is_interface(HaoNativeHandle* h) {
+    (void)h;
     /* 接口目前不进 hao_all_metas；Class 令牌仅覆盖 class/annotation/enum */
     return 0;
 }
 
-int32_t hao_reflect_is_annotation(void* meta) {
+int32_t hao_reflect_is_annotation(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     return (m && m->isAnnotation) ? 1 : 0;
 }
 
-int32_t hao_reflect_meta_hash(void* meta) {
+int32_t hao_reflect_meta_hash(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     uintptr_t p = (uintptr_t)meta;
     return (int32_t)(p ^ (p >> 32));
 }
 
 /* v0.50.1：每类型一个 reflect.Class 单例（存于 meta.classMirror） */
-void* hao_reflect_class_mirror(void* meta) {
+void* hao_reflect_class_mirror(HaoNativeHandle* h) {
+    void* meta = meta_raw(h);
     if (!meta) return NULL;
     HaoClassMeta* m = (HaoClassMeta*)meta;
     return __atomic_load_n(&m->classMirror, __ATOMIC_ACQUIRE);
 }
 
 /* 首次写入赢；失败则返回已有单例。成功时挂 GC 根。 */
-void* hao_reflect_set_class_mirror(void* meta, void* obj) {
+void* hao_reflect_set_class_mirror(HaoNativeHandle* h, void* obj) {
+    void* meta = meta_raw(h);
     if (!meta || !obj) return obj;
     HaoClassMeta* m = (HaoClassMeta*)meta;
     void* expected = NULL;
@@ -323,20 +339,27 @@ static int is_scalar_field_type(const char* t) {
 }
 
 /* 引用字段原始对象指针；标量/String/空 → NULL（v0.49） */
-void* hao_reflect_field_get_obj(void* meta, void* obj, HaoString* fname) {
+void* hao_reflect_field_get_obj(HaoNativeHandle* h, void* obj, HaoString* fname) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
-    const char* name = hao_str_cstr(fname);
+    char* name = hao_ffi_dup_cstr(fname);
     const HaoFieldMeta* f = find_field(m, name);
+    void* out = NULL;
+    free(name);
     if (!f || !obj) return NULL;
     if (is_scalar_field_type(f->typeStr)) return NULL;
-    char* base = (char*)obj + (size_t)f->slot * 8;
-    return *(void**)base;
+    {
+        char* base = (char*)obj + (size_t)f->slot * 8;
+        out = *(void**)base;
+    }
+    return out;
 }
 
 /* 读字段值转字符串。obj 为对象实例。 */
-HaoString* hao_reflect_field_get(void* meta, void* obj, HaoString* fname) {
+HaoString* hao_reflect_field_get(HaoNativeHandle* h, void* obj, HaoString* fname) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
-    const char* name;
+    char* name_c;
     const HaoFieldMeta* f;
     char* base;
     char buf[64];
@@ -353,8 +376,9 @@ HaoString* hao_reflect_field_get(void* meta, void* obj, HaoString* fname) {
         fflush(stderr);
         abort();
     }
-    name = hao_str_cstr(fname);
-    f = find_field(m, name);
+    name_c = hao_ffi_dup_cstr(fname);
+    f = find_field(m, name_c);
+    free(name_c);
     if (!f) {
         hao_gc_remove_root(fname);
         hao_gc_remove_root(obj);
@@ -394,7 +418,7 @@ HaoString* hao_reflect_field_get(void* meta, void* obj, HaoString* fname) {
         if (s && !hao_gc_expect_heap_ptr(s)) {
             fprintf(stderr,
                     "panic: reflect String 字段悬空/脏指针 field=%s s=%p obj=%p\n",
-                    name ? name : "?", (void*)s, obj);
+                    f->name ? f->name : "?", (void*)s, obj);
             fflush(stderr);
             abort();
         }
@@ -413,105 +437,167 @@ HaoString* hao_reflect_field_get(void* meta, void* obj, HaoString* fname) {
     }
 }
 
-/* 写字段值（严格解析，与 Integer.parse 等同策略）。返回 0 成功、非 0 失败。 */
-int32_t hao_reflect_field_set(void* meta, void* obj, HaoString* fname,
+/* field_set 专用解析（非导出；整型/布尔 parse 已上移 Hao） */
+static int field_parse_i32(const char* p, int32_t* out) {
+    char* end = NULL;
+    long long v;
+    if (!p || !*p) return 0;
+    errno = 0;
+    v = strtoll(p, &end, 10);
+    if (end == p || (end && *end != '\0')) return 0;
+    if (v < (long long)INT32_MIN || v > (long long)INT32_MAX) return 0;
+    *out = (int32_t)v;
+    return 1;
+}
+static int field_parse_i64(const char* p, int64_t* out) {
+    char* end = NULL;
+    long long v;
+    if (!p || !*p) return 0;
+    errno = 0;
+    v = strtoll(p, &end, 10);
+    if (end == p || (end && *end != '\0')) return 0;
+    if (errno == ERANGE) return 0;
+    *out = (int64_t)v;
+    return 1;
+}
+static int field_parse_u32(const char* p, uint32_t* out) {
+    char* end = NULL;
+    unsigned long long v;
+    if (!p || !*p || p[0] == '-') return 0;
+    errno = 0;
+    v = strtoull(p, &end, 10);
+    if (end == p || (end && *end != '\0')) return 0;
+    if (errno == ERANGE || v > 4294967295ULL) return 0;
+    *out = (uint32_t)v;
+    return 1;
+}
+static int field_parse_u64(const char* p, uint64_t* out) {
+    char* end = NULL;
+    unsigned long long v;
+    if (!p || !*p || p[0] == '-') return 0;
+    errno = 0;
+    v = strtoull(p, &end, 10);
+    if (end == p || (end && *end != '\0')) return 0;
+    if (errno == ERANGE) return 0;
+    *out = (uint64_t)v;
+    return 1;
+}
+static int field_parse_bool(const char* p, int8_t* out) {
+    if (!p) return 0;
+    if (strcmp(p, "true") == 0 || strcmp(p, "TRUE") == 0 || strcmp(p, "True") == 0) {
+        *out = 1; return 1;
+    }
+    if (strcmp(p, "false") == 0 || strcmp(p, "FALSE") == 0 || strcmp(p, "False") == 0) {
+        *out = 0; return 1;
+    }
+    return 0;
+}
+
+/* field_set: parse value into object slot; 0=ok */
+int32_t hao_reflect_field_set(HaoNativeHandle* h, void* obj, HaoString* fname,
                               HaoString* value) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
-    const char* name = hao_str_cstr(fname);
+    char* name = hao_ffi_dup_cstr(fname);
     const HaoFieldMeta* f = find_field(m, name);
+    free(name);
+    char* v;
+    char* base;
+    const char* t;
     if (!f || !obj || !value) return 1;
-    char* base = (char*)obj + (size_t)f->slot * 8;
-    const char* t = f->typeStr;
-    const char* v = hao_str_cstr(value);
+    base = (char*)obj + (size_t)f->slot * 8;
+    t = f->typeStr;
+    v = hao_ffi_dup_cstr(value);
     if (!v) return 1;
     if (t && strcmp(t, "Int") == 0) {
-        void* box = hao_parse_int(value);
-        if (!box) return 1;
-        *(int32_t*)base = hao_unbox_i32(box);
+        int32_t n;
+        if (!field_parse_i32(v, &n)) { free(v); return 1; }
+        *(int32_t*)base = n;
     } else if (t && strcmp(t, "Long") == 0) {
-        void* box = hao_parse_long(value);
-        if (!box) return 1;
-        *(int64_t*)base = hao_unbox_i64(box);
+        int64_t n;
+        if (!field_parse_i64(v, &n)) { free(v); return 1; }
+        *(int64_t*)base = n;
     } else if (t && strcmp(t, "UInt") == 0) {
-        void* box = hao_parse_uint(value);
-        if (!box) return 1;
-        *(uint32_t*)base = (uint32_t)hao_unbox_i32(box);
+        uint32_t n;
+        if (!field_parse_u32(v, &n)) { free(v); return 1; }
+        *(uint32_t*)base = n;
     } else if (t && strcmp(t, "ULong") == 0) {
-        void* box = hao_parse_ulong(value);
-        if (!box) return 1;
-        *(uint64_t*)base = (uint64_t)hao_unbox_i64(box);
+        uint64_t n;
+        if (!field_parse_u64(v, &n)) { free(v); return 1; }
+        *(uint64_t*)base = n;
     } else if (t && strcmp(t, "UIntPtr") == 0) {
-        void* box = hao_parse_ulong(value);
-        if (!box) return 1;
-        *(uint64_t*)base = (uint64_t)hao_unbox_i64(box);
+        uint64_t n;
+        if (!field_parse_u64(v, &n)) { free(v); return 1; }
+        *(uint64_t*)base = n;
     } else if (t && strcmp(t, "Short") == 0) {
-        void* box = hao_parse_int(value);
-        if (!box) return 1;
-        int32_t n = hao_unbox_i32(box);
-        if (n < INT16_MIN || n > INT16_MAX) return 1;
+        int32_t n;
+        if (!field_parse_i32(v, &n) || n < INT16_MIN || n > INT16_MAX) {
+            free(v); return 1;
+        }
         *(int16_t*)base = (int16_t)n;
     } else if (t && strcmp(t, "UShort") == 0) {
-        void* box = hao_parse_int(value);
-        if (!box) return 1;
-        int32_t n = hao_unbox_i32(box);
-        if (n < 0 || n > 65535) return 1;
+        int32_t n;
+        if (!field_parse_i32(v, &n) || n < 0 || n > 65535) { free(v); return 1; }
         *(uint16_t*)base = (uint16_t)n;
     } else if (t && strcmp(t, "Byte") == 0) {
-        void* box = hao_parse_int(value);
-        if (!box) return 1;
-        int32_t n = hao_unbox_i32(box);
-        if (n < 0 || n > 255) return 1;
+        int32_t n;
+        if (!field_parse_i32(v, &n) || n < 0 || n > 255) { free(v); return 1; }
         *(uint8_t*)base = (uint8_t)n;
     } else if (t && strcmp(t, "SByte") == 0) {
-        void* box = hao_parse_int(value);
-        if (!box) return 1;
-        int32_t n = hao_unbox_i32(box);
-        if (n < INT8_MIN || n > INT8_MAX) return 1;
+        int32_t n;
+        if (!field_parse_i32(v, &n) || n < INT8_MIN || n > INT8_MAX) {
+            free(v); return 1;
+        }
         *(int8_t*)base = (int8_t)n;
     } else if (t && strcmp(t, "Float") == 0) {
-        void* box = hao_parse_float(value);
-        if (!box) return 1;
-        *(float*)base = hao_unbox_f32(box);
+        char* end = NULL;
+        float fv;
+        errno = 0;
+        fv = strtof(v, &end);
+        if (end == v || (end && *end != '\0') || errno == ERANGE) {
+            free(v); return 1;
+        }
+        *(float*)base = fv;
     } else if (t && strcmp(t, "Double") == 0) {
-        void* box = hao_parse_double(value);
-        if (!box) return 1;
-        *(double*)base = hao_unbox_f64(box);
+        char* end = NULL;
+        double dv;
+        errno = 0;
+        dv = strtod(v, &end);
+        if (end == v || (end && *end != '\0') || errno == ERANGE) {
+            free(v); return 1;
+        }
+        *(double*)base = dv;
     } else if (t && strcmp(t, "Bool") == 0) {
-        void* box = hao_parse_bool(value);
-        if (box) {
-            *(int8_t*)base = (int8_t)hao_unbox_i32(box);
+        int8_t b;
+        if (field_parse_bool(v, &b)) {
+            *(int8_t*)base = b;
         } else if (strcmp(v, "1") == 0) {
             *(int8_t*)base = 1;
         } else if (strcmp(v, "0") == 0) {
             *(int8_t*)base = 0;
         } else {
+            free(v);
             return 1;
         }
     } else if (t && strcmp(t, "Char") == 0) {
-        void* box = hao_parse_int(value);
-        if (!box) return 1;
-        *(int32_t*)base = hao_unbox_i32(box);
+        int32_t n;
+        if (!field_parse_i32(v, &n)) { free(v); return 1; }
+        *(int32_t*)base = n;
     } else if (t && strcmp(t, "String") == 0) {
         HaoString* ns = hao_str_from_cstr(v);
-        /* v0.54：dst=字段槽；混合屏障 */
         hao_gc_barrier(base, ns);
         *(HaoString**)base = ns;
     } else {
+        free(v);
         return 1;
     }
+    free(v);
     return 0;
 }
 
-/* ---- 反射方法调用 invoke（v0.20.0）----
- *  思路：值为统一 8 字节槽，编译器为每个方法生成一个 thunk
- *    int64_t thunk(int64_t obj, void* argSlots)
- *  把 [Int] 参数槽按方法真实签名编组调用（虚方法经虚表分派保持多态），
- *  返回 8 字节结果。此处按方法名（含父类链）找到 thunk 并调用。
- *  实参槽约定：Int=值、Bool=0或1、Double=位模式、String/对象=指针当 Int。
- *  用 hao_reflect_ptrtoint 等助手在 Int 与具体类型间转换。
- */
 
-/* 按名字在类元数据（含父类链）中找方法 */
+typedef int64_t (*HaoInvokeFn)(int64_t, void*);
+
 static const HaoMethodMeta* find_method(const HaoClassMeta* m, const char* name) {
     for (const HaoClassMeta* c = m; c; ) {
         for (int i = 0; i < c->methodCount; ++i)
@@ -525,12 +611,6 @@ static const HaoMethodMeta* find_method(const HaoClassMeta* m, const char* name)
     return NULL;
 }
 
-typedef int64_t (*HaoInvokeFn)(int64_t, void*);
-
-/*
- * 对标 Java Method.invoke → Object：引用/可空/数组须走 invokeObj（GC 可见）。
- * invoke():Long 仅允许非可空标量位型（Hao 无装箱快路径）；禁止藏堆指针。
- */
 static int reflect_ret_is_raw_scalar(const char* t) {
     if (!t || !t[0]) return 0;
     if (strchr(t, '?')) return 0; /* Int? 等为装箱指针 */
@@ -547,21 +627,28 @@ static int reflect_ret_is_raw_scalar(const char* t) {
     return 0;
 }
 
-/* 按名查形参数量；未找到 -1（供 Hao 层抛 Exception） */
-int32_t hao_reflect_method_param_count(void* meta, HaoString* name) {
+int32_t hao_reflect_method_param_count(HaoNativeHandle* h, HaoString* name) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
     if (!m || !name) return -1;
-    const HaoMethodMeta* mm = find_method(m, hao_str_cstr(name));
+    char* _mn = hao_ffi_dup_cstr(name);
+    const HaoMethodMeta* mm = find_method(m, _mn);
+    free(_mn);
     if (!mm || !mm->invoke) return -1;
     return (int32_t)mm->paramCount;
 }
 
 /* 按方法名查返回类型串（含父类链）；未找到 → ""（v0.49） */
-HaoString* hao_reflect_method_return_type(void* meta, HaoString* mname) {
+HaoString* hao_reflect_method_return_type(HaoNativeHandle* h, HaoString* mname) {
+    void* meta = meta_raw(h);
     const HaoClassMeta* m = (const HaoClassMeta*)meta;
-    const char* name = hao_str_cstr(mname);
-    if (!m || !name) return hao_str_from_cstr("");
+    char* name = hao_ffi_dup_cstr(mname);
+    if (!m || !name) {
+        free(name);
+        return hao_str_from_cstr("");
+    }
     const HaoMethodMeta* mm = find_method(m, name);
+    free(name);
     if (!mm || !mm->retType) return hao_str_from_cstr("");
     return hao_str_from_cstr(mm->retType);
 }
@@ -580,7 +667,11 @@ static int64_t reflect_invoke_core(void* meta, void* obj, HaoString* name,
     if (obj) hao_gc_add_root(obj);
     if (name) hao_gc_add_root(name);
     if (argSlots) hao_gc_add_root(argSlots);
-    mm = find_method(m, hao_str_cstr(name));
+    {
+        char* _mn2 = hao_ffi_dup_cstr(name);
+        mm = find_method(m, _mn2);
+        free(_mn2);
+    }
     if (!mm || !mm->invoke) {
         if (argSlots) hao_gc_remove_root(argSlots);
         if (name) hao_gc_remove_root(name);
@@ -636,31 +727,37 @@ static int64_t reflect_invoke_core(void* meta, void* obj, HaoString* name,
     }
 }
 
-int64_t hao_reflect_invoke(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
+int64_t hao_reflect_invoke(HaoNativeHandle* h, void* obj, HaoString* name, int64_t* argSlots) {
+    void* meta = meta_raw(h);
     return reflect_invoke_core(meta, obj, name, argSlots, 1);
 }
 
 /* 对标 Java Method.invoke 的引用返回：ptr 由 Hao 调用约定挂 shadow 根 */
-void* hao_reflect_invoke_obj(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
+void* hao_reflect_invoke_obj(HaoNativeHandle* h, void* obj, HaoString* name, int64_t* argSlots) {
+    void* meta = meta_raw(h);
     return (void*)(intptr_t)reflect_invoke_core(meta, obj, name, argSlots, 2);
 }
 
-HaoString* hao_reflect_invoke_str(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
-    return (HaoString*)hao_reflect_invoke_obj(meta, obj, name, argSlots);
+HaoString* hao_reflect_invoke_str(HaoNativeHandle* h, void* obj, HaoString* name, int64_t* argSlots) {
+    return (HaoString*)hao_reflect_invoke_obj(h, obj, name, argSlots);
 }
-int8_t hao_reflect_invoke_bool(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
+int8_t hao_reflect_invoke_bool(HaoNativeHandle* h, void* obj, HaoString* name, int64_t* argSlots) {
+    void* meta = meta_raw(h);
     return (int8_t)reflect_invoke_core(meta, obj, name, argSlots, 0);
 }
-double hao_reflect_invoke_double(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
+double hao_reflect_invoke_double(HaoNativeHandle* h, void* obj, HaoString* name, int64_t* argSlots) {
+    void* meta = meta_raw(h);
     int64_t r = reflect_invoke_core(meta, obj, name, argSlots, 0);
     double d; memcpy(&d, &r, 8); return d;
 }
-float hao_reflect_invoke_float(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
+float hao_reflect_invoke_float(HaoNativeHandle* h, void* obj, HaoString* name, int64_t* argSlots) {
+    void* meta = meta_raw(h);
     int64_t r = reflect_invoke_core(meta, obj, name, argSlots, 0);
     int32_t bits = (int32_t)r;
     float f; memcpy(&f, &bits, 4); return f;
 }
-void hao_reflect_invoke_void(void* meta, void* obj, HaoString* name, int64_t* argSlots) {
+void hao_reflect_invoke_void(HaoNativeHandle* h, void* obj, HaoString* name, int64_t* argSlots) {
+    void* meta = meta_raw(h);
     reflect_invoke_core(meta, obj, name, argSlots, 0);
 }
 

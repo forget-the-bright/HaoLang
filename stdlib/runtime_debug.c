@@ -44,30 +44,54 @@ static int hao_trace_enabled(const char* module) {
 void hao_trace(const char* module, const char* fmt, ...) {
     char buf[512];
     int n;
-    va_list ap;
     if (!hao_trace_enabled(module)) return;
-    n = snprintf(buf, sizeof(buf), "[hao:%s] ", module ? module : "?");
-    if (n < 0) n = 0;
-    if (n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
+    /*
+     * Win64：Hao 子线程栈可能未 16B 对齐，libcmt snprintf/movdqa → AV（av_addr=-1）。
+     * TRACE 一律手工拼前缀+字面 fmt，不进 CRT（格式符暂不展开，保诊断可用）。
+     */
+#if defined(_WIN32) && (defined(__x86_64__) || defined(_M_X64))
     {
-        int m;
-        va_start(ap, fmt);
-        m = vsnprintf(buf + n, sizeof(buf) - (size_t)n, fmt ? fmt : "", ap);
-        va_end(ap);
-        if (m > 0) {
-            n += m;
-            if (n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
-        }
-    }
-    if (n < (int)sizeof(buf) - 1) {
-        buf[n++] = '\n';
+        const char* mod = module ? module : "?";
+        const char* msg = fmt ? fmt : "";
+        n = 0;
+        const char* pfx = "[hao:";
+        while (*pfx && n < (int)sizeof(buf) - 1) buf[n++] = *pfx++;
+        while (*mod && n < (int)sizeof(buf) - 1) buf[n++] = *mod++;
+        if (n < (int)sizeof(buf) - 1) buf[n++] = ']';
+        if (n < (int)sizeof(buf) - 1) buf[n++] = ' ';
+        while (*msg && n < (int)sizeof(buf) - 1) buf[n++] = *msg++;
+        if (n < (int)sizeof(buf) - 1) buf[n++] = '\n';
         buf[n] = '\0';
-    } else {
-        buf[sizeof(buf) - 2] = '\n';
-        buf[sizeof(buf) - 1] = '\0';
-        n = (int)sizeof(buf) - 1;
+        (void)hao_raw_write(2, buf, (unsigned)n);
+        return;
     }
-    (void)hao_raw_write(2, buf, (unsigned)n);
+#else
+    {
+        va_list ap;
+        n = snprintf(buf, sizeof(buf), "[hao:%s] ", module ? module : "?");
+        if (n < 0) n = 0;
+        if (n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
+        {
+            int m;
+            va_start(ap, fmt);
+            m = vsnprintf(buf + n, sizeof(buf) - (size_t)n, fmt ? fmt : "", ap);
+            va_end(ap);
+            if (m > 0) {
+                n += m;
+                if (n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
+            }
+        }
+        if (n < (int)sizeof(buf) - 1) {
+            buf[n++] = '\n';
+            buf[n] = '\0';
+        } else {
+            buf[sizeof(buf) - 2] = '\n';
+            buf[sizeof(buf) - 1] = '\0';
+            n = (int)sizeof(buf) - 1;
+        }
+        (void)hao_raw_write(2, buf, (unsigned)n);
+    }
+#endif
 }
 
 void hao_assert_fail(const char* expr, const char* file, int line) {

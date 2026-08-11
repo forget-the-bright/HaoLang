@@ -26,10 +26,35 @@ class IREmitter {
 public:
     IREmitter() = default;
 
-    // 设置目标三元组。交叉编译时必须与 clang --target 一致，
-    // 否则 clang 会以自身默认 triple 覆盖并给出 -Woverride-module 警告。
-    void setTargetTriple(const std::string& triple) { triple_ = triple; }
+    // 设置目标三元组，并填入匹配 datalayout（S128=栈 16B 对齐，防 CRT movdqa AV）。
+    void setTargetTriple(const std::string& triple) {
+        triple_ = triple;
+        // 与 clang -target 同族默认 layout（省略版本后缀差异）
+        if (triple_.find("windows-msvc") != std::string::npos) {
+            if (triple_.rfind("aarch64", 0) == 0)
+                dataLayout_ = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128";
+            else
+                dataLayout_ =
+                    "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128";
+        } else if (triple_.find("linux") != std::string::npos) {
+            if (triple_.rfind("aarch64", 0) == 0)
+                dataLayout_ = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128";
+            else
+                dataLayout_ =
+                    "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128";
+        } else if (triple_.find("apple-darwin") != std::string::npos) {
+            if (triple_.rfind("aarch64", 0) == 0)
+                dataLayout_ = "e-m:o-i64:64-i128:128-n32:64-S128";
+            else
+                dataLayout_ = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128";
+        } else {
+            dataLayout_ =
+                "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128";
+        }
+    }
     const std::string& targetTriple() const { return triple_; }
+
+    void setDataLayout(const std::string& dl) { dataLayout_ = dl; }
 
     // I3：调试元数据（仅当 debugEnabled 且有 DILocation 时 finish 才输出）
     void setDebugEnabled(bool v) { debugEnabled_ = v; }
@@ -208,8 +233,10 @@ public:
 
         out << "; ============================================\n"
             << ";  由 HaoLang 编译器生成 —— 请勿手工修改\n"
-            << "; ============================================\n\n"
-            << "target triple = \"" << triple_ << "\"\n\n";
+            << "; ============================================\n\n";
+        if (!dataLayout_.empty())
+            out << "target datalayout = \"" << dataLayout_ << "\"\n";
+        out << "target triple = \"" << triple_ << "\"\n\n";
 
         if (!globals_.empty()) {
             out << "; ---------- 全局常量（字符串 / 虚表） ----------\n";
@@ -333,14 +360,8 @@ public:
             "declare void @hao_print_str(ptr)",
             "declare ptr  @hao_str_concat(ptr, ptr)",
             "declare ptr  @hao_str_from_cstr(ptr)",
-            "declare ptr  @hao_int_to_str(i32)",
-            "declare ptr  @hao_long_to_str(i64)",
-            "declare ptr  @hao_uint_to_str(i32)",
-            "declare ptr  @hao_ulong_to_str(i64)",
             "declare ptr  @hao_float_to_str(float)",
             "declare ptr  @hao_double_to_str(double)",
-            "declare ptr  @hao_bool_to_str(i8)",
-            "declare ptr  @hao_char_to_str(i32)",
             "declare i64  @hao_str_len(ptr)",
             "declare i8   @hao_str_eq(ptr, ptr)",
             "declare i32  @hao_str_char_at(ptr, i64)",
@@ -361,6 +382,7 @@ public:
             "declare ptr  @hao_array_push(ptr, i64)",
             "declare i64  @hao_array_pop(ptr)",
             "declare ptr  @hao_object_new(i64, i64)",
+            "declare ptr  @hao_handle_wrap(ptr)",  // 永生/外部 raw → NativeHandle（drop=NULL）
             "declare void @hao_gc_barrier(ptr, ptr)",
             "declare void @hao_gc_shade(ptr)",
             "declare void @hao_gc_add_root_slot(ptr)",
@@ -564,6 +586,8 @@ private:
     unsigned labelCounter_ = 1;
     std::string currentBlock_ = "entry";
     std::string triple_ = "x86_64-pc-windows-msvc";
+    std::string dataLayout_ =
+        "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128";
     std::string entryAllocaBuf_;
 
     std::map<std::string, std::string> stringPool_;

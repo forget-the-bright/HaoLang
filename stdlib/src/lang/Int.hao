@@ -26,12 +26,58 @@ class Integer {
         return this.value;
     }
 
+    // v0.56：整型 parse/toStr 上移 Hao（删 hao_parse_int / hao_int_to_str）
     static func parse(s: String): Int? {
-        return hao_parse_int(s);
+        if (s.length == 0) { return null; }
+        var i = 0;
+        var neg = false;
+        if (s[0] == '-') {
+            neg = true;
+            i = 1;
+            if (s.length == 1) { return null; }
+        } else if (s[0] == '+') {
+            i = 1;
+            if (s.length == 1) { return null; }
+        }
+        var acc: Long = 0;
+        var any = false;
+        while (i < s.length) {
+            val c = s[i];
+            if (c < '0' || c > '9') { return null; }
+            val d: Int = c - 48;
+            acc = acc * 10 + d;
+            any = true;
+            if (!neg && acc > 2147483647) { return null; }
+            if (neg && acc > 2147483648) { return null; }
+            i = i + 1;
+        }
+        if (!any) { return null; }
+        if (neg) {
+            val r: Int = 0 - acc;
+            return r;
+        }
+        val r: Int = acc;
+        return r;
     }
 
     static func toStr(v: Int): String {
-        return hao_int_to_str(v);
+        if (v == 0) { return "0"; }
+        if (v == Integer.MIN_VALUE) { return "-2147483648"; }
+        var neg = false;
+        var x: Long = v;
+        if (v < 0) {
+            neg = true;
+            x = 0 - x;
+        }
+        var r = "";
+        while (x > 0) {
+            val d: Int = x % 10;
+            val ch: Char = 48 + d;
+            r = Character.toStr(ch) + r;
+            x = x / 10;
+        }
+        if (neg) { return "-" + r; }
+        return r;
     }
 
     static func compare(a: Int, b: Int): Int {
@@ -55,6 +101,6 @@ class Integer {
     }
 
     override func toString(): String {
-        return hao_int_to_str(this.value);
+        return Integer.toStr(this.value);
     }
 }
