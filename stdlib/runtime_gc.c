@@ -1637,7 +1637,7 @@ static int gc_verify_env_on(void) {
     return on;
 }
 
-/* V2/V6/V7/V8：冒烟夹具用 TLS 毒槽（文件作用域；MSVC 函数内 TLS 不可靠） */
+/* V2/V6/V7/V8/V9：冒烟夹具用 TLS 毒槽（文件作用域；MSVC 函数内 TLS 不可靠） */
 #ifdef _WIN32
 static __declspec(thread) void* g_verify_poison_cell;
 static __declspec(thread) void* g_verify_poison_pin;
@@ -1646,6 +1646,8 @@ static __declspec(thread) void* g_verify_poison_remset;
 static __declspec(thread) int g_verify_poison_remset_armed;
 static __declspec(thread) void* g_verify_poison_refl;
 static __declspec(thread) int g_verify_poison_refl_armed;
+static __declspec(thread) void* g_verify_poison_gpr;
+static __declspec(thread) int g_verify_poison_gpr_armed;
 #else
 static __thread void* g_verify_poison_cell;
 static __thread void* g_verify_poison_pin;
@@ -1654,6 +1656,8 @@ static __thread void* g_verify_poison_remset;
 static __thread int g_verify_poison_remset_armed;
 static __thread void* g_verify_poison_refl;
 static __thread int g_verify_poison_refl_armed;
+static __thread void* g_verify_poison_gpr;
+static __thread int g_verify_poison_gpr_armed;
 #endif
 
 static void gc_verify_shadow_roots(void) {
@@ -1758,11 +1762,45 @@ static void gc_verify_refl_i64_pins(void) {
     }
 }
 
+/* V9：校验本线程 GPR 溅射槽；非堆整数跳过；堆区内非精确活对象 fatal；毒针合成 gpr_i=0 */
+static void gc_verify_gpr_spill(void) {
+    size_t i, n;
+    if (!gc_verify_env_on()) return;
+    n = GC_GPR_SPILL_BYTES / sizeof(void*);
+    for (i = 0; i < n; ++i) {
+        void* p = ((void**)g_gpr_spill)[i];
+        if (!p) continue;
+        if (((uintptr_t)p & (sizeof(uintptr_t) - 1)) != 0) continue;
+        /* 与 mark 一致：堆区外非堆值跳过 */
+        if (gc_heap_lo && gc_heap_hi &&
+            ((char*)p < gc_heap_lo || (char*)p >= gc_heap_hi))
+            continue;
+        if (!gc_find_block_exact(p)) {
+            char detail[160];
+            snprintf(detail, sizeof(detail),
+                     "gpr spill is not a live heap object gpr_i=%zu ptr=%p",
+                     i, p);
+            hao_report_fatal("gc_verify", detail);
+        }
+    }
+    if (g_verify_poison_gpr_armed) {
+        void* p = g_verify_poison_gpr;
+        if (p && !gc_find_block_exact(p)) {
+            char detail[160];
+            snprintf(detail, sizeof(detail),
+                     "gpr spill is not a live heap object gpr_i=%zu ptr=%p",
+                     (size_t)0, p);
+            hao_report_fatal("gc_verify", detail);
+        }
+    }
+}
+
 static void gc_verify_roots(void) {
     gc_verify_shadow_roots();
     gc_verify_scan_pins();
     gc_verify_remset();
     gc_verify_refl_i64_pins();
+    gc_verify_gpr_spill();
 }
 
 /* V2：冒烟/调试钩子——压入非堆指针，下一 VERIFY collect 应 fatal */
@@ -1788,6 +1826,13 @@ void hao_debug_poison_remset(void) {
 void hao_debug_poison_refl_i64(void) {
     g_verify_poison_refl = (void*)(uintptr_t)0x8;
     g_verify_poison_refl_armed = 1;
+}
+
+/* V9：武装 GPR 溅射毒槽（写入 TLS 缓冲槽 0 + armed，非堆策略与 poison 一致） */
+void hao_debug_poison_gpr(void) {
+    g_verify_poison_gpr = (void*)(uintptr_t)0x8;
+    g_verify_poison_gpr_armed = 1;
+    ((void**)g_gpr_spill)[0] = g_verify_poison_gpr;
 }
 
 __attribute__((noinline))

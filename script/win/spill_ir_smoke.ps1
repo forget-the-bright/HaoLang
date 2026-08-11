@@ -243,6 +243,23 @@ if ($LASTEXITCODE -eq 0) {
     $fail++
 }
 
+# U10: class method body try/finally root smoke
+$out10 = & $hao run (Join-Path $Root "test\gc_try_method_finally_root_smoke.hao") 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0) {
+    $tc10 = ([regex]::Matches($out10, '(?m)^true\s*$')).Count
+    if ($tc10 -ge 7) {
+        Write-Host "OK   gc_try_method_finally_root_smoke true x7"
+    } else {
+        Write-Host "FAIL method/finally smoke true count=$tc10"
+        Write-Host $out10
+        $fail++
+    }
+} else {
+    Write-Host "FAIL gc_try_method_finally_root_smoke exit=$LASTEXITCODE"
+    Write-Host $out10
+    $fail++
+}
+
 # H1: HAO_GC_VERIFY=1 normal collect
 $prevVerify = $env:HAO_GC_VERIFY
 $env:HAO_GC_VERIFY = "1"
@@ -311,6 +328,29 @@ if ($traceEc -eq 0 -and $traceOut -match 'hao:irgen:acquire_spill next=') {
 } else {
     Write-Host "FAIL HAO_IRGEN_TRACE acquire_spill"
     Write-Host $traceOut
+    $fail++
+}
+
+# A8: HAO_IRGEN_TRACE=1 recycle_spill on for/continue emit
+@'
+func main() {
+    for (i in [0, 1, 2]) {
+        var junk = "x"
+        if (i == 0) { continue }
+        fmt.println(junk == "x")
+    }
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "recycle_for.hao")
+$prevTrace2 = $env:HAO_IRGEN_TRACE
+$env:HAO_IRGEN_TRACE = "1"
+$traceOut2 = & $hao emit (Join-Path $td "recycle_for.hao") -o (Join-Path $td "recycle_for.ll") 2>&1 | Out-String
+$traceEc2 = $LASTEXITCODE
+if ($null -ne $prevTrace2) { $env:HAO_IRGEN_TRACE = $prevTrace2 } else { Remove-Item Env:HAO_IRGEN_TRACE -ErrorAction SilentlyContinue }
+if ($traceEc2 -eq 0 -and $traceOut2 -match 'hao:irgen:recycle_spill target=') {
+    Write-Host "OK   HAO_IRGEN_TRACE recycle_spill prefix"
+} else {
+    Write-Host "FAIL HAO_IRGEN_TRACE recycle_spill"
+    Write-Host $traceOut2
     $fail++
 }
 

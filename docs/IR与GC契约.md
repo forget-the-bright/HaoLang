@@ -136,7 +136,9 @@ flowchart TD
 
 **refl_i64 VERIFY / 复合·字段 dbg.value / acquire TRACE（v0.55.43）**：VERIFY 扫 `g_refl_i64_pins`（`refl_i64_i=`）；`hao_debug_poison_refl_i64`。复合赋值与字段 `=` 薄 `dbg.value`。`HAO_IRGEN_TRACE` 增 `hao:irgen:acquire_spill`。
 
-**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口。
+**下标 dbg.value / GPR VERIFY / recycle TRACE / 方法 try（v0.55.44）**：下标 `=`/复合写回薄 `dbg.value`。VERIFY 扫 `g_gpr_spill`（堆区外非堆值跳过；`gpr_i=`）；`hao_debug_poison_gpr`。`HAO_IRGEN_TRACE` 增 `hao:irgen:recycle_spill`。`gc_try_method_finally_root_smoke`。**非** C 叶/全线程 VERIFY；**全量** Unwind 仍开。
+
+**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口；C 叶 VERIFY。
 
 ### 4.4 分配
 
@@ -281,7 +283,7 @@ hao run test/gc_box_nullable_arg_smoke.hao
 # hao run test/gc_try_thread_finally_root_smoke.hao  # U7a
 # hao run test/gc_try_rethrow_multilayer_root_smoke.hao # U7b
 # hao run test/gc_try_unit_lambda_finally_root_smoke.hao # U8b
-# HAO_GC_VERIFY=1  # collect 前/后校验 shadow/pin/remset
+# HAO_GC_VERIFY=1  # collect 前/后校验 shadow/pin/remset/refl/gpr
 # HAO_IRGEN_STRICT=1  # 清槽 underflow → 诊断拒绝 emit（A5）
 # HAO_IRGEN_TRACE=1   # 清槽正路径 hao:irgen:clear_spill（A6）
 # hao emit -g … | findstr llvm.dbg.declare          # D3/D4 薄 declare

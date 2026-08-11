@@ -109,6 +109,12 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
             if (!rhs.valid()) return Value();
 
             std::string ptr = arrayElemPtr(arr, idx);
+            /* D9：下标写回薄 dbg.value（DI 名优先数组变量名） */
+            std::string arrDbgName = "arr_elem";
+            if (auto* idp = dynamic_cast<HaoLangParser::IdentPrimaryContext*>(
+                    pf->primary())) {
+                if (idp->IDENT()) arrDbgName = idp->IDENT()->getText();
+            }
 
             if (op == "=") {
                 if (!isAssignable(rhs.type, elemType)) {
@@ -118,6 +124,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                 }
                 rhs = coerce(rhs, elemType, 0, 0);
                 emitHeapStore(ptr, rhs.ir, elemType, arr.ir);
+                emitDbgValueIf(elemType->llvmType(), rhs.ir, arrDbgName, 0, 0);
                 return rhs;
             }
 
@@ -189,6 +196,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
             Value out(reg, calcTy);
             out = coerce(out, elemType, 0, 0);
             emitHeapStore(ptr, out.ir, elemType, arr.ir);
+            emitDbgValueIf(elemType->llvmType(), out.ir, arrDbgName, 0, 0);
             return out;
         }
     }

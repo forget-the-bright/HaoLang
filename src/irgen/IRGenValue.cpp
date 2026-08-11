@@ -684,6 +684,16 @@ void IRGen::recycleLoopSpillSlots() {
         target = pool.stickyStack.back();
     else if (!pool.scopeStack.empty())
         target = pool.scopeStack.back();
+    /* A8：正路径可观测（默认关） */
+    {
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr,
+                    "hao:irgen:recycle_spill target=%zu next=%zu high=%zu\n",
+                    target, pool.next, pool.highWater);
+            fflush(stderr);
+        }
+    }
     /* 回退游标前须清 null，否则上轮 spill 残留在已 push 的槽里假活 */
     size_t lim = pool.highWater > pool.next ? pool.highWater : pool.next;
     if (lim > pool.slots.size()) lim = pool.slots.size();

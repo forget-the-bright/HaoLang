@@ -1,0 +1,31 @@
+// U10：类方法体内 try/finally GC 根存活（发现向；非全量 unwind）
+package main;
+
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+
+    public func touch(): Int {
+        var local = new Box("local");
+        try {
+            gc.GC.collect();
+            fmt.println(local.s == "local");
+            fmt.println(this.s == "self");
+            return 1;
+        } finally {
+            fmt.println(local.s == "local");
+            fmt.println(this.s == "self");
+        }
+    }
+}
+
+func main() {
+    var outer = new Box("outer");
+    var self = new Box("self");
+    fmt.println(self.touch() == 1);
+    fmt.println(outer.s == "outer");
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

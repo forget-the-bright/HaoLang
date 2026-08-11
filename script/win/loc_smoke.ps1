@@ -672,6 +672,67 @@ if ($okFld) {
     $fail++
 }
 
+# --- D9: -g array index assign has dbg.value ---
+@'
+func main() {
+    var a: [Int] = [0, 0]
+    a[0] = 9
+    fmt.println(a[0] == 9)
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_value_index.hao")
+$llIdx = Join-Path $td "dbg_value_index.ll"
+& $hao emit -g (Join-Path $td "dbg_value_index.hao") -o $llIdx 2>&1 | Out-Null
+$okIdx = $false
+if (Test-Path $llIdx) {
+    $itxt = Get-Content $llIdx -Raw
+    if ($itxt -match 'llvm\.dbg\.value' -and $itxt -match 'DILocalVariable\(name: "a"') {
+        $okIdx = $true
+    }
+}
+if ($okIdx) {
+    Write-Host "OK   -g index assign has dbg.value for a"
+} else {
+    Write-Host "FAIL -g index dbg.value"
+    $fail++
+}
+
+# --- V9: VERIFY poison gpr has gpr_i= ---
+@'
+import gc
+
+extern func hao_debug_poison_gpr(): Unit = "hao_debug_poison_gpr";
+
+func main() {
+    hao_debug_poison_gpr();
+    gc.GC.collect();
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "verify_gpr.hao")
+Reset-CrashLog
+$prevVgpr = $env:HAO_GC_VERIFY
+$env:HAO_GC_VERIFY = "1"
+& $hao run (Join-Path $td "verify_gpr.hao") 2>&1 | Out-Null
+if ($null -ne $prevVgpr) { $env:HAO_GC_VERIFY = $prevVgpr } else { Remove-Item Env:HAO_GC_VERIFY -ErrorAction SilentlyContinue }
+$okGpr = $false
+if (Test-Path $log) {
+    $txt = Get-Content $log -Raw
+    if ($txt -match "kind=gc_verify" -and
+        $txt -match "gpr_i=" -and
+        $txt -match "ptr=" -and
+        ($txt -match "src=.*verify_gpr\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_gpr\.hao:\d+")) {
+        $okGpr = $true
+    }
+    if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_gpr\.hao") {
+        $okGpr = $false
+    }
+}
+if ($okGpr) {
+    Write-Host "OK   VERIFY poison gpr has gpr_i + verify_gpr.hao loc"
+} else {
+    Write-Host "FAIL VERIFY poison gpr loc"
+    if (Test-Path $log) { Get-Content $log }
+    $fail++
+}
+
 if ($fail -eq 0) {
     Write-Host "loc_smoke: ALL PASS"
     exit 0
