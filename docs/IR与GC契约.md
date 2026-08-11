@@ -142,6 +142,8 @@ flowchart TD
 
 **pin·enter TRACE / for 迭代 dbg.value / ctor·静态 try（v0.55.46）**：`HAO_IRGEN_TRACE` 增 `pin_spill`/`enter_spill`。for 循环变量每轮迭代薄 `dbg.value`。`gc_try_ctor_finally_root_smoke`、`gc_try_static_method_finally_root_smoke`。**全量** Unwind 仍开。
 
+**sticky·block TRACE / catch dbg.value / haoroutine·when×for try（v0.55.47）**：`HAO_IRGEN_TRACE` 增 `sticky_floor`/`block_enter`/`block_leave`。catch 绑定薄 `dbg.value`。`gc_try_haoroutine_finally_root_smoke`、`gc_try_when_for_finally_root_smoke`。**全量** Unwind 仍开。
+
 **后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口；真实 C 叶槽 VERIFY。
 
 ### 4.4 分配

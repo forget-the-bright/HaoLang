@@ -311,6 +311,40 @@ if ($LASTEXITCODE -eq 0) {
     $fail++
 }
 
+# U14: haoroutine body try/finally root smoke
+$out14 = & $hao run (Join-Path $Root "test\gc_try_haoroutine_finally_root_smoke.hao") 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0) {
+    $tc14 = ([regex]::Matches($out14, '(?m)^true\s*$')).Count
+    if ($tc14 -ge 7) {
+        Write-Host "OK   gc_try_haoroutine_finally_root_smoke true x7"
+    } else {
+        Write-Host "FAIL haoroutine/finally smoke true count=$tc14"
+        Write-Host $out14
+        $fail++
+    }
+} else {
+    Write-Host "FAIL gc_try_haoroutine_finally_root_smoke exit=$LASTEXITCODE"
+    Write-Host $out14
+    $fail++
+}
+
+# U15: when x for x try/finally root smoke
+$out15 = & $hao run (Join-Path $Root "test\gc_try_when_for_finally_root_smoke.hao") 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0) {
+    $tc15 = ([regex]::Matches($out15, '(?m)^true\s*$')).Count
+    if ($tc15 -ge 10) {
+        Write-Host "OK   gc_try_when_for_finally_root_smoke true x10"
+    } else {
+        Write-Host "FAIL when/for/finally smoke true count=$tc15"
+        Write-Host $out15
+        $fail++
+    }
+} else {
+    Write-Host "FAIL gc_try_when_for_finally_root_smoke exit=$LASTEXITCODE"
+    Write-Host $out15
+    $fail++
+}
+
 # H1: HAO_GC_VERIFY=1 normal collect
 $prevVerify = $env:HAO_GC_VERIFY
 $env:HAO_GC_VERIFY = "1"
@@ -434,6 +468,27 @@ if ($traceEc2 -eq 0 -and $traceOut2 -match 'hao:irgen:pin_spill next=') {
 } else {
     Write-Host "FAIL HAO_IRGEN_TRACE pin_spill"
     Write-Host $traceOut2
+    $fail++
+}
+
+# A11: sticky_floor + block_enter/leave prefixes
+if ($traceEc -eq 0 -and $traceOut -match 'hao:irgen:sticky_floor sticky_n=') {
+    Write-Host "OK   HAO_IRGEN_TRACE sticky_floor prefix"
+} else {
+    Write-Host "FAIL HAO_IRGEN_TRACE sticky_floor"
+    Write-Host $traceOut
+    $fail++
+}
+$prevTrace3 = $env:HAO_IRGEN_TRACE
+$env:HAO_IRGEN_TRACE = "1"
+$traceOut3 = & $hao emit (Join-Path $Root "test\gc_block_scope_root_smoke.hao") -o (Join-Path $td "block_trace.ll") 2>&1 | Out-String
+$traceEc3 = $LASTEXITCODE
+if ($null -ne $prevTrace3) { $env:HAO_IRGEN_TRACE = $prevTrace3 } else { Remove-Item Env:HAO_IRGEN_TRACE -ErrorAction SilentlyContinue }
+if ($traceEc3 -eq 0 -and $traceOut3 -match 'hao:irgen:block_enter depth=' -and $traceOut3 -match 'hao:irgen:block_leave depth=') {
+    Write-Host "OK   HAO_IRGEN_TRACE block_enter/leave prefix"
+} else {
+    Write-Host "FAIL HAO_IRGEN_TRACE block_enter/leave"
+    Write-Host $traceOut3
     $fail++
 }
 

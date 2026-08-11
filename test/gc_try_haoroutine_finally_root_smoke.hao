@@ -1,0 +1,32 @@
+// U14：haoroutine × try/finally GC 根存活（发现向；非全量 unwind；异于 Thread.start）
+package main;
+
+import thread;
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var shared = new Box("live");
+    var done = new Box("0");
+    haoroutine {
+        var local = new Box("local");
+        try {
+            gc.GC.collect();
+            fmt.println(local.s == "local");
+            fmt.println(shared.s == "live");
+        } finally {
+            fmt.println(local.s == "local");
+            fmt.println(shared.s == "live");
+            done.s = "1";
+        }
+    }
+    thread.sleep(500);
+    fmt.println(shared.s == "live");
+    fmt.println(done.s == "1");
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

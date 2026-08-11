@@ -1,0 +1,33 @@
+// U15：when × for × try/finally GC 根存活（发现向；组合面；非全量 unwind）
+package main;
+
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var outer = new Box("outer");
+    var n = 1;
+    when (n) {
+        1 -> {
+            var xs: [Box] = [new Box("a"), new Box("b")];
+            for (it in xs) {
+                try {
+                    gc.GC.collect();
+                    fmt.println(it.s == "a" || it.s == "b");
+                    fmt.println(outer.s == "outer");
+                } finally {
+                    fmt.println(it.s == "a" || it.s == "b");
+                    fmt.println(outer.s == "outer");
+                }
+            }
+        }
+        else -> fmt.println(false);
+    }
+    fmt.println(outer.s == "outer");
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

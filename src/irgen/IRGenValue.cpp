@@ -531,11 +531,29 @@ void IRGen::clearUnwindGcRoot() {
 }
 
 void IRGen::beginBlockGcScope() {
+    /* A11：正路径可观测（默认关） */
+    {
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr, "hao:irgen:block_enter depth=%zu\n",
+                    blockGcSlots_.size());
+            fflush(stderr);
+        }
+    }
     blockGcSlots_.push_back({});
 }
 
 void IRGen::endBlockGcScope() {
     if (blockGcSlots_.empty()) return;
+    /* A11：正路径可观测（默认关） */
+    {
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr, "hao:irgen:block_leave depth=%zu slots=%zu\n",
+                    blockGcSlots_.size(), blockGcSlots_.back().size());
+            fflush(stderr);
+        }
+    }
     if (!blockTerminated_) {
         for (const auto& addr : blockGcSlots_.back())
             emitStore("ptr", "null", addr);
@@ -646,6 +664,16 @@ void IRGen::markLoopSpillStickyFloor() {
     if (loopSpillPools_.empty()) return;
     auto& pool = loopSpillPools_.back();
     if (pool.stickyFloorStack.empty()) return;
+    /* A11：正路径可观测（默认关） */
+    {
+        const char* tr = getenv("HAO_IRGEN_TRACE");
+        if (tr && tr[0] && tr[0] != '0') {
+            fprintf(stderr,
+                    "hao:irgen:sticky_floor sticky_n=%zu next=%zu\n",
+                    pool.stickyStack.size(), pool.next);
+            fflush(stderr);
+        }
+    }
     pool.stickyFloorStack.back() = pool.stickyStack.size();
 }
 

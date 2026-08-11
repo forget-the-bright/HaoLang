@@ -821,6 +821,33 @@ if ($okFor) {
     $fail++
 }
 
+# --- D12: -g catch bind has dbg.value ---
+@'
+import exception.*
+func main() {
+    try {
+        throw new Exception("x")
+    } catch (e: Exception) {
+        fmt.println(e.getMessage().length > 0)
+    }
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_value_catch.hao")
+$llCatch = Join-Path $td "dbg_value_catch.ll"
+& $hao emit -g (Join-Path $td "dbg_value_catch.hao") -o $llCatch 2>&1 | Out-Null
+$okCatch = $false
+if (Test-Path $llCatch) {
+    $ctxt = Get-Content $llCatch -Raw
+    if ($ctxt -match 'llvm\.dbg\.value' -and $ctxt -match 'DILocalVariable\(name: "e"') {
+        $okCatch = $true
+    }
+}
+if ($okCatch) {
+    Write-Host "OK   -g catch bind has dbg.value for e"
+} else {
+    Write-Host "FAIL -g catch dbg.value"
+    $fail++
+}
+
 if ($fail -eq 0) {
     Write-Host "loc_smoke: ALL PASS"
     exit 0

@@ -343,6 +343,8 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
                 int cl = ce.node->getStart() ? static_cast<int>(ce.node->getStart()->getLine())
                                              : 1;
                 emitDbgDeclareIf(ce.bindAddr, sym->name, cl, 0);
+                /* D12：catch 绑定薄 dbg.value */
+                emitDbgValueIf("ptr", exc, sym->name, cl, 0);
             }
 
             beginBlockGcScope();
