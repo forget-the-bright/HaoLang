@@ -548,6 +548,16 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
                     emitGcRootPush(addr);
             }
             syms_.declare(ps);
+            /* D13：lambda 参数薄 declare/value（对齐顶层函数参数） */
+            {
+                int pl = mi.ctx->getStart()
+                    ? static_cast<int>(mi.ctx->getStart()->getLine()) : 1;
+                emitDbgDeclareIf(ps->irAddr, ps->name, pl,
+                                 static_cast<unsigned>(i) + 1);
+                if (!arrayByRef)
+                    emitDbgValueIf(mi.paramTypes[i]->llvmType(), argSrc, ps->name,
+                                   pl, static_cast<unsigned>(i) + 1);
+            }
         }
 
         // 生成语句；末尾表达式语句在非 Unit 返回时作为隐式返回值

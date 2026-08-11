@@ -345,6 +345,23 @@ if ($LASTEXITCODE -eq 0) {
     $fail++
 }
 
+# U16: nested try inside catch body root smoke
+$out16 = & $hao run (Join-Path $Root "test\gc_try_nested_catch_root_smoke.hao") 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0) {
+    $tc16 = ([regex]::Matches($out16, '(?m)^true\s*$')).Count
+    if ($tc16 -ge 9) {
+        Write-Host "OK   gc_try_nested_catch_root_smoke true x9"
+    } else {
+        Write-Host "FAIL nested-catch smoke true count=$tc16"
+        Write-Host $out16
+        $fail++
+    }
+} else {
+    Write-Host "FAIL gc_try_nested_catch_root_smoke exit=$LASTEXITCODE"
+    Write-Host $out16
+    $fail++
+}
+
 # H1: HAO_GC_VERIFY=1 normal collect
 $prevVerify = $env:HAO_GC_VERIFY
 $env:HAO_GC_VERIFY = "1"
@@ -489,6 +506,42 @@ if ($traceEc3 -eq 0 -and $traceOut3 -match 'hao:irgen:block_enter depth=' -and $
 } else {
     Write-Host "FAIL HAO_IRGEN_TRACE block_enter/leave"
     Write-Host $traceOut3
+    $fail++
+}
+
+# A12: grow_spill — force pool expand past prealloc (48); nest in if so vars are not loop-hoisted
+$growSrc = @'
+func main() {
+    var i = 0
+    while (i < 1) {
+        if (true) {
+            var s00 = "00"; var s01 = "01"; var s02 = "02"; var s03 = "03"; var s04 = "04"
+            var s05 = "05"; var s06 = "06"; var s07 = "07"; var s08 = "08"; var s09 = "09"
+            var s10 = "10"; var s11 = "11"; var s12 = "12"; var s13 = "13"; var s14 = "14"
+            var s15 = "15"; var s16 = "16"; var s17 = "17"; var s18 = "18"; var s19 = "19"
+            var s20 = "20"; var s21 = "21"; var s22 = "22"; var s23 = "23"; var s24 = "24"
+            var s25 = "25"; var s26 = "26"; var s27 = "27"; var s28 = "28"; var s29 = "29"
+            var s30 = "30"; var s31 = "31"; var s32 = "32"; var s33 = "33"; var s34 = "34"
+            var s35 = "35"; var s36 = "36"; var s37 = "37"; var s38 = "38"; var s39 = "39"
+            var s40 = "40"; var s41 = "41"; var s42 = "42"; var s43 = "43"; var s44 = "44"
+            var s45 = "45"; var s46 = "46"; var s47 = "47"; var s48 = "48"; var s49 = "49"
+            fmt.println(s00.length + s49.length > 0)
+        }
+        i = i + 1
+    }
+}
+'@
+$growSrc | Set-Content -Encoding utf8 (Join-Path $td "grow_spill.hao")
+$prevTrace4 = $env:HAO_IRGEN_TRACE
+$env:HAO_IRGEN_TRACE = "1"
+$traceOut4 = & $hao emit (Join-Path $td "grow_spill.hao") -o (Join-Path $td "grow_spill.ll") 2>&1 | Out-String
+$traceEc4 = $LASTEXITCODE
+if ($null -ne $prevTrace4) { $env:HAO_IRGEN_TRACE = $prevTrace4 } else { Remove-Item Env:HAO_IRGEN_TRACE -ErrorAction SilentlyContinue }
+if ($traceEc4 -eq 0 -and $traceOut4 -match 'hao:irgen:grow_spill next=') {
+    Write-Host "OK   HAO_IRGEN_TRACE grow_spill prefix"
+} else {
+    Write-Host "FAIL HAO_IRGEN_TRACE grow_spill"
+    Write-Host $traceOut4
     $fail++
 }
 

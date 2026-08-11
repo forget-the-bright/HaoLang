@@ -443,15 +443,23 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
                 addr = em_.nextNamed(ci.bindName + ".addr");
                 emitAllocaAt(addr, ci.bindType->llvmType());
             }
+            std::string dbgTy;
+            std::string dbgVal;
             if (ci.method == "recv") {
                 emitStore("i64", bits, addr);
+                dbgTy = "i64";
+                dbgVal = bits;
             } else if (ci.method == "recvInt") {
                 std::string tr = emitCast("trunc", "i64", bits, "i32");
                 emitStore("i32", tr, addr);
+                dbgTy = "i32";
+                dbgVal = tr;
             } else {
                 // recvStr → String?
                 std::string p = emitIntToPtr("i64", bits);
                 emitStore("ptr", p, addr);
+                dbgTy = "ptr";
+                dbgVal = p;
             }
             if (isGcPointerType(ci.bindType) && !poolBind) {
                 emitGcRootPush(addr);
@@ -466,6 +474,12 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
             sym->irAddr = addr;
             sym->line = st->getStart()->getLine();
             syms_.declare(sym);
+            /* D14：select 接收绑定薄 DI */
+            {
+                int bl = static_cast<int>(sym->line);
+                emitDbgDeclareIf(addr, ci.bindName, bl, 0);
+                emitDbgValueIf(dbgTy, dbgVal, ci.bindName, bl, 0);
+            }
         }
         for (auto* s : ci.body) genStatement(s);
         endBlockGcScope();

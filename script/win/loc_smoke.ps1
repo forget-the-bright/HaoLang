@@ -848,6 +848,57 @@ if ($okCatch) {
     $fail++
 }
 
+# --- D13: -g lambda param has declare/value ---
+@'
+func main() {
+    val f: Func<Int, Int> = { x -> x + 1 }
+    fmt.println(f(1) == 2)
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_value_lambda.hao")
+$llLam = Join-Path $td "dbg_value_lambda.ll"
+& $hao emit -g (Join-Path $td "dbg_value_lambda.hao") -o $llLam 2>&1 | Out-Null
+$okLam = $false
+if (Test-Path $llLam) {
+    $ltxt = Get-Content $llLam -Raw
+    if ($ltxt -match 'llvm\.dbg\.declare' -and $ltxt -match 'llvm\.dbg\.value' -and $ltxt -match 'DILocalVariable\(name: "x"') {
+        $okLam = $true
+    }
+}
+if ($okLam) {
+    Write-Host "OK   -g lambda param has dbg.declare/value for x"
+} else {
+    Write-Host "FAIL -g lambda param dbg"
+    $fail++
+}
+
+# --- D14: -g select recv bind has declare/value ---
+@'
+import channel;
+func main() {
+    var ch = channel.make(1)
+    ch.sendInt(7)
+    select {
+        case v = ch.recvInt():
+            fmt.println(v == 7)
+    }
+}
+'@ | Set-Content -Encoding utf8 (Join-Path $td "dbg_value_select.hao")
+$llSel = Join-Path $td "dbg_value_select.ll"
+& $hao emit -g (Join-Path $td "dbg_value_select.hao") -o $llSel 2>&1 | Out-Null
+$okSel = $false
+if (Test-Path $llSel) {
+    $stxt = Get-Content $llSel -Raw
+    if ($stxt -match 'llvm\.dbg\.declare' -and $stxt -match 'llvm\.dbg\.value' -and $stxt -match 'DILocalVariable\(name: "v"') {
+        $okSel = $true
+    }
+}
+if ($okSel) {
+    Write-Host "OK   -g select bind has dbg.declare/value for v"
+} else {
+    Write-Host "FAIL -g select bind dbg"
+    $fail++
+}
+
 if ($fail -eq 0) {
     Write-Host "loc_smoke: ALL PASS"
     exit 0

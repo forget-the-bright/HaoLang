@@ -1,0 +1,33 @@
+// U16：外层 catch 体内嵌套 try/finally GC 根存活（覆盖 catchDepth_；发现向；非全量 unwind）
+package main;
+
+import exception.*;
+import gc;
+
+class Box {
+    public var s: String = "";
+    public constructor(s: String) { this.s = s; }
+}
+
+func main() {
+    var outer = new Box("outer");
+    try {
+        throw new Exception("boom");
+    } catch (e: Exception) {
+        var mid = new Box("mid");
+        try {
+            var inner = new Box("inner");
+            gc.GC.collect();
+            fmt.println(inner.s == "inner");
+            fmt.println(mid.s == "mid");
+            fmt.println(outer.s == "outer");
+            fmt.println(e.getMessage().length > 0);
+        } finally {
+            fmt.println(mid.s == "mid");
+            fmt.println(outer.s == "outer");
+            fmt.println(e.getMessage().length > 0);
+        }
+    }
+    fmt.println(outer.s == "outer");
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}
