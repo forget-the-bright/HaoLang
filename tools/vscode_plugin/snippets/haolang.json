@@ -1,0 +1,160 @@
+{
+  "package": {
+    "prefix": "package",
+    "body": ["package ${1:main};", "", "$0"],
+    "description": "package 声明"
+  },
+  "import": {
+    "prefix": "import",
+    "body": ["import ${1:collections};"],
+    "description": "import 包"
+  },
+  "func": {
+    "prefix": "func",
+    "body": [
+      "func ${1:name}(${2:args}): ${3:Unit} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "函数声明"
+  },
+  "main": {
+    "prefix": "main",
+    "body": [
+      "func main(args: [String]): Int {",
+      "\t$0",
+      "\treturn 0;",
+      "}"
+    ],
+    "description": "程序入口 main"
+  },
+  "class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "类声明"
+  },
+  "interface": {
+    "prefix": "interface",
+    "body": [
+      "interface ${1:Name} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "接口声明"
+  },
+  "enum": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name} {",
+      "\t${2:A},",
+      "\t${3:B}",
+      "}"
+    ],
+    "description": "枚举声明"
+  },
+  "when": {
+    "prefix": "when",
+    "body": [
+      "when (${1:expr}) {",
+      "\t${2:pat} -> ${3:result};",
+      "\telse -> ${4:fallback};",
+      "}"
+    ],
+    "description": "when 表达式"
+  },
+  "if": {
+    "prefix": "if",
+    "body": [
+      "if (${1:cond}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "if 语句"
+  },
+  "for-in": {
+    "prefix": "for",
+    "body": [
+      "for (${1:item} in ${2:items}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "for-in 循环"
+  },
+  "while": {
+    "prefix": "while",
+    "body": [
+      "while (${1:cond}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "while 循环"
+  },
+  "try": {
+    "prefix": "try",
+    "body": [
+      "try {",
+      "\t$1",
+      "} catch (${2:e}: ${3:Exception}) {",
+      "\t$4",
+      "} finally {",
+      "\t$0",
+      "}"
+    ],
+    "description": "try/catch/finally"
+  },
+  "new-array": {
+    "prefix": "newarr",
+    "body": ["new [${1:Int}]{ ${2:values} }"],
+    "description": "强制 new 数组字面量"
+  },
+  "new-array-sized": {
+    "prefix": "newarrn",
+    "body": ["new [${1:Int}](${2:n})"],
+    "description": "定长 new 数组"
+  },
+  "val": {
+    "prefix": "val",
+    "body": ["val ${1:name} = ${2:expr};"],
+    "description": "不可变绑定"
+  },
+  "var": {
+    "prefix": "var",
+    "body": ["var ${1:name}: ${2:Int} = ${3:0};"],
+    "description": "可变变量"
+  },
+  "lambda": {
+    "prefix": "lambda",
+    "body": ["{ ${1:x}: ${2:Int} -> ${3:body} }"],
+    "description": "lambda"
+  },
+  "haoroutine": {
+    "prefix": "haoroutine",
+    "body": [
+      "haoroutine {",
+      "\t$0",
+      "};"
+    ],
+    "description": "启动 haoroutine"
+  },
+  "test": {
+    "prefix": "test",
+    "body": [
+      "@Test",
+      "func ${1:name}() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "单元测试函数"
+  },
+  "prop": {
+    "prefix": "prop",
+    "body": [
+      "var ${1:name}: ${2:Int} { get; set; } = ${3:0};"
+    ],
+    "description": "自动属性"
+  }
+}

@@ -1,0 +1,413 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "HaoLang",
+  "scopeName": "source.hao",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#annotations" },
+    { "include": "#keywords" },
+    { "include": "#modifiers" },
+    { "include": "#control" },
+    { "include": "#literals" },
+    { "include": "#builtin-types" },
+    { "include": "#operators" },
+    { "include": "#functions" },
+    { "include": "#types-and-generics" },
+    { "include": "#named-args" },
+    { "include": "#auto-props" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.documentation.hao",
+          "match": "///.*$"
+        },
+        {
+          "name": "comment.line.double-slash.hao",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.hao",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        { "include": "#template-string" },
+        { "include": "#verbatim-template" },
+        { "include": "#verbatim-string" },
+        { "include": "#double-string" },
+        { "include": "#char-literal" }
+      ]
+    },
+    "template-string": {
+      "name": "string.quoted.double.interpolated.hao",
+      "begin": "\\$\"",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.hao" }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.hao" }
+      },
+      "patterns": [
+        { "include": "#string-escape" },
+        {
+          "name": "constant.character.escape.hao",
+          "match": "\\{\\{|\\}\\}"
+        },
+        {
+          "name": "meta.interpolation.hao",
+          "begin": "\\{",
+          "beginCaptures": {
+            "0": { "name": "punctuation.section.interpolation.begin.hao" }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": { "name": "punctuation.section.interpolation.end.hao" }
+          },
+          "patterns": [
+            { "include": "$self" }
+          ]
+        }
+      ]
+    },
+    "verbatim-template": {
+      "name": "string.quoted.double.interpolated.verbatim.hao",
+      "begin": "(?:@\\$\"|\\$@\")",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.hao" }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.hao" }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.hao",
+          "match": "\"\"|\\{\\{|\\}\\}"
+        },
+        {
+          "name": "meta.interpolation.hao",
+          "begin": "\\{",
+          "beginCaptures": {
+            "0": { "name": "punctuation.section.interpolation.begin.hao" }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": { "name": "punctuation.section.interpolation.end.hao" }
+          },
+          "patterns": [
+            { "include": "$self" }
+          ]
+        }
+      ]
+    },
+    "verbatim-string": {
+      "name": "string.quoted.double.verbatim.hao",
+      "begin": "@\"",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.hao" }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.hao" }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.hao",
+          "match": "\"\""
+        }
+      ]
+    },
+    "double-string": {
+      "name": "string.quoted.double.hao",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.hao" }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.hao" }
+      },
+      "patterns": [
+        { "include": "#string-escape" }
+      ]
+    },
+    "char-literal": {
+      "name": "string.quoted.single.hao",
+      "match": "'(?:[^'\\\\\\r\\n]|\\\\(?:['\"?abfnrtv\\\\$]|u[0-9a-fA-F]{4}))'"
+    },
+    "string-escape": {
+      "name": "constant.character.escape.hao",
+      "match": "\\\\(?:['\"?abfnrtv\\\\$]|u[0-9a-fA-F]{4})"
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "name": "meta.annotation.hao",
+          "begin": "(@)([A-Za-z_][A-Za-z0-9_]*)(\\()",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.annotation.hao" },
+            "2": { "name": "storage.type.annotation.hao" },
+            "3": { "name": "punctuation.definition.parameters.begin.hao" }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.parameters.end.hao" }
+          },
+          "patterns": [
+            { "include": "$self" }
+          ]
+        },
+        {
+          "name": "meta.annotation.hao",
+          "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "punctuation.definition.annotation.hao" },
+            "2": { "name": "storage.type.annotation.hao" }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.other.package.hao",
+          "match": "\\b(package|import|extern)\\b"
+        },
+        {
+          "name": "storage.type.hao",
+          "match": "\\b(func|class|interface|enum|constructor|delegate|val|var)\\b"
+        },
+        {
+          "name": "storage.modifier.inheritance.hao",
+          "match": "\\b(extends|implements|where)\\b"
+        },
+        {
+          "name": "keyword.operator.new.hao",
+          "match": "\\bnew\\b"
+        },
+        {
+          "name": "variable.language.hao",
+          "match": "\\b(this|super)\\b"
+        },
+        {
+          "name": "keyword.operator.expression.hao",
+          "match": "\\b(is|as|in)\\b"
+        }
+      ]
+    },
+    "modifiers": {
+      "name": "storage.modifier.hao",
+      "match": "\\b(public|private|protected|internal|static|abstract|override|virtual|async)\\b"
+    },
+    "control": {
+      "patterns": [
+        {
+          "name": "keyword.control.hao",
+          "match": "\\b(if|else|while|for|when|return|break|continue|try|catch|finally|throw|haoroutine|select|case|default)\\b"
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.hao",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.hao",
+          "match": "\\bnull\\b"
+        },
+        {
+          "name": "constant.numeric.float.hao",
+          "match": "\\b(?:[0-9](?:_?[0-9])*\\.[0-9](?:_?[0-9])*(?:[eE][+-]?[0-9]+)?|[0-9](?:_?[0-9])*[eE][+-]?[0-9]+)\\b"
+        },
+        {
+          "name": "constant.numeric.hex.hao",
+          "match": "\\b0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*\\b"
+        },
+        {
+          "name": "constant.numeric.binary.hao",
+          "match": "\\b0[bB][01](?:_?[01])*\\b"
+        },
+        {
+          "name": "constant.numeric.integer.hao",
+          "match": "\\b[0-9](?:_?[0-9])*\\b"
+        }
+      ]
+    },
+    "builtin-types": {
+      "name": "support.type.builtin.hao",
+      "match": "\\b(SByte|Byte|Short|UShort|Int|UInt|Long|ULong|UIntPtr|Float|Double|Bool|Char|String|Unit|Object|Array|Action|Func|Integer|Boolean|NativeHandle|Class|Bit)\\b"
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.compound.hao",
+          "match": "(\\?\\?=|<<=|>>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=)"
+        },
+        {
+          "name": "keyword.operator.nullish.hao",
+          "match": "(\\?\\?)"
+        },
+        {
+          "name": "keyword.operator.safe-navigation.hao",
+          "match": "(\\?\\.)"
+        },
+        {
+          "name": "keyword.operator.arrow.hao",
+          "match": "(->)"
+        },
+        {
+          "name": "keyword.operator.comparison.hao",
+          "match": "(==|!=|<=|>=|>>>|<<|>>)"
+        },
+        {
+          "name": "keyword.operator.logical.hao",
+          "match": "(&&|\\|\\|)"
+        },
+        {
+          "name": "keyword.operator.increment.hao",
+          "match": "(\\+\\+|--)"
+        },
+        {
+          "name": "keyword.operator.spread.hao",
+          "match": "(\\.\\.\\.)"
+        },
+        {
+          "name": "keyword.operator.not-null.hao",
+          "match": "(!!)"
+        },
+        {
+          "name": "keyword.operator.assignment.hao",
+          "match": "(=)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.hao",
+          "match": "([+\\-*/%])"
+        },
+        {
+          "name": "keyword.operator.bitwise.hao",
+          "match": "([&|^~])"
+        },
+        {
+          "name": "keyword.operator.relational.hao",
+          "match": "([<>])"
+        },
+        {
+          "name": "keyword.operator.logical.hao",
+          "match": "(!)"
+        },
+        {
+          "name": "keyword.operator.optional.hao",
+          "match": "(\\?)"
+        },
+        {
+          "name": "punctuation.separator.hao",
+          "match": "([:;,.])"
+        },
+        {
+          "name": "punctuation.section.brackets.hao",
+          "match": "([\\[\\](){}])"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "meta.function.declaration.hao",
+          "match": "\\b(func)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.hao" },
+            "2": { "name": "entity.name.function.hao" }
+          }
+        },
+        {
+          "name": "meta.function-call.hao",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.call.hao" }
+          }
+        }
+      ]
+    },
+    "types-and-generics": {
+      "patterns": [
+        {
+          "name": "meta.type.array.hao",
+          "begin": "\\[",
+          "end": "\\]",
+          "patterns": [
+            { "include": "$self" }
+          ]
+        },
+        {
+          "name": "meta.type.generic.hao",
+          "begin": "\\b([A-Za-z_][A-Za-z0-9_]*)(<)",
+          "beginCaptures": {
+            "1": { "name": "entity.name.type.hao" },
+            "2": { "name": "punctuation.definition.typeparameters.begin.hao" }
+          },
+          "end": ">",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.typeparameters.end.hao" }
+          },
+          "patterns": [
+            {
+              "match": "\\?(?=\\s*(?:extends|super)\\b)",
+              "name": "keyword.operator.wildcard.hao"
+            },
+            {
+              "match": "\\b(extends|super)\\b",
+              "name": "keyword.other.hao"
+            },
+            { "include": "$self" }
+          ]
+        },
+        {
+          "name": "meta.type.nullable.hao",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(\\?)",
+          "captures": {
+            "1": { "name": "entity.name.type.hao" },
+            "2": { "name": "keyword.operator.optional.hao" }
+          }
+        },
+        {
+          "name": "meta.type.varargs.hao",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(\\.\\.\\.)",
+          "captures": {
+            "1": { "name": "entity.name.type.hao" },
+            "2": { "name": "keyword.operator.spread.hao" }
+          }
+        }
+      ]
+    },
+    "named-args": {
+      "name": "meta.named-argument.hao",
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+      "captures": {
+        "1": { "name": "variable.parameter.hao" },
+        "2": { "name": "punctuation.separator.key-value.hao" }
+      }
+    },
+    "auto-props": {
+      "patterns": [
+        {
+          "name": "keyword.other.accessor.hao",
+          "match": "\\b(get|set|OnChange)\\b"
+        }
+      ]
+    },
+    "identifiers": {
+      "name": "variable.other.hao",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+    }
+  }
+}

@@ -18,15 +18,37 @@
 /stdlib/*.obj
 /stdlib/*.o
 
-# hao run 旁路可执行文件
+# hao run 旁路 / 本地冒烟产物
 *.hao-run.exe
+*.exe
+!script/**/*.exe
+hao-crash.log
+*.log
+crash-*.dmp
+*.dmp
+
+# Node / VSCode 插件构建产物（源码在 tools/vscode_plugin，产物不进仓）
+node_modules/
+**/node_modules/
+tools/vscode_plugin/out/
+tools/vscode_plugin/*.vsix
+tools/vscode_plugin/icons/hao-preview.png
+tools/vscode_plugin/.vscode-test/
+*.vsix
 
 # 编辑器 / OS
 .vs/
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/launch.json
 *.user
 Thumbs.db
 Desktop.ini
+.DS_Store
 .qwen/
+
 # 备份（规则 12：收工应已删除）
 *.bak
+*~

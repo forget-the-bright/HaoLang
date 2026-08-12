@@ -9,6 +9,7 @@
 - 测试基线：`test/suite` **1049** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` 38 拒绝；`hao version` = 0.60.3
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
 - **下一批（默认）**：发现残面 / 软 STW 债 / 功能轨续——见 [`记忆文档.md`](记忆文档.md) 第 10 章
+- **编辑器**：[`tools/vscode_plugin`](tools/vscode_plugin) **0.1.0**（语法高亮 + `hao` CLI；非 LSP）
 - **P5～P13 独立冒烟**：`powershell -File script/win/p5_smoke.ps1` → `…+P12+P13 OK`
 
 ---

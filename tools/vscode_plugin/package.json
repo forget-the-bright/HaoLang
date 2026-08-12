@@ -1,0 +1,192 @@
+{
+  "name": "haolang",
+  "displayName": "HaoLang",
+  "description": "HaoLang 语言支持：语法高亮、snippets、hao CLI 集成（Phase 0+1）",
+  "version": "0.1.0",
+  "publisher": "haolang",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters",
+    "Snippets"
+  ],
+  "keywords": [
+    "haolang",
+    "hao",
+    ".hao"
+  ],
+  "activationEvents": [
+    "onLanguage:haolang",
+    "workspaceContains:**/*.hao",
+    "workspaceContains:**/haoproject.json"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "haolang",
+        "aliases": [
+          "HaoLang",
+          "hao"
+        ],
+        "extensions": [
+          ".hao"
+        ],
+        "configuration": "./language-configuration.json",
+        "firstLine": "^#!/.*\\bhao\\b",
+        "icon": {
+          "light": "./icons/hao-light.svg",
+          "dark": "./icons/hao-dark.svg"
+        }
+      }
+    ],
+    "iconThemes": [
+      {
+        "id": "haolang-icons",
+        "label": "HaoLang Icons",
+        "path": "./fileicons/haolang-icon-theme.json"
+      }
+    ],
+    "configurationDefaults": {
+      "files.associations": {
+        "haoproject.json": "json",
+        "haopkg.json": "json"
+      }
+    },
+    "grammars": [
+      {
+        "language": "haolang",
+        "scopeName": "source.hao",
+        "path": "./syntaxes/haolang.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "haolang",
+        "path": "./snippets/haolang.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "haolang.run",
+        "title": "HaoLang: Run 当前文件",
+        "category": "HaoLang"
+      },
+      {
+        "command": "haolang.build",
+        "title": "HaoLang: Build",
+        "category": "HaoLang"
+      },
+      {
+        "command": "haolang.test",
+        "title": "HaoLang: Test",
+        "category": "HaoLang"
+      },
+      {
+        "command": "haolang.fmt",
+        "title": "HaoLang: Format Document (hao fmt)",
+        "category": "HaoLang"
+      },
+      {
+        "command": "haolang.clean",
+        "title": "HaoLang: Clean",
+        "category": "HaoLang"
+      },
+      {
+        "command": "haolang.modTidy",
+        "title": "HaoLang: Mod Tidy",
+        "category": "HaoLang"
+      },
+      {
+        "command": "haolang.version",
+        "title": "HaoLang: Version",
+        "category": "HaoLang"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "when": "resourceLangId == haolang",
+          "command": "haolang.run",
+          "group": "haolang@1"
+        },
+        {
+          "when": "resourceLangId == haolang",
+          "command": "haolang.fmt",
+          "group": "haolang@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "HaoLang",
+      "properties": {
+        "haolang.executablePath": {
+          "type": "string",
+          "default": "",
+          "description": "hao 可执行文件路径；留空则自动从 PATH、工作区 output/hao.exe、发行包 bin/hao 解析"
+        },
+        "haolang.format.enableOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "保存 .hao 时自动调用 hao fmt -w"
+        },
+        "haolang.stdlibPath": {
+          "type": "string",
+          "default": "",
+          "description": "标准库根目录（含 src/）；留空交给 hao 默认解析"
+        }
+      }
+    },
+    "problemMatchers": [
+      {
+        "name": "hao",
+        "owner": "haolang",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}"
+        ],
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(错误|警告):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "hao",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "hao 子命令，如 run / build / test / fmt"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "额外参数"
+          }
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3"
+  }
+}

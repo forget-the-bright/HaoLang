@@ -1,0 +1,6 @@
+node_modules/
+out/
+*.vsix
+icons/hao-preview.png
+.vscode-test/
+*.log

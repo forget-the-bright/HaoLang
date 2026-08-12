@@ -1,0 +1,26 @@
+{
+  "iconDefinitions": {
+    "hao-file": {
+      "iconPath": "./hao.svg"
+    },
+    "_file": {
+      "iconPath": "./file.svg"
+    },
+    "_folder": {
+      "iconPath": "./folder.svg"
+    },
+    "_folder_open": {
+      "iconPath": "./folder-open.svg"
+    }
+  },
+  "file": "_file",
+  "folder": "_folder",
+  "folderExpanded": "_folder_open",
+  "fileExtensions": {
+    "hao": "hao-file"
+  },
+  "languageIds": {
+    "haolang": "hao-file"
+  },
+  "showLanguageModeIcons": true
+}
