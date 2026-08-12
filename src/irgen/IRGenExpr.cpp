@@ -274,7 +274,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                             return Value();
                         }
                         rootGcOperand(rs);
-                        std::string reg = emitCall("ptr", "@hao_str_concat", "ptr " + curV.ir + ", ptr " + rs.ir);
+                        std::string reg = emitCall("ptr", "@lang$String.concat", "ptr " + curV.ir + ", ptr " + rs.ir);
                         Value out(reg, Type::makeString());
                         rootGcOperand(out);
                         emitGlobalGcStore(gptr, out.ir, Type::makeString());
@@ -438,7 +438,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                         return Value();
                     }
                     rootGcOperand(rs);
-                    std::string reg = emitCall("ptr", "@hao_str_concat", "ptr " + curV.ir + ", ptr " + rs.ir);
+                    std::string reg = emitCall("ptr", "@lang$String.concat", "ptr " + curV.ir + ", ptr " + rs.ir);
                     Value out(reg, Type::makeString());
                     rootGcOperand(out);
                     emitHeapStore(fp, out.ir, Type::makeString(), recv.ir);
@@ -582,7 +582,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                 return Value();
             }
             rootGcOperand(rs);
-            std::string reg = emitCall("ptr", "@hao_str_concat", "ptr " + cur.ir + ", ptr " + rs.ir);
+            std::string reg = emitCall("ptr", "@lang$String.concat", "ptr " + cur.ir + ", ptr " + rs.ir);
             Value out(reg, Type::makeString());
             rootGcOperand(out);
             emitVarStore(sym, Type::makeString(), out.ir);
@@ -1466,7 +1466,7 @@ Value IRGen::genAdditive(HaoLangParser::AdditiveExprContext* e) {
                 return Value();
             }
             rootGcOperand(rs);
-            std::string reg = emitCall("ptr", "@hao_str_concat", "ptr " + ls.ir + ", ptr " + rs.ir);
+            std::string reg = emitCall("ptr", "@lang$String.concat", "ptr " + ls.ir + ", ptr " + rs.ir);
             lhs = Value(reg, Type::makeString());
             rootGcOperand(lhs); /* 拼接结果跨后续右操作数/调用 */
             continue;
@@ -1647,7 +1647,7 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
         if (base.type->kind == TypeKind::String) {
             Value b = base;
             rootGcOperand(b);
-            std::string wide = emitCall("i64", "@hao_str_len", "ptr " + b.ir);
+            std::string wide = emitCall("i64", "@lang$String.codePointLen", "ptr " + b.ir);
             std::string reg = emitCast("trunc", "i64", wide, "i32");
             return Value(reg, Type::makeInt());
         }
@@ -1759,7 +1759,7 @@ Value IRGen::applyIndex(const Value& base, HaoLangParser::IndexOpContext* io,
         if (!ensureNonNullOperand(idx, io->expr(), "字符串下标")) return Value();
         // 与数组下标一致：保留 i64，避免 Long 经 Int 截断后静默错位
         std::string idx64 = indexAsI64(idx);
-        std::string reg = emitCall("i32", "@hao_str_char_at", "ptr " + baseR.ir + ", i64 " + idx64);
+        std::string reg = emitCall("i32", "@lang$String.charAtCp", "ptr " + baseR.ir + ", i64 " + idx64);
         return Value(reg, Type::makeChar());
     }
 

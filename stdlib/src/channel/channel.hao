@@ -1,5 +1,7 @@
 package channel;
 
+import reflect;
+
 // ============================================================
 //  channel —— 跨线程消息通道（v0.36；v0.55.62 NativeHandle）
 // ------------------------------------------------------------
@@ -10,6 +12,7 @@ package channel;
 //  recvStr：关闭且空时返回 null（String?）；勿再假装非空 String。
 //  select { case x = ch.recv(): ... case ch.send(v): ... default: ... }
 //  trySend/tryRecv：非阻塞；select 内部亦走 try_* 轮询（无 default 时短 sleep）。
+//  字符串编组：reflect.ptrOfStr / strOfInt（禁 channel 再 declare ptrtoint 别名）。
 // ============================================================
 
 extern func hao_chan_make(p: NativeHandle, capacity: Int): Bool = "hao_chan_make";
@@ -18,8 +21,6 @@ extern func hao_chan_recv(p: NativeHandle): Long = "hao_chan_recv";
 extern func hao_chan_try_send(p: NativeHandle, bits: Long): Int = "hao_chan_try_send";
 extern func hao_chan_try_recv(p: NativeHandle, out: Long?): Int = "hao_chan_try_recv";
 extern func hao_chan_close(p: NativeHandle): Unit = "hao_chan_close";
-extern func hao_chan_str_to_i64(p: String): Long = "hao_reflect_ptrtoint";
-extern func hao_chan_i64_to_str(v: Long): String? = "hao_reflect_inttoptr";
 
 class Channel {
     var h: NativeHandle;
@@ -52,7 +53,7 @@ class Channel {
     }
     func trySendInt(v: Int): Bool { return this.trySend(v); }
     func trySendStr(v: String): Bool {
-        return this.trySend(hao_chan_str_to_i64(v));
+        return this.trySend(reflect.ptrOfStr(v));
     }
 
     // 非阻塞接收；空或关闭且无数据时返回 false。
@@ -64,13 +65,13 @@ class Channel {
 
     // 发送非空字符串（按指针入队并挂 GC 根）。
     func sendStr(v: String): Bool {
-        return this.send(hao_chan_str_to_i64(v));
+        return this.send(reflect.ptrOfStr(v));
     }
 
     // 接收字符串；关闭且缓冲已空时返回 null。
     // @return 非空 String，或 null（勿当非空解引用）
     func recvStr(): String? {
-        return hao_chan_i64_to_str(this.recv());
+        return reflect.strOfInt(this.recv());
     }
 
     // 关闭通道：唤醒等待方；未读载荷仍可 recv，直至排空。

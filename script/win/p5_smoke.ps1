@@ -70,7 +70,16 @@ $deleted = @(
     'hao_hash_str',
     'hao_reflect_is_assignable',
     'hao_str_byte_index_of',
-    'hao_array_get_ptr'
+    'hao_array_get_ptr',
+    'hao_hash_float',
+    'hao_hash_f32',
+    'hao_println_int',
+    'hao_println_bool',
+    'hao_println_char',
+    'hao_println_float',
+    'hao_println_double',
+    'hao_println_long',
+    'hao_println_sbyte'
 )
 foreach ($sym in $deleted) {
     $pat = [regex]::Escape($sym)
@@ -145,5 +154,114 @@ if ($arrHits.Count -gt 0) {
 }
 Write-Host "OK   hao_array_get_ptr deleted"
 
-Write-Host "P5_SMOKE+IR_SYNC OK"
+# ---- 8) hao_str_data 白名单 ----
+$dataHits = Get-ChildItem -Path (Join-Path $root "stdlib") -Filter "*.c" -File |
+    Select-String -Pattern 'hao_str_data\s*\('
+foreach ($h in $dataHits) {
+    $ok = $h.Filename -in @('runtime_string.c', 'runtime_fs.c', 'runtime_net.c')
+    if (-not $ok) {
+        Write-Host "  $($h.Path):$($h.LineNumber) $($h.Line.Trim())"
+        Fail "hao_str_data outside whitelist: $($h.Filename)"
+    }
+}
+Write-Host "OK   hao_str_data whitelist"
+
+# ---- 9) channel 无 ptrtoint 别名 declare ----
+$chHits = Select-String -Path (Join-Path $root "stdlib\src\channel\channel.hao") -Pattern 'hao_reflect_ptrtoint|hao_chan_str_to_i64'
+if ($chHits) {
+    Fail "channel still aliases ptrtoint"
+}
+Write-Host "OK   channel no ptrtoint alias"
+
+# ---- 10) P7a 功能冒烟 ----
+$p7a = Join-Path $root "target\p7-smoke\p7a_smoke.hao"
+$p7aExe = Join-Path $root "target\p7-smoke\p7a_smoke.exe"
+& $hao build $p7a -o $p7aExe
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $p7aExe
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# ---- 11) P7c：stdlib 无 strtof/strtod/%g 浮点路径 ----
+$floatHits = Get-ChildItem -Path (Join-Path $root "stdlib") -Filter "runtime_*.c" -File |
+    Select-String -Pattern 'strtof\s*\(|strtod\s*\(|snprintf\s*\([^;]*%g'
+$floatHits = @($floatHits | Where-Object {
+    $_.Filename -ne 'runtime_float.c' -or $_.Line -notmatch '禁 libc'
+})
+# runtime_float.c 仅允许注释提及；其它 runtime_*.c 禁止
+$badFloat = @($floatHits | Where-Object {
+    $_.Line -match 'strtof\s*\(|strtod\s*\(|snprintf\s*\([^;]*%g' -and $_.Line -notmatch '禁 libc|/\*'
+})
+if ($badFloat.Count -gt 0) {
+    # 更严：任何非注释调用
+    $calls = Get-ChildItem -Path (Join-Path $root "stdlib") -Filter "runtime_*.c" -File |
+        Select-String -Pattern 'strtof\s*\(|strtod\s*\('
+    $calls = @($calls | Where-Object { $_.Line -notmatch '^\s*\*|禁 libc' })
+    if ($calls.Count -gt 0) {
+        $calls | Select-Object -First 5 | ForEach-Object {
+            Write-Host "  $($_.Path):$($_.LineNumber) $($_.Line.Trim())"
+        }
+        Fail "strtof/strtod still used in runtime"
+    }
+    $pct = Get-ChildItem -Path (Join-Path $root "stdlib") -Filter "runtime_*.c" -File |
+        Select-String -Pattern 'snprintf\s*\([^;\n]*%g'
+    $pct = @($pct | Where-Object { $_.Filename -ne 'runtime_float.c' })
+    if ($pct.Count -gt 0) {
+        $pct | Select-Object -First 5 | ForEach-Object {
+            Write-Host "  $($_.Path):$($_.LineNumber) $($_.Line.Trim())"
+        }
+        Fail "snprintf %g still used outside runtime_float comments"
+    }
+}
+Write-Host "OK   no libc float strto*/%g in runtime"
+
+# ---- 12) P7d：ptrOf/objOf 业务白名单 ----
+$ptrFiles = Get-ChildItem -Path (Join-Path $root "stdlib\src") -Recurse -Filter "*.hao" |
+    Select-String -Pattern 'reflect\.ptrOf\(|reflect\.objOf\(|reflect\.ptrOfStr\(|reflect\.strOfInt\('
+foreach ($h in $ptrFiles) {
+    $rel = $h.Path.Substring($root.Length).TrimStart('\','/')
+    $ok = $rel -match 'reflect[/\\]reflect\.hao$' -or
+          $rel -match 'net[/\\]Mvc\.hao$' -or
+          $rel -match 'net[/\\]Html\.hao$' -or
+          $rel -match 'json[/\\]JSON\.hao$' -or
+          $rel -match 'channel[/\\]channel\.hao$'
+    if (-not $ok) {
+        Write-Host "  ${rel}:$($h.LineNumber) $($h.Line.Trim())"
+        Fail "ptrOf/objOf outside whitelist: $rel"
+    }
+}
+Write-Host "OK   reflect ptrOf whitelist"
+
+# ---- 13) 业务 .hao 禁 hao_array_*（布局 C 仅 runtime；JSON 已去 array 桥）----
+$haoArrHits = Get-ChildItem -Path (Join-Path $root "stdlib\src") -Recurse -Filter "*.hao" |
+    Select-String -Pattern 'hao_array_len|hao_array_get_obj|hao_array_get_ptr|hao_array_new|hao_array_push|hao_array_pop'
+if ($haoArrHits) {
+    $haoArrHits | Select-Object -First 8 | ForEach-Object {
+        Write-Host "  $($_.Path):$($_.LineNumber) $($_.Line.Trim())"
+    }
+    Fail "stdlib .hao still calls hao_array_*"
+}
+Write-Host "OK   stdlib .hao free of hao_array_*"
+
+# ---- 14) P8 Map/JSON 冒烟 ----
+$p8 = Join-Path $root "target\p8-smoke\p8_all.hao"
+$p8Exe = Join-Path $root "target\p8-smoke\p8_all.exe"
+if (-not (Test-Path $p8)) { Fail "missing $p8" }
+& $hao build $p8 -o $p8Exe
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $p8Exe
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Host "OK   p8 Map/JSON smoke"
+
+# ---- 15) P7b～P7e 功能冒烟 ----
+foreach ($name in @('p7b_smoke','p7c_smoke','p7d_smoke','p7e_smoke')) {
+    $src = Join-Path $root "target\p7-smoke\$name.hao"
+    $exe = Join-Path $root "target\p7-smoke\$name.exe"
+    if (-not (Test-Path $src)) { Fail "missing $src" }
+    & $hao build $src -o $exe
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $exe
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
+Write-Host "P5_SMOKE+IR_SYNC+P7+P8 OK"
 exit 0

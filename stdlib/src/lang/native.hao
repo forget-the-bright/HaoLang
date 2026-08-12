@@ -8,6 +8,7 @@ extern func hao_double_to_str(v: Double): String = "hao_double_to_str";
 extern func hao_parse_float(s: String): Float? = "hao_parse_float";
 extern func hao_parse_double(s: String): Double? = "hao_parse_double";
 extern func hao_str_len(s: String): Long = "hao_str_len";
+extern func hao_str_concat(a: String, b: String): String = "hao_str_concat";
 extern func hao_str_byte_len(s: String): Int = "hao_str_byte_len";
 extern func hao_str_byte_of_cp(s: String, cpIdx: Int): Int = "hao_str_byte_of_cp";
 extern func hao_str_byte_slice(s: String, start: Int, end: Int): String = "hao_str_byte_slice";

@@ -17,7 +17,7 @@ func collExtraIntCmp(a: Int, b: Int): Int {
 
 func collectionsExtraTest() {
     // ---------- Map 新 API ----------
-    val m = new collections.Map<Int, String>();
+    val m = new collections.HashMap<Int, String>();
     m.put(1, "a");
     m.put(2, "b");
     fmt.println(m.getOrDefault(2, "x"));       // b
@@ -28,7 +28,7 @@ func collectionsExtraTest() {
     fmt.println(m.get(3) ?? "nil");            // c
     fmt.println(m.containsValue("b"));         // true
     fmt.println(m.keys().length);              // 3
-    fmt.println(m.values().length);            // 3
+    fmt.println(m.size());                     // 3
     m.clear();
     fmt.println(m.size());                     // 0
     fmt.println(m.isEmpty());                  // true

@@ -18,7 +18,7 @@ class Person : Object {
 
 func main() {
     // Map<Person, String>
-    val m = new collections.Map<Person, String>();
+    val m = new collections.HashMap<Person, String>();
     m.put(new Person("alice", 30), "engineer");
     m.put(new Person("bob", 25), "designer");
     fmt.println(m.size());                       // 2

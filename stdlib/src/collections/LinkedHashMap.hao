@@ -29,7 +29,7 @@ class LinkedHashMapEntry<K, V> {
     }
 }
 
-class LinkedHashMap<K, V> {
+class LinkedHashMap<K, V> : Map<K, V> {
     var table: [LinkedHashMapEntry<K,V>?];
     var count: Int;
     var capacity: Int;
@@ -266,7 +266,7 @@ class LinkedHashMap<K, V> {
         }
     }
 
-    // 按插入序收集键。
+    // 按插入序收集键（数组快照；非接口方法）
     // @return 新数组
     // 复杂度：O(n)
     func keys(): [K] {
@@ -279,10 +279,7 @@ class LinkedHashMap<K, V> {
         return out;
     }
 
-    // 按插入序收集值。
-    // @return 新数组
-    // 复杂度：O(n)
-    func values(): [V] {
+    func valueArray(): [V] {
         var out: [V] = [];
         var cur = this.head;
         while (cur != null) {
@@ -290,6 +287,25 @@ class LinkedHashMap<K, V> {
             cur = cur!!.after;
         }
         return out;
+    }
+
+    func keySet(): Iterable<K> {
+        return new ArrayIterable<K>(this.keys());
+    }
+
+    func values(): Iterable<V> {
+        return new ArrayIterable<V>(this.valueArray());
+    }
+
+    func entrySet(): Iterable<MapEntry<K, V>> {
+        var out: [MapEntry<K, V>] = [];
+        var cur = this.head;
+        while (cur != null) {
+            val ent: MapEntry<K, V> = new SimpleMapEntry<K, V>(cur!!.key, cur!!.value);
+            out += ent;
+            cur = cur!!.after;
+        }
+        return new ArrayIterable<MapEntry<K, V>>(out);
     }
 
     // 按插入序的键数组（供调试/迭代）。

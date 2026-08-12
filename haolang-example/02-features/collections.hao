@@ -10,7 +10,7 @@ func main() {
     list.add(30);
     fmt.println($"list size={list.size()} first={list.get(0)}");
 
-    val map = new collections.Map<String, Int>();
+    val map = new collections.HashMap<String, Int>();
     map.put("a", 1);
     map.put("b", 2);
     fmt.println($"map a={map.get("a")!!} size={map.size()}");

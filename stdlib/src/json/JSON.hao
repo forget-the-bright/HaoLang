@@ -8,11 +8,6 @@ import lang;
 import os;
 import reflect;
 
-// 反射路径读取 keys()/数组元素；元素走 get_obj（托管引用，对标 Java）
-extern func _jsonArrLen(arr: Object): Int = "hao_array_len";
-/* keys() 快照为 [String]：元素是 HaoString*，禁止当 Object 调虚方法 */
-extern func _jsonArrGetStr(arr: Object, idx: Int): String? = "hao_array_get_obj";
-
 class JSON {
     // Feature 位标志（toJSONString 可选）
     static val PrettyFormat: Int = 1;
@@ -55,6 +50,27 @@ class JSON {
 
     static func toJSONStringFeat(value: Object, features: Int): String {
         return JSON.stringify(value, features, 0);
+    }
+
+    // 具体 Map 快路径（entrySet for-in；避免 Object 反射）
+    static func toJSONString(m: HashMap<String, Object>): String {
+        var stack: [Long] = [];
+        return JSON.stringifyHashMap(m, 0, 0, stack, 0);
+    }
+
+    static func toJSONString(m: LinkedHashMap<String, Object>): String {
+        var stack: [Long] = [];
+        return JSON.stringifyLinkedHashMap(m, 0, 0, stack, 0);
+    }
+
+    static func toJSONString(m: ConcurrentHashMap<String, Object>): String {
+        var stack: [Long] = [];
+        return JSON.stringifyConcurrentHashMap(m, 0, 0, stack, 0);
+    }
+
+    static func toJSONString(m: TreeMap<String, Object>): String {
+        var stack: [Long] = [];
+        return JSON.stringifyTreeMap(m, 0, 0, stack, 0);
     }
 
     static func parseObjectFromFile(path: String): JSONObject {
@@ -201,15 +217,15 @@ class JSON {
         return n;
     }
 
-    // 是否 Map 形态（对标 Html.lookupOne：无参 keys + 单参 get）
+    // Map 形态：entrySet()+get(K)（泛型 is/as Map 当前不可用，走反射）
     static func looksLikeMap(t: reflect.Class): Bool {
-        return t.methodParamCount("keys") == 0 && t.methodParamCount("get") == 1;
+        return t.methodParamCount("entrySet") == 0 && t.methodParamCount("get") == 1;
     }
 
-    // 是否 List 形态（size+get，且无 keys；对标 Html.renderSection）
+    // 是否 List 形态（size+get，且无 entrySet）
     static func looksLikeList(t: reflect.Class): Bool {
         return t.methodParamCount("size") == 0 && t.methodParamCount("get") == 1
-            && t.methodParamCount("keys") != 0;
+            && t.methodParamCount("entrySet") != 0;
     }
 
     static func fieldIsString(ft: String): Bool {
@@ -254,42 +270,172 @@ class JSON {
         if (t.meta == null) {
             return JSON.quote(value.toString());
         }
-        val next = JSON.stackPush(stack, p);
+        val next2 = JSON.stackPush(stack, p);
+        // Hutool/Java：Map → entrySet 遍历（禁 hao_array_*；泛型 is Map 不可用故 reflect）
         if (JSON.looksLikeMap(t)) {
-            return JSON.stringifyMap(value, t, features, indent, next, depth + 1);
+            return JSON.stringifyMapReflect(value, t, features, indent, next2, depth + 1);
         }
         if (JSON.looksLikeList(t)) {
-            return JSON.stringifyList(value, t, features, indent, next, depth + 1);
+            return JSON.stringifyList(value, t, features, indent, next2, depth + 1);
         }
-        return JSON.stringifyBean(value, t, features, indent, next, depth + 1);
+        return JSON.stringifyBean(value, t, features, indent, next2, depth + 1);
     }
 
-    static func stringifyMap(value: Object, t: reflect.Class, features: Int, indent: Int, stack: [Long], depth: Int): String {
+    // 反射遍历 keySet（优先）或 entrySet；禁 hao_array_*
+    static func stringifyMapReflect(value: Object, t: reflect.Class, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
         var emptyArgs: [Long] = [];
-        val keys = t.invokeObj(value, "keys", emptyArgs);
-        if (keys == null) { return "{}"; }
-        val keysArr = keys!!;
-        val n = _jsonArrLen(keysArr);
-        // 先快照键串（[String] 元素须按 String? 取，勿 Object.toString）
-        var keyStrs: [String] = [];
-        var ki = 0;
-        while (ki < n) {
-            val kStr = _jsonArrGetStr(keysArr, ki);
-            ki += 1;
-            if (kStr == null) { continue; }
-            keyStrs += kStr!!;
+        // 优先 keySet：next 为 String 时可 invokeStr，避开 MapEntry 嵌套泛型
+        if (t.methodParamCount("keySet") == 0) {
+            val ksObj = t.invokeObj(value, "keySet", emptyArgs);
+            if (ksObj != null) {
+                val ks = ksObj!!;
+                val kst = reflect.typeOf(ks);
+                val iterObj = kst.invokeObj(ks, "iterator", emptyArgs);
+                if (iterObj != null) {
+                    val iter = iterObj!!;
+                    val it = reflect.typeOf(iter);
+                    var r = "{";
+                    var first = true;
+                    while (it.invokeBool(iter, "hasNext", emptyArgs)) {
+                        val kStr = it.invokeStr(iter, "next", emptyArgs);
+                        if (kStr == null) { continue; }
+                        var gargs: [Long] = [];
+                        gargs += reflect.ptrOfStr(kStr!!);
+                        val child = t.invokeObj(value, "get", gargs);
+                        if (!first) { r = r + ","; }
+                        first = false;
+                        if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
+                        r = r + JSON.quote(kStr!!) + ":";
+                        if (pretty) { r = r + " "; }
+                        if (child == null) {
+                            r = r + "null";
+                        } else {
+                            r = r + JSON.stringifyAt(child!!, features, indent + 1, stack, depth);
+                        }
+                    }
+                    if (pretty && !first) { r = r + "\n" + JSON.pad(indent); }
+                    return r + "}";
+                }
+            }
         }
+        val esObj = t.invokeObj(value, "entrySet", emptyArgs);
+        if (esObj == null) { return "{}"; }
+        val es = esObj!!;
+        val est = reflect.typeOf(es);
+        val iterObj2 = est.invokeObj(es, "iterator", emptyArgs);
+        if (iterObj2 == null) { return "{}"; }
+        val iter2 = iterObj2!!;
+        val it2 = reflect.typeOf(iter2);
+        var r2 = "{";
+        var first2 = true;
+        while (it2.invokeBool(iter2, "hasNext", emptyArgs)) {
+            val eObj = it2.invokeObj(iter2, "next", emptyArgs);
+            if (eObj == null) { continue; }
+            val e = eObj!!;
+            val et = reflect.typeOf(e);
+            val child = et.invokeObj(e, "getValue", emptyArgs);
+            var kStr = et.invokeStr(e, "getKey", emptyArgs);
+            if (kStr == null) {
+                // 非 String 键：尽力 toString（不走 raw String 的 Object 伪装）
+                val kObj = et.invokeObj(e, "getKey", emptyArgs);
+                if (kObj == null) { kStr = "null"; }
+                else if (kObj!! is Integer) {
+                    kStr = Integer.toStr((kObj!! as Integer).intValue());
+                } else if (kObj!! is lang.Long) {
+                    kStr = Long.toStr((kObj!! as lang.Long).longValue());
+                } else if (kObj!! is Boolean) {
+                    if ((kObj!! as Boolean).booleanValue()) { kStr = "true"; }
+                    else { kStr = "false"; }
+                } else {
+                    kStr = "?";
+                }
+            }
+            if (!first2) { r2 = r2 + ","; }
+            first2 = false;
+            if (pretty) { r2 = r2 + "\n" + JSON.pad(indent + 1); }
+            r2 = r2 + JSON.quote(kStr!!) + ":";
+            if (pretty) { r2 = r2 + " "; }
+            if (child == null) {
+                r2 = r2 + "null";
+            } else {
+                r2 = r2 + JSON.stringifyAt(child!!, features, indent + 1, stack, depth);
+            }
+        }
+        if (pretty && !first2) { r2 = r2 + "\n" + JSON.pad(indent); }
+        return r2 + "}";
+    }
+
+    // 具体类型快路径（keys 数组 for-in + get；entrySet 嵌套泛型 for-in 尚不稳）
+    static func stringifyHashMap(m: HashMap<String, Object>, features: Int, indent: Int, stack: [Long], depth: Int): String {
+        val pretty = (features & JSON.PrettyFormat) != 0;
         var r = "{";
         var first = true;
-        var i = 0;
-        while (i < keyStrs.length) {
-            val kStr = keyStrs[i];
-            i += 1;
-            var gargs: [Long] = [];
-            // 与 Html.lookupOne 一致：Map.get(String) 形参槽用 ptrOfStr
-            gargs += reflect.ptrOfStr(kStr);
-            val child = t.invokeObj(value, "get", gargs);
+        for (kStr in m.keys()) {
+            val child = m.get(kStr);
+            if (!first) { r = r + ","; }
+            first = false;
+            if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
+            r = r + JSON.quote(kStr) + ":";
+            if (pretty) { r = r + " "; }
+            if (child == null) {
+                r = r + "null";
+            } else {
+                r = r + JSON.stringifyAt(child!!, features, indent + 1, stack, depth);
+            }
+        }
+        if (pretty && !first) { r = r + "\n" + JSON.pad(indent); }
+        return r + "}";
+    }
+
+    static func stringifyLinkedHashMap(m: LinkedHashMap<String, Object>, features: Int, indent: Int, stack: [Long], depth: Int): String {
+        val pretty = (features & JSON.PrettyFormat) != 0;
+        var r = "{";
+        var first = true;
+        for (kStr in m.keys()) {
+            val child = m.get(kStr);
+            if (!first) { r = r + ","; }
+            first = false;
+            if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
+            r = r + JSON.quote(kStr) + ":";
+            if (pretty) { r = r + " "; }
+            if (child == null) {
+                r = r + "null";
+            } else {
+                r = r + JSON.stringifyAt(child!!, features, indent + 1, stack, depth);
+            }
+        }
+        if (pretty && !first) { r = r + "\n" + JSON.pad(indent); }
+        return r + "}";
+    }
+
+    static func stringifyConcurrentHashMap(m: ConcurrentHashMap<String, Object>, features: Int, indent: Int, stack: [Long], depth: Int): String {
+        val pretty = (features & JSON.PrettyFormat) != 0;
+        var r = "{";
+        var first = true;
+        for (kStr in m.keys()) {
+            val child = m.get(kStr);
+            if (!first) { r = r + ","; }
+            first = false;
+            if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
+            r = r + JSON.quote(kStr) + ":";
+            if (pretty) { r = r + " "; }
+            if (child == null) {
+                r = r + "null";
+            } else {
+                r = r + JSON.stringifyAt(child!!, features, indent + 1, stack, depth);
+            }
+        }
+        if (pretty && !first) { r = r + "\n" + JSON.pad(indent); }
+        return r + "}";
+    }
+
+    static func stringifyTreeMap(m: TreeMap<String, Object>, features: Int, indent: Int, stack: [Long], depth: Int): String {
+        val pretty = (features & JSON.PrettyFormat) != 0;
+        var r = "{";
+        var first = true;
+        for (kStr in m.keys()) {
+            val child = m.get(kStr);
             if (!first) { r = r + ","; }
             first = false;
             if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
@@ -655,3 +801,4 @@ class JsonParser {
         return Long.valueOf(n);
     }
 }
+

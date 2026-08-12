@@ -1,18 +1,18 @@
 package fmt;
 
-// 全数值族 + Bool/String/Object（v0.26）
-public extern func println(x: SByte) = "hao_println_sbyte";
-public extern func println(x: Byte) = "hao_println_byte";
-public extern func println(x: Short) = "hao_println_short";
-public extern func println(x: UShort) = "hao_println_ushort";
-public extern func println(x: Int) = "hao_println_int";
-public extern func println(x: UInt) = "hao_println_uint";
-public extern func println(x: Long) = "hao_println_long";
-public extern func println(x: ULong) = "hao_println_ulong";
-public extern func println(x: Float) = "hao_println_float";
-public extern func println(x: Double) = "hao_println_double";
-public extern func println(x: Bool) = "hao_println_bool";
-public extern func println(x: Char) = "hao_println_char";
+// 标量 println：Hao toStr + 唯一 C 出口 hao_println_str（v0.57 P7a）
+public func println(x: SByte) { println(SByte.toStr(x)); }
+public func println(x: Byte) { println(Byte.toStr(x)); }
+public func println(x: Short) { println(Short.toStr(x)); }
+public func println(x: UShort) { println(UShort.toStr(x)); }
+public func println(x: Int) { println(Integer.toStr(x)); }
+public func println(x: UInt) { println(UInt.toStr(x)); }
+public func println(x: Long) { println(Long.toStr(x)); }
+public func println(x: ULong) { println(ULong.toStr(x)); }
+public func println(x: Float) { println(Float.toStr(x)); }
+public func println(x: Double) { println(Double.toStr(x)); }
+public func println(x: Bool) { println(Boolean.toStr(x)); }
+public func println(x: Char) { println(Character.toStr(x)); }
 public extern func println(x: String) = "hao_println_str";
 
 // 任意 Object（含 lang 包装类）→ toString 后打印

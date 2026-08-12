@@ -13,7 +13,7 @@
  *    - Windows：hao_win_*（kernel32.dll 惰性解析，5.12）
  *    - Linux：  pthread_create / pthread_join / nanosleep /
  *                pthread_mutex / pthread_cond
- *  线程句柄统一以 int64_t 存（HANDLE 或 pthread_t 都是 8 字节）。
+ *  Thread 句柄：NativeHandle（drop=关 OS 句柄；join 显式 Wait）。池内部仍用 OS 句柄数组。
  */
 #include "runtime_internal.h"
 
@@ -131,35 +131,56 @@ static uint32_t thread_entry(void* arg) {
 static void* thread_entry(void* arg) { run_closure_thread(arg); return NULL; }
 #endif
 
-int64_t hao_thread_start(void* env) {
+/* 仅关闭 OS 句柄，不 Wait（fire-and-forget / GC 回收 Thread 时）；join 另走 Wait */
+static void hao_thread_os_drop(void* raw) {
+    if (!raw) return;
+#ifdef _WIN32
+    hao_win_close_handle(raw);
+#else
+    /* 未 join 的 pthread：detach，避免僵尸；已 join 则不应走到 drop */
+    pthread_detach((pthread_t)(uintptr_t)raw);
+#endif
+}
+
+HaoNativeHandle* hao_thread_start(void* env) {
+    HaoNativeHandle* h = hao_handle_alloc();
     /* 在子线程跑起来之前，闭包只活在 Task/参数里，须挂外部根 */
     if (env) hao_gc_add_root(env);
 #ifdef _WIN32
-    void* h = hao_win_create_thread(thread_entry, env);
-    if (!h) {
+    void* th = hao_win_create_thread(thread_entry, env);
+    if (!th) {
         if (env) hao_gc_remove_root(env);
-        return 0;
+        return h; /* closed empty */
     }
-    return (int64_t)(intptr_t)h;
+    hao_handle_attach(h, th, hao_thread_os_drop);
+    return h;
 #else
     pthread_t t;
     if (pthread_create(&t, NULL, thread_entry, env) != 0) {
         if (env) hao_gc_remove_root(env);
-        return 0;
+        return h;
     }
-    return (int64_t)t;
+    hao_handle_attach(h, (void*)(uintptr_t)t, hao_thread_os_drop);
+    return h;
 #endif
 }
 
-void hao_thread_join(int64_t handle) {
-    if (!handle) return;
+void hao_thread_join(HaoNativeHandle* h) {
+    void* raw;
+    if (!h || h->closed) return;
+    raw = h->raw;
+    /* 摘掉 drop，避免 join 后再 Close/detach */
+    h->drop = NULL;
+    h->raw = NULL;
+    h->closed = 1;
+    hao_gc_clear_finalizer(h);
+    if (!raw) return;
     /* join 阻塞：须 park，否则 STW 永远等不齐 */
     hao_gc_os_block_enter();
 #ifdef _WIN32
-    hao_win_join_close((void*)(intptr_t)handle);
+    hao_win_join_close(raw);
 #else
-    pthread_t t = (pthread_t)handle;
-    pthread_join(t, NULL);
+    pthread_join((pthread_t)(uintptr_t)raw, NULL);
 #endif
     hao_gc_os_block_leave();
 }

@@ -15,11 +15,11 @@ import hash;
 // ============================================================
 
 class ChmSegment<K, V> {
-    var map: Map<K, V>;
+    var map: HashMap<K, V>;
     var state: NativeHandle;
 
     constructor() {
-        this.map = new Map<K, V>();
+        this.map = new HashMap<K, V>();
         this.state = sync.hao_sync_cell_new();
     }
 
@@ -36,7 +36,7 @@ class ChmSegment<K, V> {
 
 extern func hao_gc_safepoint(): Unit = "hao_gc_safepoint";
 
-class ConcurrentHashMap<K, V> {
+class ConcurrentHashMap<K, V> : Map<K, V> {
     var segments: [ChmSegment<K, V>];
 
     // 构造空表（16 段）。
@@ -196,8 +196,6 @@ class ConcurrentHashMap<K, V> {
     }
 
     // 键快照（全表持锁拷贝，无序）。
-    // @return 新数组
-    // 复杂度：O(n) + 全表锁
     func keys(): [K] {
         this.lockAll();
         try {
@@ -218,16 +216,13 @@ class ConcurrentHashMap<K, V> {
         }
     }
 
-    // 值快照（全表持锁拷贝，无序）。
-    // @return 新数组
-    // 复杂度：O(n) + 全表锁
-    func values(): [V] {
+    func valueArray(): [V] {
         this.lockAll();
         try {
             var out: [V] = [];
             var i = 0;
             while (i < 16) {
-                val vs = this.segments[i].map.values();
+                val vs = this.segments[i].map.valueArray();
                 var j = 0;
                 while (j < vs.length) {
                     out += vs[j];
@@ -236,6 +231,32 @@ class ConcurrentHashMap<K, V> {
                 i += 1;
             }
             return out;
+        } finally {
+            this.unlockAll();
+        }
+    }
+
+    func keySet(): Iterable<K> {
+        return new ArrayIterable<K>(this.keys());
+    }
+
+    func values(): Iterable<V> {
+        return new ArrayIterable<V>(this.valueArray());
+    }
+
+    func entrySet(): Iterable<MapEntry<K, V>> {
+        this.lockAll();
+        try {
+            var out: [MapEntry<K, V>] = [];
+            var i = 0;
+            while (i < 16) {
+                val entIt = this.segments[i].map.entrySet().iterator();
+                while (entIt.hasNext()) {
+                    out += entIt.next();
+                }
+                i += 1;
+            }
+            return new ArrayIterable<MapEntry<K, V>>(out);
         } finally {
             this.unlockAll();
         }

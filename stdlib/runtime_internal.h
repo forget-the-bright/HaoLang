@@ -90,6 +90,8 @@ void hao_gc_refl_i64_unpin(void* p);
 int64_t hao_gc_stw_mark_all_fallbacks(void);
 /* 软 STW 未齐 park 累计次数（v0.50.4+；终止未齐 abort 见 markAbortCycles） */
 int64_t hao_gc_stw_incomplete(void);
+/* P7e：热 miss 宽限后齐 park 次数 */
+int64_t hao_gc_stw_grace_rescues(void);
 /* 已进入并发标记窗口的回收轮次（v0.51+） */
 int64_t hao_gc_concurrent_mark_cycles(void);
 /* 堆上用户区字节合计（alloc/sweep 维护；比 liveBytes 更能反映当前堆压） */
@@ -276,9 +278,8 @@ HaoString* hao_str_from_cstr(const char* c);
 HaoString* hao_str_from_bytes(const char* bytes, int32_t byte_len);
 /* 桥私有：GC 堆内 cstr。对外 FFI 禁止；出桥用 hao_ffi_dup_*。
  * 审计清单（同步读自身串，禁跨 safepoint/线程）：
- *   runtime_string.c（内部算法）、runtime_hash.c（仅浮点位模式，无 cstr）、
- *   hao_ffi_dup_* 实现本身。
- * 填 Hao 自有缓冲：runtime_fs/net/os fread|recv → hao_str_data（已挂根）。
+ *   runtime_string.c（内部算法）、hao_ffi_dup_* 实现本身。
+ * 填 Hao 自有缓冲：runtime_fs/net fread|recv → hao_str_data（已挂根；禁扩到其它 runtime_*.c）。
  * 出桥拷贝：fs/os/net/regex/print/time/float parse/reflect 名比对 → hao_ffi_dup_*。 */
 const char* hao_str_cstr(const HaoString* s);
 /* 可写载荷（填 Hao 自有缓冲）；禁止作为对外合法「借出堆内指针」模式——出桥用 hao_ffi_dup_* */
@@ -293,9 +294,13 @@ void    hao_str_set_byte_len(HaoString* s, int32_t n);
 void*      hao_str_get_bytes(HaoString* s);
 HaoString* hao_str_from_byte_arr(void* arr);
 
-/* float/double 永久 libc（强制 dup）；整型/布尔已上移 Hao */
+HaoString* hao_float_to_str(float v);
+HaoString* hao_double_to_str(double v);
 void* hao_parse_float(HaoString* s);
 void* hao_parse_double(HaoString* s);
+/* P7c 自研浮点；禁 libc strto* 与 %g */
+int hao_fmt_double(double v, char* out, int cap);
+int hao_parse_double_cstr(const char* p, const char** endp, double* out);
 
 /* ============================================================
  *  NativeHandle（runtime_handle.c）—— C 资源代理句柄

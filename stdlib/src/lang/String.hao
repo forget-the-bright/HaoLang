@@ -53,6 +53,16 @@ class String {
     static func valueOf(s: String): lang.String {
         return new lang.String(s);
     }
+    // IR 内建 + / .length / s[i] 唯一 Hao 入口（v0.57）；布局仍经 hao_str_* 薄包
+    static func concat(a: String, b: String): String {
+        return hao_str_concat(a, b);
+    }
+    static func codePointLen(s: String): Long {
+        return hao_str_len(s);
+    }
+    static func charAtCp(s: String, i: Long): Char {
+        return hao_str_char_at(s, i);
+    }
     static func fromInt(n: Int): lang.String {
         return new lang.String(Integer.toStr(n));
     }

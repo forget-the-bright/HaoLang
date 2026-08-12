@@ -17,6 +17,9 @@ interface Iterator<T> {
 
 interface Iterable<T> {
     func iterator(): Iterator<T>;
+    // 快照数组：供 for-in 在接口类型 Iterable<T> 上走 toArray 路径
+    // （虚表 iterator 分派对嵌套泛型如 MapEntry 尚不稳定时的稳妥出口）
+    func toArray(): [T];
 }
 
 // 基于数组的通用迭代器：各集合 iterator() 统一返回它。
@@ -39,5 +42,22 @@ class ArrayIterator<T> : Iterator<T> {
         val i = this.index;
         this.index += 1;
         return this.arr[i];
+    }
+}
+
+// 数组快照的 Iterable 包装（Map.keySet/values/entrySet 等）
+class ArrayIterable<T> : Iterable<T> {
+    var arr: [T];
+
+    constructor(arr: [T]) {
+        this.arr = arr;
+    }
+
+    func iterator(): Iterator<T> {
+        return new ArrayIterator<T>(this.arr);
+    }
+
+    func toArray(): [T] {
+        return this.arr;
     }
 }

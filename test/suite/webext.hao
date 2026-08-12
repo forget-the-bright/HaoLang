@@ -45,7 +45,7 @@ class WebExtController {
 
 func webExtTest() {
     // ---- Html 基础 ----
-    val map = new collections.Map<String, Object>();
+    val map = new collections.HashMap<String, Object>();
     map.put("name", String.valueOf("Ada"));
     fmt.println(net.Html.render("Hi {{name}}!", map));           // Hi Ada!
     fmt.println(net.Html.escape("<a>"));                         // &lt;a&gt;
@@ -53,7 +53,7 @@ func webExtTest() {
     val items = new collections.List<Object>();
     items.add(new WebExtItem("A"));
     items.add(new WebExtItem("B"));
-    val listModel = new collections.Map<String, Object>();
+    val listModel = new collections.HashMap<String, Object>();
     listModel.put("items", items);
     val sec = net.Html.render("{{#items}}[{{title}}]{{/items}}", listModel);
     fmt.println(sec);                                            // [A][B]

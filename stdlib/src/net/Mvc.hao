@@ -116,7 +116,7 @@ class StaticMount {
 public class HttpApp {
     var server: ServerSocket;
     var port: Int;
-    var routes: collections.Map<String, RouteBinding>;
+    var routes: collections.HashMap<String, RouteBinding>;
     var filters: [HttpFilter];
     var interceptors: [HandlerInterceptor];
     var running: Bool;
@@ -125,7 +125,7 @@ public class HttpApp {
     constructor() {
         this.server = new ServerSocket();
         this.port = 0;
-        this.routes = new collections.Map<String, RouteBinding>();
+        this.routes = new collections.HashMap<String, RouteBinding>();
         this.filters = [];
         this.interceptors = [];
         this.running = false;

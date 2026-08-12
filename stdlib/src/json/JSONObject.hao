@@ -26,11 +26,11 @@ class JSONNull {
 }
 
 class JSONObject {
-    var map: Map<String, Object>;
+    var map: HashMap<String, Object>;
     var keys: [String];
 
     constructor() {
-        this.map = new Map<String, Object>();
+        this.map = new HashMap<String, Object>();
         this.keys = [];
     }
 

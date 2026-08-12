@@ -1,13 +1,18 @@
 // HaoLang 标准库 —— thread 包
-// 线程/池句柄为 Long（指针宽）。
+// Thread 句柄：NativeHandle（OS 线程资源代理）；禁 Long 藏针。
+// drop=关闭 OS 句柄（不等待）；显式 join 才 Wait。长期 worker 可只 start 不 join。
 package thread;
 
 class Thread {
-    var handle: Long = 0;
+    var handle: NativeHandle;
+
+    constructor() {
+        this.handle = NativeHandle.empty();
+    }
 
     func start(run: ()->Unit): Bool {
         this.handle = hao_thread_start(run);
-        return this.handle != 0;
+        return hao_handle_is_open(this.handle);
     }
     func join() {
         hao_thread_join(this.handle);
@@ -46,8 +51,8 @@ func yield() {
 extern func hao_thread_sleep_ms(ms: Int): Unit = "hao_thread_sleep_ms";
 extern func hao_thread_sleep_ns(ns: Long): Unit = "hao_thread_sleep_ns";
 extern func hao_thread_yield(): Unit = "hao_thread_yield";
-extern func hao_thread_start(run: ()->Unit): Long = "hao_thread_start";
-extern func hao_thread_join(handle: Long): Unit = "hao_thread_join";
+extern func hao_thread_start(run: ()->Unit): NativeHandle = "hao_thread_start";
+extern func hao_thread_join(handle: NativeHandle): Unit = "hao_thread_join";
 extern func hao_pool_new(n: Int): Long = "hao_pool_new";
 extern func hao_pool_submit(pool: Long, run: ()->Unit): Int = "hao_pool_submit";
 extern func hao_pool_shutdown(pool: Long): Unit = "hao_pool_shutdown";

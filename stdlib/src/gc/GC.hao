@@ -24,6 +24,7 @@ extern func hao_gc_registered_threads(): Long = "hao_gc_registered_threads";
 extern func hao_gc_finalizer_runs(): Long = "hao_gc_finalizer_runs";
 extern func hao_gc_finalizer_sets(): Long = "hao_gc_finalizer_sets";
 extern func hao_gc_stw_incomplete(): Long = "hao_gc_stw_incomplete";
+extern func hao_gc_stw_grace_rescues(): Long = "hao_gc_stw_grace_rescues";
 extern func hao_gc_stw_mark_all_fallbacks(): Long = "hao_gc_stw_mark_all_fallbacks";
 extern func hao_gc_concurrent_mark_cycles(): Long = "hao_gc_concurrent_mark_cycles";
 extern func hao_gc_heap_bytes(): Long = "hao_gc_heap_bytes";
@@ -185,6 +186,9 @@ class GC {
     // 复杂度：O(1)
     static func stwIncomplete(): Long {
         return hao_gc_stw_incomplete();
+    }
+    static func stwGraceRescues(): Long {
+        return hao_gc_stw_grace_rescues();
     }
 
     // mark assist 累计推进的 grey 块数（v0.52+）。

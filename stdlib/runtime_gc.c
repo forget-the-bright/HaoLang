@@ -90,6 +90,7 @@ static int64_t  g_stw_incomplete = 0;
 static int64_t  g_stw_incomplete_root = 0; /* v0.55.52：根软 STW 未齐 */
 static int64_t  g_stw_incomplete_term = 0; /* v0.55.52：终止软 STW 未齐 */
 static int64_t  g_stw_mark_all_fallbacks = 0; /* 兼容旧 API；本版恒 0（已废除全标活） */
+static int64_t  g_stw_grace_rescues = 0; /* P7e：热 miss 宽限后齐 park */
 static int      gc_pacing_level = 0;          /* 连续 incomplete 退避档位 */
 static size_t   gc_nursery_gate = GC_NURSERY_THRESHOLD; /* 可被 pacing 放大 */
 
@@ -854,6 +855,73 @@ static int gc_stw_enter_and_scan_soft(int total_ms) {
     }
 
     if (missing != 0 && targets > 0) {
+        /* P7e：缺 park 者最近刚过 safepoint（热协作者）→ 再宽限一轮再判 incomplete，降握手税 */
+#define GC_STW_HOT_MISS_AGE_MS  48
+#define GC_STW_HOT_GRACE_MS     6
+        {
+            int64_t now = gc_mono_ms();
+            int hot = 0;
+            int64_t max_age = -1;
+            for (int i = 0; i < nsnap; ++i) {
+                if (snap[i].id == self) continue;
+                int live = 0;
+                for (int j = 0; j < gc_thread_count; ++j)
+                    if (gc_threads[j].id == snap[i].id) { live = 1; break; }
+                if (!live) continue;
+                if (snap[i].parked_flag &&
+                    __atomic_load_n(snap[i].parked_flag, __ATOMIC_ACQUIRE))
+                    continue;
+                if (!snap[i].last_sp_ms_slot) continue;
+                int64_t last = __atomic_load_n(snap[i].last_sp_ms_slot, __ATOMIC_ACQUIRE);
+                if (last <= 0) continue;
+                int64_t age = now - last;
+                if (age < 0) age = 0;
+                if (age <= GC_STW_HOT_MISS_AGE_MS) hot = 1;
+                if (max_age < 0 || age > max_age) max_age = age;
+            }
+            if (hot) {
+                int64_t g0 = gc_mono_ms();
+                hao_gc_unlock();
+                while (gc_mono_ms() - g0 < GC_STW_HOT_GRACE_MS) {
+                    int tgt = 0;
+                    int parked = gc_count_parked(snap, nsnap, self, &tgt);
+                    if (tgt > 0 && parked >= tgt) break;
+                    gc_yield_brief();
+                }
+                hao_gc_lock();
+                nsnap = gc_thread_count;
+                if (nsnap > GC_MAX_THREADS) nsnap = GC_MAX_THREADS;
+                for (int i = 0; i < nsnap; ++i) snap[i] = gc_threads[i];
+                {
+                    int tgt = 0;
+                    parked_now = gc_count_parked(snap, nsnap, self, &tgt);
+                    missing = (tgt > parked_now) ? (tgt - parked_now) : 0;
+                    targets = tgt;
+                }
+                /* 宽限期内新 park 者补扫 */
+                for (int i = 0; i < nsnap; ++i) {
+                    if (snap[i].id == self) continue;
+                    int live = 0;
+                    for (int j = 0; j < gc_thread_count; ++j)
+                        if (gc_threads[j].id == snap[i].id) { live = 1; break; }
+                    if (!live) continue;
+                    if (snap[i].parked_flag &&
+                        __atomic_load_n(snap[i].parked_flag, __ATOMIC_ACQUIRE)) {
+                        gc_scan_parked_thread(&snap[i]);
+                        gc_scanned_tid_add(snap[i].id);
+                    }
+                }
+                if (missing == 0 || targets == 0) {
+                    g_stw_grace_rescues++;
+                    hao_trace("gc",
+                              "stw_grace_rescue phase=%s miss_age_ms=%lld",
+                              g_stw_soft_phase == GC_STW_PHASE_ROOT ? "root"
+                                  : (g_stw_soft_phase == GC_STW_PHASE_TERM ? "term" : "?"),
+                              (long long)max_age);
+                    return 1;
+                }
+            }
+        }
         g_stw_incomplete++;
         if (g_stw_soft_phase == GC_STW_PHASE_ROOT)
             g_stw_incomplete_root++;
@@ -1112,6 +1180,14 @@ int64_t hao_gc_stw_incomplete(void) {
     int64_t n;
     gc_lock_coop();
     n = g_stw_incomplete;
+    hao_gc_unlock();
+    return n;
+}
+
+int64_t hao_gc_stw_grace_rescues(void) {
+    int64_t n;
+    gc_lock_coop();
+    n = g_stw_grace_rescues;
     hao_gc_unlock();
     return n;
 }

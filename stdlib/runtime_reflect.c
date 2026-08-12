@@ -406,9 +406,9 @@ HaoString* hao_reflect_field_get(HaoNativeHandle* h, void* obj, HaoString* fname
     } else if (t && strcmp(t, "SByte") == 0) {
         snprintf(buf, sizeof buf, "%d", (int)(*(int8_t*)base));
     } else if (t && strcmp(t, "Float") == 0) {
-        snprintf(buf, sizeof buf, "%g", (double)(*(float*)base));
+        hao_fmt_double((double)(*(float*)base), buf, (int)sizeof buf);
     } else if (t && strcmp(t, "Double") == 0) {
-        snprintf(buf, sizeof buf, "%g", *(double*)base);
+        hao_fmt_double(*(double*)base, buf, (int)sizeof buf);
     } else if (t && strcmp(t, "Bool") == 0) {
         strcpy(buf, (*(int8_t*)base) ? "true" : "false");
     } else if (t && strcmp(t, "Char") == 0) {
@@ -550,20 +550,16 @@ int32_t hao_reflect_field_set(HaoNativeHandle* h, void* obj, HaoString* fname,
         }
         *(int8_t*)base = (int8_t)n;
     } else if (t && strcmp(t, "Float") == 0) {
-        char* end = NULL;
-        float fv;
-        errno = 0;
-        fv = strtof(v, &end);
-        if (end == v || (end && *end != '\0') || errno == ERANGE) {
+        const char* end = NULL;
+        double dv;
+        if (hao_parse_double_cstr(v, &end, &dv) != 0) {
             free(v); return 1;
         }
-        *(float*)base = fv;
+        *(float*)base = (float)dv;
     } else if (t && strcmp(t, "Double") == 0) {
-        char* end = NULL;
+        const char* end = NULL;
         double dv;
-        errno = 0;
-        dv = strtod(v, &end);
-        if (end == v || (end && *end != '\0') || errno == ERANGE) {
+        if (hao_parse_double_cstr(v, &end, &dv) != 0) {
             free(v); return 1;
         }
         *(double*)base = dv;

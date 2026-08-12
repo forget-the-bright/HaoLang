@@ -699,7 +699,7 @@ Value IRGen::genTemplateString(HaoLangParser::TemplateStringContext* ts) {
         } else {
             rootGcOperand(acc);
             rootGcOperand(piece);
-            std::string reg = emitCall("ptr", "@hao_str_concat", "ptr " + acc.ir + ", ptr " + piece.ir);
+            std::string reg = emitCall("ptr", "@lang$String.concat", "ptr " + acc.ir + ", ptr " + piece.ir);
             acc = Value(reg, Type::makeString());
             rootGcOperand(acc);
         }

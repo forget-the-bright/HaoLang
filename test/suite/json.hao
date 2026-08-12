@@ -68,7 +68,7 @@ func jsonTest() {
     val nestJson = json.JSON.toJSONString(bean);
     fmt.println(String.valueOf(nestJson).indexOf("\"name\":\"Kid\"") >= 0); // true
 
-    val m = new collections.Map<String, Object>();
+    val m = new collections.HashMap<String, Object>();
     m.put("a", Integer.valueOf(1));
     m.put("b", String.valueOf("x"));
     val mj = json.JSON.toJSONString(m);

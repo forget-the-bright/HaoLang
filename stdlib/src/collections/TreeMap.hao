@@ -3,58 +3,63 @@ package collections;
 // ============================================================
 //  TreeMap<K,V> —— 有序映射（对标 Java TreeMap）
 // ------------------------------------------------------------
-//  职责：按键有序的 Map 外观；内部委托 RedBlackTree。
+//  实现 collections.Map；内部委托 RedBlackTree。
 //  排序：构造器传入 compare（Func<K,K,Int>）。
-//  Int 键示例：val cmp: Func<Int,Int,Int> = { a, b -> Integer.compare(a, b) };
-//  线程安全：否。
-//  不是：HashMap/LinkedHashMap（无哈希、按键序而非插入序）。
 // ============================================================
 
-class TreeMap<K, V> {
+class TreeMap<K, V> : Map<K, V> {
     var tree: RedBlackTree<K, V>;
 
-    // @param compare 键比较器
-    // 复杂度：O(1)
     constructor(compare: Func<K, K, Int>) {
         this.tree = new RedBlackTree<K, V>(compare);
     }
 
-    // @return 映射数
-    // 复杂度：O(1)
     func size(): Int { return this.tree.size(); }
 
-    // @return 是否为空
-    // 复杂度：O(1)
     func isEmpty(): Bool { return this.tree.isEmpty(); }
 
-    // 插入或覆盖。
-    // @param key 键
-    // @param value 值
-    // 复杂度：O(log n)
     func put(key: K, value: V) { this.tree.put(key, value); }
 
-    // @param key 键
-    // @return 值或 null
-    // 复杂度：O(log n)
     func get(key: K): V? { return this.tree.get(key); }
 
-    // @param key 键
-    // @return 是否存在
-    // 复杂度：O(log n)
     func containsKey(key: K): Bool { return this.tree.containsKey(key); }
 
-    // @param key 键
-    // @return 是否删除成功
-    // 复杂度：O(log n)
     func remove(key: K): Bool { return this.tree.remove(key); }
 
-    // 升序键快照。
-    // @return 新数组
-    // 复杂度：O(n)
     func keys(): [K] { return this.tree.inorderKeys(); }
 
-    // 清空（换一棵空树，比较器保留）。
-    // 复杂度：O(1) 相对
+    func valueArray(): [V] {
+        val ks = this.keys();
+        var out: [V] = [];
+        var i = 0;
+        while (i < ks.length) {
+            out += this.get(ks[i])!!;
+            i += 1;
+        }
+        return out;
+    }
+
+    func keySet(): Iterable<K> {
+        return new ArrayIterable<K>(this.keys());
+    }
+
+    func values(): Iterable<V> {
+        return new ArrayIterable<V>(this.valueArray());
+    }
+
+    func entrySet(): Iterable<MapEntry<K, V>> {
+        val ks = this.keys();
+        var out: [MapEntry<K, V>] = [];
+        var i = 0;
+        while (i < ks.length) {
+            val k = ks[i];
+            val ent: MapEntry<K, V> = new SimpleMapEntry<K, V>(k, this.get(k)!!);
+            out += ent;
+            i += 1;
+        }
+        return new ArrayIterable<MapEntry<K, V>>(out);
+    }
+
     func clear() {
         val cmp = this.tree.compare;
         this.tree = new RedBlackTree<K, V>(cmp);

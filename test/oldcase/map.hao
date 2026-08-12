@@ -4,7 +4,7 @@ import collections;
 // Map<K,V> 开放寻址哈希表验证（v0.9.0）
 func main() {
     // Map<Int,String>
-    val ages = new collections.Map<Int, String>();
+    val ages = new collections.HashMap<Int, String>();
     ages.put(1, "one");
     ages.put(2, "two");
     ages.put(3, "three");
@@ -24,14 +24,14 @@ func main() {
     fmt.println(ages.containsKey(1));    // false
 
     // Map<String,Int>（String key 内容哈希）
-    val scores = new collections.Map<String, Int>();
+    val scores = new collections.HashMap<String, Int>();
     scores.put("alice", 90);
     scores.put("bob", 85);
     fmt.println(scores.get("alice") ?? 0);  // 90
     fmt.println(scores.get("eve") ?? 0);    // 0
 
     // 扩容（装载因子 0.7，>11 触发 resize）
-    val big = new collections.Map<Int, Int>();
+    val big = new collections.HashMap<Int, Int>();
     var i = 0;
     while (i < 50) {
         big.put(i, i * i);

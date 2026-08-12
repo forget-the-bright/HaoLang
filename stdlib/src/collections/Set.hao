@@ -1,19 +1,14 @@
 package collections;
 
 // ============================================================
-//  Set<T> —— 基于 Map<T,Bool> 的集合（对标 Java HashSet）
-// ------------------------------------------------------------
-//  职责：去重集合；成员测试摊销 O(1)。
-//  线程安全：否。内部 Map，散列语义同 Map。
-// ============================================================
-
+// 基于 HashMap 的集合（对标 Java HashSet）
 class Set<T> : Iterable<T> {
-    var map: Map<T, Bool>;
+    var map: HashMap<T, Bool>;
 
     // 构造空集合。
     // 复杂度：O(1)
     constructor() {
-        this.map = new Map<T,Bool>();
+        this.map = new HashMap<T,Bool>();
     }
 
     // Iterable：toArray 收集 key 后迭代。

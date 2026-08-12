@@ -158,7 +158,7 @@ flowchart TD
 
 **缺 park tid/龄 + finalizer 发现面（v0.55.53）**：末次 `lastMissTid*`/`lastMissMaxAgeMs`；TRACE `miss_tids=`/`miss_age_ms=`。`finalizerSkipAbort`/`finalizerLiveAtSweep`/`lastFinalizerDiag`（1=仍活 2=abort 跳过）。**非** §18.2④ 全文（无 PC→`.hao`）；S2e 判定跳过补丁；软 STW 工程债仍开。
 
-**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口（统一 helper 等）；真实 C 叶槽 / 跨线程 VERIFY；软 STW 根握手税收紧（据 miss tid）；§18.2④ PC→源码行。
+**后续增强方向**（未做）：按「支配/最后 use」缩小非循环 spill 假活；工业级全量 Unwind↔GC；语句级 expr 清槽；完整 Hao 类型/`dbg.value` 全覆盖；TRACE 全收口（统一 helper 等）；真实 C 叶槽 / 跨线程 VERIFY；§18.2④ PC→源码行。软 STW：**v0.57.0** 已对热 miss 加宽限（`hao_gc_stw_grace_rescues`）；incomplete→0 仍非目标。
 
 ### 4.4 分配
 

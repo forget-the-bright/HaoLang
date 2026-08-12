@@ -1,8 +1,6 @@
 package hash;
 
-// float/double 位模式哈希仍走 C（无 Hao 浮点 bitcast）
-extern func hao_hash_float(x: Double): Int = "hao_hash_float";
-extern func hao_hash_f32(x: Float): Int = "hao_hash_f32";
+import reflect;
 
 // splitmix64 风格混合（v0.56：上移 Hao）
 func mix64(x: Long): Long {
@@ -36,8 +34,15 @@ func hashOf(x: ULong): Int {
     val xl: Long = x;
     return mixToInt(xl);
 }
-func hashOf(x: Float): Int { return hao_hash_f32(x); }
-func hashOf(x: Double): Int { return hao_hash_float(x); }
+// 位模式；±0.0 统一为 0（对齐原 C hao_hash_*）
+func hashOf(x: Float): Int {
+    if (x == 0.0) { return 0; }
+    return mixToInt(reflect.fltBits(x));
+}
+func hashOf(x: Double): Int {
+    if (x == 0.0) { return 0; }
+    return mixToInt(reflect.dblBits(x));
+}
 func hashOf(x: Bool): Int {
     if (x) { return 1231; }
     return 1237;

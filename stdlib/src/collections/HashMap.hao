@@ -4,19 +4,17 @@ import hash.*;
 import exception;
 
 // ============================================================
-//  Map<K,V> —— 开放寻址哈希表（对标 Java HashMap）
+//  HashMap<K,V> —— 开放寻址哈希表（对标 Java HashMap）
 // ------------------------------------------------------------
-//  职责：无序键值映射；单线程使用（并发请用 ConcurrentHashMap）。
-//  散列/相等：经 hash 包顶层重载 hashOf/equalsKey（K 单态化后分派）。
-//  探测：线性探测；负载因子 0.7 时倍增重建；删除用 tombstone（occupied=false）。
-//  key：Int/Double/Bool/String/数值族 + 任何 Object（覆写 hashCode/equals）。
-//  扩容：capacity 倍增上限 1073741823；满表且无法扩容时 put 抛 Exception。
-//  growthEnabled：仅测试用（false 时禁止倍增以模拟容量顶）。
-//  不是：LinkedHashMap（无插入序）、TreeMap（无序）、Java ConcurrentHashMap。
+//  实现 collections.Map；无序；单线程（并发用 ConcurrentHashMap）。
+//  散列/相等：hash 包顶层重载 hashOf/equalsKey。
+//  探测：线性探测；负载 0.7 倍增；删除 tombstone。
+//  迭代：keySet/values/entrySet → Iterable（快照 ArrayIterable）。
+//  便利：keys(): [K] 数组快照（非接口方法）。
 // ============================================================
 
-// 表槽：null=空槽；非 null 且 occupied=false=tombstone；occupied=true=有效条目。
-class MapEntry<K, V> {
+// 表槽：null=空槽；occupied=false=tombstone；occupied=true=有效。
+class HashMapBucket<K, V> {
     var key: K;
     var value: V;
     var occupied: Bool;
@@ -27,15 +25,12 @@ class MapEntry<K, V> {
     }
 }
 
-class Map<K, V> {
-    var table: [MapEntry<K,V>?];   // null = 空槽，occupied=false = tombstone
+class HashMap<K, V> : Map<K, V> {
+    var table: [HashMapBucket<K,V>?];
     var count: Int;
     var capacity: Int;
-    // 为 false 时 resize 不再倍增（模拟容量上限；满表 put 必抛异常）。默认 true。
     var growthEnabled: Bool;
 
-    // 构造空表，初始容量 16。
-    // 复杂度：O(1) 摊销（分配 16 个空槽）
     constructor() {
         this.capacity = 16;
         this.count = 0;
@@ -48,27 +43,17 @@ class Map<K, V> {
         }
     }
 
-    // 当前有效键值对数（不含 tombstone）。
-    // @return 元素个数
-    // 复杂度：O(1)
     func size(): Int { return this.count; }
 
-    // 是否不含任何有效映射。
-    // @return true 表示 size()==0
-    // 复杂度：O(1)
     func isEmpty(): Bool { return this.count == 0; }
 
-    // 容量倍增并重新插入全部有效条目。growthEnabled=false 或已触顶则直接返回。
-    // 复杂度：O(capacity)
-    // 失败：不抛错；调用方（insertUnchecked）在未能扩容时抛 Exception
     func resize() {
-        // Int 倍增上限：再 *2 会回绕成负/0；growthEnabled=false 模拟已触顶
         if (!this.growthEnabled) { return; }
         if (this.capacity <= 0 || this.capacity > 1073741823) { return; }
         val old = this.table;
         this.capacity = this.capacity * 2;
         this.table = [];
-        this.count = 0;   // 重新插入时会逐一累计
+        this.count = 0;
         var i = 0;
         while (i < this.capacity) {
             this.table += null;
@@ -84,26 +69,16 @@ class Map<K, V> {
         }
     }
 
-    // 插入或覆盖键值。已存在则更新 value；负载达 0.7 时先尝试扩容。
-    // @param key    键（不可为「语言 null」；对象 key 按 equals/hashCode）
-    // @param value  值
-    // 复杂度：摊销 O(1)；扩容时 O(n)
-    // 异常：表满且无法扩容 → exception.Exception
-    // 与 Java：无返回旧值；需旧值请先 get
     func put(key: K, value: V) {
-        // 负载因子用 Long，避免 count*10 / capacity*7 在大表回绕
         val c: Long = this.count;
         val cap: Long = this.capacity;
         if (cap > 0 && c * 10 >= cap * 7) { this.resize(); }
         this.insertUnchecked(key, value);
     }
 
-    // 假定表未满，线性探测插入；空槽 / tombstone / 已存在各分支处理。
-    // 内部方法：put/resize 调用；一般用户应调 put。
-    // 异常：无效容量或满表无法扩容 → Exception
     func insertUnchecked(key: K, value: V) {
         if (this.capacity <= 0) {
-            throw new exception.Exception("Map.put 失败：无效容量");
+            throw new exception.Exception("HashMap.put 失败：无效容量");
         }
         var idx = hashOf(key) % this.capacity;
         if (idx < 0) idx = -idx;
@@ -117,15 +92,15 @@ class Map<K, V> {
                     slot.key = key;
                     slot.value = value;
                     slot.occupied = true;
-                    this.count += 1;   // remove 已减；复用 tombstone 须加回
+                    this.count += 1;
                 } else {
-                    this.table[idx] = new MapEntry<K,V>(key, value);
+                    this.table[idx] = new HashMapBucket<K,V>(key, value);
                     this.count += 1;
                 }
                 return;
             }
             if (!e!!.occupied) {
-                if (tomb < 0) tomb = idx;   // 记录第一个 tombstone 以便复用
+                if (tomb < 0) tomb = idx;
             } else if (equalsKey(e!!.key, key)) {
                 val slot = this.table[idx]!!;
                 slot.value = value;
@@ -135,19 +110,14 @@ class Map<K, V> {
             if (idx >= this.capacity) idx = 0;
             i += 1;
         }
-        // 表探测一圈未插入：扩容重建；扩容失败须抛错（禁止静默丢键）
         val oldCap = this.capacity;
         this.resize();
         if (this.capacity <= oldCap) {
-            throw new exception.Exception("Map.put 失败：表已满且无法扩容");
+            throw new exception.Exception("HashMap.put 失败：表已满且无法扩容");
         }
         this.insertUnchecked(key, value);
     }
 
-    // 按键查找。
-    // @param key 键
-    // @return 命中返回 value；未命中返回 null（V?）
-    // 复杂度：摊销 O(1)
     func get(key: K): V? {
         if (this.capacity <= 0) { return null; }
         var idx = hashOf(key) % this.capacity;
@@ -166,10 +136,6 @@ class Map<K, V> {
         return null;
     }
 
-    // 是否包含键。
-    // @param key 键
-    // @return true 表示存在有效映射
-    // 复杂度：摊销 O(1)
     func containsKey(key: K): Bool {
         if (this.capacity <= 0) { return false; }
         var idx = hashOf(key) % this.capacity;
@@ -186,10 +152,6 @@ class Map<K, V> {
         return false;
     }
 
-    // 删除键对应映射（tombstone，不缩容）。
-    // @param key 键
-    // @return true 表示原先存在并已删除；false 表示本无此键
-    // 复杂度：摊销 O(1)
     func remove(key: K): Bool {
         if (this.capacity <= 0) { return false; }
         var idx = hashOf(key) % this.capacity;
@@ -211,8 +173,6 @@ class Map<K, V> {
         return false;
     }
 
-    // 清空所有映射，重置为容量 16 的空表（对标 Java HashMap.clear）。
-    // 复杂度：O(1) 相对重建（丢弃旧表交 GC）
     func clear() {
         this.capacity = 16;
         this.count = 0;
@@ -224,25 +184,12 @@ class Map<K, V> {
         }
     }
 
-    // 仅当键不存在时插入（对标 Java Map.putIfAbsent）。
-    // @param key    键
-    // @param value  仅在缺席时写入的值
-    // @return 若原先已有映射则返回旧值；若新插入则返回 null
-    // 复杂度：摊销 O(1)
-    // 异常：新插入路径上满表无法扩容 → Exception（同 put）
     func putIfAbsent(key: K, value: V): V? {
         if (this.containsKey(key)) { return this.get(key); }
         this.put(key, value);
         return null;
     }
 
-    // 查找；缺失时返回默认值（对标 Java Map.getOrDefault）。
-    // @param key  键
-    // @param def  缺失时返回的默认值（不会写入表）
-    // @return 命中 value，否则 def
-    // 复杂度：摊销 O(1)
-    // 注意：若 V 本身可为「业务上的空」，无法用返回值区分「存了空」与「缺失」；
-    //       此时请配合 containsKey。
     func getOrDefault(key: K, def: V): V {
         if (this.containsKey(key)) {
             return this.get(key)!!;
@@ -250,10 +197,6 @@ class Map<K, V> {
         return def;
     }
 
-    // 是否存在至少一个有效条目的值与 value 相等（equalsKey）。
-    // @param value 要查找的值
-    // @return true 表示至少一处命中
-    // 复杂度：O(capacity)
     func containsValue(value: V): Bool {
         var i = 0;
         while (i < this.table.length) {
@@ -266,9 +209,7 @@ class Map<K, V> {
         return false;
     }
 
-    // 收集全部有效键（无序，对标 keySet 快照）。
-    // @return 新数组；后续 map 变更不影响已返回数组
-    // 复杂度：O(capacity)
+    // 便利：键数组快照（非 Map 接口；套件/内部用）
     func keys(): [K] {
         var out: [K] = [];
         var i = 0;
@@ -282,10 +223,7 @@ class Map<K, V> {
         return out;
     }
 
-    // 收集全部有效值（无序，对标 values 快照）。
-    // @return 新数组
-    // 复杂度：O(capacity)
-    func values(): [V] {
+    func valueArray(): [V] {
         var out: [V] = [];
         var i = 0;
         while (i < this.table.length) {
@@ -296,5 +234,27 @@ class Map<K, V> {
             i += 1;
         }
         return out;
+    }
+
+    func keySet(): Iterable<K> {
+        return new ArrayIterable<K>(this.keys());
+    }
+
+    func values(): Iterable<V> {
+        return new ArrayIterable<V>(this.valueArray());
+    }
+
+    func entrySet(): Iterable<MapEntry<K, V>> {
+        var out: [MapEntry<K, V>] = [];
+        var i = 0;
+        while (i < this.table.length) {
+            val e = this.table[i];
+            if (e != null && e!!.occupied) {
+                val ent: MapEntry<K, V> = new SimpleMapEntry<K, V>(e!!.key, e!!.value);
+                out += ent;
+            }
+            i += 1;
+        }
+        return new ArrayIterable<MapEntry<K, V>>(out);
     }
 }

@@ -233,20 +233,7 @@ HaoString* hao_str_concat(HaoString* a, HaoString* b) {
     return r;
 }
 
-/* 手写十进制，避开 Win64 栈未齐时 libcmt snprintf 的 movdqa AV（v0.55.54）
- * 仅供 float/double toStr 旁路不再需要；整型 toStr 已上移 Hao。 */
-
-HaoString* hao_float_to_str(float v) {
-    char buf[64];
-    int n = snprintf(buf, sizeof buf, "%g", (double)v);
-    return hao_str_from_bytes(buf, n);
-}
-
-HaoString* hao_double_to_str(double v) {
-    char buf[64];
-    int n = snprintf(buf, sizeof buf, "%g", v);
-    return hao_str_from_bytes(buf, n);
-}
+/* float/double toStr+parse → runtime_float.c（P7c 自研，禁 libc 格式化） */
 
 /* 码点个数（String.length） */
 int64_t hao_str_len(HaoString* s) {
@@ -328,37 +315,7 @@ HaoString* hao_str_from_byte_arr(void* arr) {
     return s;
 }
 
-/* ---- 解析（float/double 留 C：dup 出桥后再 strto*）---- */
-
-void* hao_parse_double(HaoString* s) {
-    char* p = hao_ffi_dup_cstr(s);
-    char* end = NULL;
-    double v;
-    if (!p || !*p) { free(p); return NULL; }
-    errno = 0;
-    v = strtod(p, &end);
-    if (end == p || (end && *end != '\0') || errno == ERANGE) {
-        free(p);
-        return NULL;
-    }
-    free(p);
-    return hao_box_f64(v);
-}
-
-void* hao_parse_float(HaoString* s) {
-    char* p = hao_ffi_dup_cstr(s);
-    char* end = NULL;
-    float v;
-    if (!p || !*p) { free(p); return NULL; }
-    errno = 0;
-    v = strtof(p, &end);
-    if (end == p || (end && *end != '\0') || errno == ERANGE) {
-        free(p);
-        return NULL;
-    }
-    free(p);
-    return hao_box_f32(v);
-}
+/* ---- 解析：float/double → runtime_float.c ---- */
 
 void* hao_make_args(int argc, char** argv) {
     int n = argc > 0 ? argc - 1 : 0;

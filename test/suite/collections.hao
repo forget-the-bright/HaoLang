@@ -53,7 +53,7 @@ func collectionsTest() {
     fmt.println(sum);                  // 6
 
     // ---------- Map<K,V> ----------
-    val ages = new collections.Map<Int, String>();
+    val ages = new collections.HashMap<Int, String>();
     ages.put(1, "one");
     ages.put(2, "two");
     ages.put(3, "three");
@@ -71,7 +71,7 @@ func collectionsTest() {
     fmt.println(ages.get(1) ?? "nil"); // one-again
 
     // Map 扩容（装载因子 0.7，>11 触发 resize）
-    val big = new collections.Map<Int, Int>();
+    val big = new collections.HashMap<Int, Int>();
     var i = 0;
     while (i < 50) {
         big.put(i, i * i);
@@ -81,7 +81,7 @@ func collectionsTest() {
     fmt.println(big.get(49) ?? -1);    // 2401
 
     // 大表正向：多次扩容后 size/取值仍正确（禁止静默丢键）
-    val huge = new collections.Map<Int, Int>();
+    val huge = new collections.HashMap<Int, Int>();
     var hi = 0;
     while (hi < 500) {
         huge.put(hi, hi + 1);
@@ -92,7 +92,7 @@ func collectionsTest() {
     fmt.println(huge.get(499) ?? -1);  // 500
 
     // 反向：冻结扩容后灌满 16 槽，再 put 新键须抛异常（不得静默丢）
-    val frozen = new collections.Map<Int, Int>();
+    val frozen = new collections.HashMap<Int, Int>();
     frozen.growthEnabled = false;
     var fi = 0;
     while (fi < 16) {
@@ -154,7 +154,7 @@ func collectionsTest() {
     fmt.println(ns);                   // 2
 
     // ---------- 对象 key（覆写 hashCode/equals 按内容相等）----------
-    val m = new collections.Map<CKeyPerson, String>();
+    val m = new collections.HashMap<CKeyPerson, String>();
     m.put(new CKeyPerson("alice", 30), "engineer");
     m.put(new CKeyPerson("bob", 25), "designer");
     fmt.println(m.size());                       // 2

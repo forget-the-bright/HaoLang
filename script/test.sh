@@ -378,14 +378,14 @@ rm -f "$CACHE"/*.ll 2>/dev/null || true
 rm -f target/*.ll target/*.exe 2>/dev/null || true
 
 echo "========================================"
-echo "套件总行数: $total  (基线 1027) | 退出码: $code"
+echo "套件总行数: $total  (基线 1029) | 退出码: $code"
 [[ $code -eq 0 ]] || exit 1
 # P3 双门禁：行数必须等于基线（曾出现增量缓存 suite 少行误报 1007）
-if [[ "$total" -ne 1027 ]]; then
-  echo "FAIL 套件行数 $total != 1027（请 --rebuild-all 或查丢打印）"
+if [[ "$total" -ne 1029 ]]; then
+  echo "FAIL 套件行数 $total != 1029（请 --rebuild-all 或查丢打印）"
   exit 1
 fi
-# 基线：v0.56.0 激进清零后重钉 1027（原 1029；Handle/parse/time 上移后少 2 行）；v0.55.60 曾 1029
+# 基线：v0.57.0/0.57.1 仍 1029（P8 Map/JSON 未改套件 stdout）；v0.56.0 曾 1027；v0.55.60 曾 1029
 
 # C0：定位/spill 门禁（Win + powershell；与套件双门禁同级）
 if command -v powershell >/dev/null 2>&1 || command -v powershell.exe >/dev/null 2>&1; then

@@ -1,0 +1,41 @@
+package collections;
+
+// ============================================================
+//  Map 接口层次（v0.57.1，对标 Java java.util.Map）
+// ------------------------------------------------------------
+//  Map 自身不 : Iterable（禁止 for (x in map)）；
+//  迭代请走 keySet() / values() / entrySet()（返回 Iterable；实现为 ArrayIterable 快照）。
+//  实现：HashMap / LinkedHashMap / TreeMap / ConcurrentHashMap。
+// ============================================================
+
+interface MapEntry<K, V> {
+    func getKey(): K;
+    func getValue(): V;
+}
+
+interface Map<K, V> {
+    func size(): Int;
+    func isEmpty(): Bool;
+    func containsKey(key: K): Bool;
+    func get(key: K): V?;
+    func put(key: K, value: V);
+    func remove(key: K): Bool;
+    func clear();
+    func keySet(): Iterable<K>;
+    func values(): Iterable<V>;
+    func entrySet(): Iterable<MapEntry<K, V>>;
+}
+
+// 不可变条目快照（entrySet 元素）
+class SimpleMapEntry<K, V> : MapEntry<K, V> {
+    var key: K;
+    var value: V;
+
+    constructor(k: K, v: V) {
+        this.key = k;
+        this.value = v;
+    }
+
+    func getKey(): K { return this.key; }
+    func getValue(): V { return this.value; }
+}

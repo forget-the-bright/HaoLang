@@ -317,7 +317,7 @@ bool IRGen::declIsExtern(const std::vector<HaoLangParser::ModifierContext*>& mod
     return false;
 }
 
-// 从形如 "hao_println_int" 的 STRING_LIT 词文取出内容（去掉首尾引号、
+// 从形如 "hao_println_str" 的 STRING_LIT 词文取出内容（去掉首尾引号、
 // 处理常见转义）。用于 extern func f(...) = "c_name"。
 static std::string parseStringLitText(const std::string& tok) {
     if (tok.size() < 2) return "";

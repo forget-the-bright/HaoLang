@@ -489,7 +489,16 @@ extern func hao_reflect_invoke_double(m: NativeHandle, o: Object, name: String, 
 extern func hao_reflect_invoke_float(m: NativeHandle, o: Object, name: String, args: [Long]): Float = "hao_reflect_invoke_float";
 extern func hao_reflect_invoke_void(m: NativeHandle, o: Object, name: String, args: [Long]): Unit = "hao_reflect_invoke_void";
 
-// 实参编组助手（槽内仍是 Long）；返回值请走 invokeObj，勿长期用 objOf 藏指针
+// ============================================================
+//  invoke 槽 ABI（永久 · P7d 写死）
+//  - args / newInstanceArgs：[Long]，每槽固定 8 字节位型。
+//  - 引用实参：临时 ptrOf / ptrOfStr 写入槽；槽值非资源、不 drop。
+//  - 返回：引用走 invokeObj/invokeStr；标量走 invoke/Bool/Float/…；
+//    禁用 objOf 把堆指针长期藏进 Long?。
+//  - 改 esz / 对象数组 = ABI 破裂，须同步 IR thunk + 全量反射冒烟。
+//  业务库白名单（可直接 ptrOf*）：Mvc / JSON / Html / channel；
+//  其余 stdlib 禁止扩散；测试可直接编组。
+// ============================================================
 extern func ptrOfStr(s: String): Long = "hao_reflect_ptrtoint";
 extern func ptrOf(o: Object): Long = "hao_reflect_ptrtoint";
 extern func strOfInt(i: Long): String = "hao_reflect_inttoptr";

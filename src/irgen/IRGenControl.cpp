@@ -159,8 +159,9 @@ void IRGen::genHaoroutine(HaoLangParser::HaoroutineStmtContext* st) {
     expectedTypes_.pop_back();
     if (!env.valid()) return;
     rootGcOperand(env); /* env 跨 thread_start（内含 alloc/safepoint） */
-    // 必须接住返回值：裸 call i64 仍占用 SSA 编号，否则后续 %N 冲突
-    (void)emitCall("i64", "@hao_thread_start", "ptr " + env.ir);
+    // 必须接住返回值：裸 call 仍占用 SSA 编号，否则后续 %N 冲突
+    // 返回 NativeHandle；火即忘（不 join）；Handle GC 时仅关 OS 句柄
+    (void)emitCall("ptr", "@hao_thread_start", "ptr " + env.ir);
 }
 
 // select { case x = ch.recv(): ... case ch.send(v): ... default: ... }

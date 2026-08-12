@@ -2,9 +2,8 @@
  * HaoLang 运行时 —— 输出（fmt 包底层）
  * ------------------------------------------------------------
  *  Windows 控制台 UTF-8 初始化也放在本文件：任何有输出的程序都会
- *  引用 hao_println_* / hao_print_str，从而把本目标文件链入，附带把
- *  .CRT$XIU 初始化器链入。若单独放在一个不导出 hao_* 符号的文件里，
- *  静态库链接时会被整体丢弃，导致中文乱码。
+ *  引用 hao_println_str / hao_print_str，从而把本目标文件链入，附带把
+ *  .CRT$XIU 初始化器链入。标量格式化已上移 Hao（P7a）。
  */
 #include "runtime_internal.h"
 
@@ -42,79 +41,6 @@ void hao_println_str(HaoString* s) {
     fputs(tmp ? tmp : "null", stdout);
     fputc('\n', stdout);
     free(tmp);
-}
-
-void hao_println_sbyte(int8_t v) {
-    printf("%d\n", (int)v);
-}
-
-void hao_println_byte(uint8_t v) {
-    printf("%u\n", (unsigned)v);
-}
-
-void hao_println_short(int16_t v) {
-    printf("%d\n", (int)v);
-}
-
-void hao_println_ushort(uint16_t v) {
-    printf("%u\n", (unsigned)v);
-}
-
-void hao_println_int(int32_t v) {
-    printf("%d\n", (int)v);
-}
-
-void hao_println_uint(int32_t v) {
-    printf("%u\n", (unsigned)(uint32_t)v);
-}
-
-void hao_println_long(int64_t v) {
-    printf("%lld\n", (long long)v);
-}
-
-void hao_println_ulong(uint64_t v) {
-    printf("%llu\n", (unsigned long long)v);
-}
-
-void hao_println_float(float v) {
-    printf("%g\n", (double)v);
-}
-
-void hao_println_double(double v) {
-    printf("%g\n", v);
-}
-
-void hao_println_bool(int8_t v) {
-    fputs(v ? "true" : "false", stdout);
-    fputc('\n', stdout);
-}
-
-/* fmt.println(Char) — 打印 UTF-8 字形（本地编码，不经 hao_char_to_str） */
-void hao_println_char(int32_t cp) {
-    char buf[8];
-    int n;
-    if (cp < 0) cp = 0xFFFD;
-    if (cp <= 0x7F) { buf[0] = (char)cp; n = 1; }
-    else if (cp <= 0x7FF) {
-        buf[0] = (char)(0xC0 | (cp >> 6));
-        buf[1] = (char)(0x80 | (cp & 0x3F));
-        n = 2;
-    } else if (cp <= 0xFFFF) {
-        buf[0] = (char)(0xE0 | (cp >> 12));
-        buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
-        buf[2] = (char)(0x80 | (cp & 0x3F));
-        n = 3;
-    } else {
-        if (cp > 0x10FFFF) cp = 0xFFFD;
-        buf[0] = (char)(0xF0 | (cp >> 18));
-        buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
-        buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
-        buf[3] = (char)(0x80 | (cp & 0x3F));
-        n = 4;
-    }
-    buf[n] = '\0';
-    fputs(buf, stdout);
-    fputc('\n', stdout);
 }
 
 void hao_print_str(HaoString* s) {
