@@ -16,8 +16,14 @@ void hao_panic_div_zero(void) {
 /* 数组越界 */
 void hao_panic_index(int64_t idx, int64_t len) {
     char buf[160];
-    snprintf(buf, sizeof(buf), "索引越界: 索引 %lld 超出长度 %lld",
-             (long long)idx, (long long)len);
+    int n = 0;
+    const char* a = "索引越界: 索引 ";
+    const char* b = " 超出长度 ";
+    while (*a && n < (int)sizeof(buf) - 1) buf[n++] = *a++;
+    n = n + hao_fmt_i64_dec(buf + n, (int)sizeof(buf) - n, idx);
+    while (*b && n < (int)sizeof(buf) - 1) buf[n++] = *b++;
+    n = n + hao_fmt_i64_dec(buf + n, (int)sizeof(buf) - n, len);
+    if (n < (int)sizeof(buf)) buf[n] = '\0';
     hao_report_fatal("panic", buf);
 }
 
@@ -29,8 +35,14 @@ void hao_panic_overflow(void) {
 /* as 转换失败时调用 */
 void hao_panic_cast(const char* target) {
     char buf[192];
-    snprintf(buf, sizeof(buf), "类型转换失败，对象不是 %s 类型",
-             target ? target : "目标");
+    int n = 0;
+    const char* a = "类型转换失败，对象不是 ";
+    const char* b = " 类型";
+    const char* t = target ? target : "目标";
+    while (*a && n < (int)sizeof(buf) - 1) buf[n++] = *a++;
+    while (*t && n < (int)sizeof(buf) - 1) buf[n++] = *t++;
+    while (*b && n < (int)sizeof(buf) - 1) buf[n++] = *b++;
+    buf[n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1] = '\0';
     hao_report_fatal("panic", buf);
 }
 

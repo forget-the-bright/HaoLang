@@ -576,6 +576,8 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
             }
         }
 
+        emitRuntimeFrameArgs(/*hasThis=*/false, mi.params, mi.paramTypes);
+
         // 生成语句；末尾表达式语句在非 Unit 返回时作为隐式返回值
         auto stmts = mi.ctx->statement();
         bool trailingIsReturn = false;

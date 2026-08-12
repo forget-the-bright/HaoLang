@@ -28,7 +28,7 @@ func main() {
 
     var n = 0;
     while (n < 30) {
-        var junk = new List<Object>();
+        var junk = new ArrayList<Object>();
         var i = 0;
         while (i < 800) {
             junk.add(String.valueOf("cm-" + Integer.toStr(i)));

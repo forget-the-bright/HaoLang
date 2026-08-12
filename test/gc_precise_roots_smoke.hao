@@ -18,13 +18,13 @@ func main() {
     var before = gc.GC.heapBytes();
     var round = 0;
     while (round < 6) {
-        var junk = new List<Object>();
+        var junk = new ArrayList<Object>();
         var i = 0;
         while (i < 3000) {
             junk.add(String.valueOf("pr-" + Integer.toStr(i)));
             i += 1;
         }
-        junk = new List<Object>();
+        junk = new ArrayList<Object>();
         // 污染栈：大量整数局部，不应把已丢弃的 String 假活
         var noise = fillNoise(8000);
         if (noise < 0) { fmt.println(false); return; }

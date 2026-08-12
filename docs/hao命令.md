@@ -122,22 +122,26 @@ hao run . -v
 
 驱动/链接类无源码位错误形如 `hao:0:0: 错误: …`（经 `DiagnosticEngine`）。
 
-**运行期**：`!!` / 除零 / OOM / 未处理崩溃会写当前目录 `hao-crash.log`（并 stderr 打 `FATAL`）。关键字段：
+**运行期**：`!!` / 除零 / OOM / 未处理崩溃会写当前目录 `hao-crash.log`（并 stderr 打 `FATAL`）。关键字段（**v0.59.1**）：
 
 | 字段 | 含义 |
 |------|------|
+| `time=` | 本地墙钟（与 `time.now()` 同 offset；东向为正，北京 `+0800`） |
+| `where=` | 顶帧方法名 + 参数 raw 摘要 + `at file:line:col` |
 | `kind=` / `msg=` | fatal 类别与消息 |
-| `src=file:line:col` | 最近**用户**语句/调用点（TLS；调用前钉调用点；**不依赖** `-g`）。若 TLS 漂到 `stdlib/`/`native.hao`，打印时回退到 stack 上最近用户帧 |
+| `src=file:line:col` | 最近**用户**语句/调用点（TLS；兼容旧读法）。漂到库路径时回退 `hao_stack` 最近用户帧 |
 | `src=?` | 尚无源码位（如极早运行时） |
-| `stack:` + `#N file:line:col` | Hao 级调用帧（函数入口 push / 出口 pop；自上而下最新在 `#0`）；路径含 `stdlib/` 或 `native.hao` 时后缀 ` [lib]` |
+| `hao_stack:` + `#N method(args) at file:line:col` | Hao 级调用帧（最新在 `#0`）；`stdlib/`/`native.hao` 标 ` [lib]` |
+| `native_stack=` | Win UEF / 原生 RVA 栈（与 Hao 栈并列） |
 | `access=` / `av_addr=` | Win UEF 访问违例（`---- crash ----` 段） |
 | `gc_snapshot:` | 无锁堆摘要（phase/heap/…） |
 
-**读法（优先序，CU 类坑）**
+**读法（优先序）**
 
-1. `stack:` 里带业务路径的 `#N …你的.hao:行:列`（跳过带 `[lib]` 的帧）  
-2. 再看 `src=`（可能曾误指 `native.hao` 末行；现已回退用户帧 / 忽略 native 更新）  
-3. 再看 `gc_snapshot` / Win 原生栈  
+1. `where=`（方法 + 文件行列 + 参数）  
+2. `hao_stack:` 里业务路径帧（跳过 `[lib]`）  
+3. `src=`（兼容）  
+4. `native_stack` / `gc_snapshot`  
 
 **固定冒烟（定位门禁 · 三人同命令；亦由 `bash script/test.sh` 在 Win 上自动跑）**
 
@@ -148,12 +152,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File script\win\spill_ir_smoke.ps
 hao run test\gc_block_scope_root_smoke.hao       # 期望三行 true
 hao run test\gc_try_finally_root_smoke.hao     # U2：期望五行 true
 # 可选：HAO_IRGEN_TRACE=1 时 clearLoopSpill target<base 打 stderr
-# 可选：HAO_GC_VERIFY=1 时 collect 前校验 shadow 根（坏根 → fatal+src=/stack=）
+# 可选：HAO_GC_VERIFY=1 时 collect 前校验 shadow 根（坏根 → fatal+src=/hao_stack=）
 ```
 
-`loc_smoke.ps1`：编译错路径、panic/`src=`、跨函数 `stack:`、`hao:0:0`、调用点不漂 `native.hao`、`[lib]`、AV、`throw`、子线程 TLS 栈。  
-`spill_ir_smoke.ps1`：嵌套 while IR 反模式 + block smoke + try/finally 根 + `HAO_GC_VERIFY=1` collect。
-
+`loc_smoke.ps1`：编译错路径、panic/`src=`、跨函数 `hao_stack`（含方法名）、`time=`/`where=`、`hao:0:0`、调用点不漂 `native.hao`、`[lib]`、AV、`throw`、子线程 TLS 栈。  
+`spill_ir_smoke.ps1`：嵌套 while IR 反模式 + loop smoke + try/finally 根 + `HAO_GC_VERIFY=1` collect。
 ### 2.3 `hao emit`
 
 **作用**：只生成 LLVM IR（`.ll`），不链接可执行文件。等价于内部 `emitIROnly=true` + `keepIR=true`。

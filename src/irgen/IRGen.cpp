@@ -63,18 +63,69 @@ void IRGen::pinRuntimeCallSite(antlr4::ParserRuleContext* ctx) {
     emitRuntimeSrcLoc(locFrom(ctx));
 }
 
-void IRGen::emitRuntimePushFrame(const SourceLoc& loc) {
+void IRGen::emitRuntimePushFrame(const SourceLoc& loc,
+                                 const std::string& funcName) {
     std::string fileC =
         em_.internString(loc.valid() && !loc.file.empty() ? loc.file : "?");
     int line = loc.valid() ? (int)loc.line : 0;
     int col = loc.valid() ? (int)loc.col : 0;
+    std::string fnC = em_.internString(funcName.empty() ? "?" : funcName);
     emitCallVoid("@hao_dbg_push_frame",
                  "ptr " + fileC + ", i32 " + std::to_string(line) + ", i32 " +
-                     std::to_string(col));
+                     std::to_string(col) + ", ptr " + fnC);
 }
 
 void IRGen::emitRuntimePopFrame() {
     emitCallVoid("@hao_dbg_pop_frame", "");
+}
+
+void IRGen::emitRuntimeFrameArgs(bool hasThis,
+                                 const std::vector<std::string>& paramNames,
+                                 const std::vector<TypePtr>& paramTypes) {
+    emitCallVoid("@hao_dbg_clear_frame_args", "");
+    int slotsLeft = 4; /* HAO_DBG_ARG_MAX */
+    auto emitOne = [&](const std::string& pname, const TypePtr& ptype,
+                       const std::string& argSrc) {
+        if (!ptype || slotsLeft <= 0) return;
+        std::string nameC = em_.internString(pname);
+        int kind = 0;
+        std::string raw;
+        std::string lty = ptype->llvmType();
+        if (lty == "ptr") {
+            kind = 1; /* HAO_DBG_ARG_PTR */
+            raw = emitPtrToInt("i64", argSrc);
+        } else if (ptype->kind == TypeKind::Bool) {
+            kind = 2;
+            raw = emitCast("zext", lty, argSrc, "i64");
+        } else if (ptype->isFloating()) {
+            kind = 3;
+            if (lty == "double")
+                raw = emitCast("bitcast", "double", argSrc, "i64");
+            else {
+                std::string bits32 = emitCast("bitcast", "float", argSrc, "i32");
+                raw = emitCast("zext", "i32", bits32, "i64");
+            }
+        } else if (ptype->isInteger() || ptype->kind == TypeKind::Char) {
+            kind = 0;
+            if (lty == "i64")
+                raw = argSrc;
+            else if (ptype->isUnsigned())
+                raw = emitCast("zext", lty, argSrc, "i64");
+            else
+                raw = emitCast("sext", lty, argSrc, "i64");
+        } else {
+            return;
+        }
+        emitCallVoid("@hao_dbg_add_frame_arg",
+                     "ptr " + nameC + ", i32 " + std::to_string(kind) +
+                         ", i64 " + raw);
+        --slotsLeft;
+    };
+    if (hasThis)
+        emitOne("this", Type::makeClass("object$Object"), "%this.arg");
+    size_t n = std::min(paramNames.size(), paramTypes.size());
+    for (size_t i = 0; i < n && slotsLeft > 0; ++i)
+        emitOne(paramNames[i], paramTypes[i], "%" + paramNames[i] + ".arg");
 }
 
 // ============================================================
@@ -141,9 +192,23 @@ TypePtr IRGen::resolveType(HaoLangParser::TypeContext* t) {
         if (qn->IDENT().size() == 1 && (tn == "Action" || tn == "Func")) {
             auto* ta = named->typeArgs();
             std::vector<TypePtr> args;
-            if (ta)
-                for (auto* at : ta->type()) args.push_back(resolveType(at));
-            if (tn == "Action") {
+            if (ta) {
+                for (auto* at : ta->typeArg()) {
+                    if (at->QUESTION()) {
+                        if (at->EXTENDS() && at->type())
+                            args.push_back(Type::makeWildcardExtends(
+                                resolveType(at->type())));
+                        else if (at->SUPER() && at->type())
+                            args.push_back(Type::makeWildcardSuper(
+                                resolveType(at->type())));
+                        else
+                            args.push_back(Type::makeWildcard());
+                    } else if (at->type())
+                        args.push_back(resolveType(at->type()));
+                    else
+                        args.push_back(Type::makeUnknown());
+                }
+            }            if (tn == "Action") {
                 base = Type::makeFunc(std::move(args), Type::makeUnit());
             } else { // Func
                 if (args.empty()) {
@@ -198,17 +263,37 @@ TypePtr IRGen::resolveType(HaoLangParser::TypeContext* t) {
             }
         }
 
-        // ---- 泛型实参 Box<Int> ----
+        // ---- 泛型实参 Box<Int> / Map<?,?> ----
         if (auto* ta = named->typeArgs()) {
             std::vector<TypePtr> args;
-            for (auto* at : ta->type()) args.push_back(resolveType(at));
+            for (auto* at : ta->typeArg()) {
+                if (at->QUESTION()) {
+                    if (at->EXTENDS() && at->type())
+                        args.push_back(Type::makeWildcardExtends(resolveType(at->type())));
+                    else if (at->SUPER() && at->type())
+                        args.push_back(Type::makeWildcardSuper(resolveType(at->type())));
+                    else
+                        args.push_back(Type::makeWildcard());
+                } else if (at->type()) {
+                    args.push_back(resolveType(at->type()));
+                } else {
+                    args.push_back(Type::makeUnknown());
+                }
+            }
+            bool hasWild = false;
+            for (const auto& a : args)
+                if (a->kind == TypeKind::Wildcard) { hasWild = true; break; }
             if (base->kind == TypeKind::Class) {
-                if (!base->hasTypeParam())
+                if (!hasWild && !base->hasTypeParam())
                     instantiateClass(base->className, args, t);
                 base = Type::makeClass(base->className, args);
             } else if (base->kind == TypeKind::Interface) {
-                base->typeArgs = args;
+                base = Type::makeInterface(base->className, args);
+                if (!hasWild && !base->hasTypeParam())
+                    ensureInterfaceInstances(base);
             }
+        } else if (base->kind == TypeKind::Interface) {
+            // 裸接口名 Map：登记待用；typeids 走类型族
         }
     } else if (auto* arr = dynamic_cast<HaoLangParser::ArrayTypeContext*>(bt)) {
         base = Type::makeArray(resolveType(arr->type()));
@@ -647,6 +732,8 @@ std::string IRGen::generate(const std::vector<SourceUnit>& units) {
         collectDelegates(units[i]);
     }
 
+    resolveInterfaceInheritance();
+
     // init() 依赖顺序：收集时是入口包在前、其依赖在后；反序即依赖在前。
     // 使 @main 启动时先跑导入包的 init()，再跑 main 自己的（对齐 Go）。
     std::reverse(initCalls_.begin(), initCalls_.end());
@@ -670,6 +757,8 @@ std::string IRGen::generate(const std::vector<SourceUnit>& units) {
     // 否则「函数写在类前面」时访问静态字段会漏调 ensureInit
     // （@Class.sfn 仍为 null → 调用崩溃）。String/lambda 等非常量默认值同理。
     markStaticInitFlags();
+
+    genInterfaceDefaultMethods();
 
     for (size_t i = 0; i < units.size(); ++i) {
         setCurrentUnit(units[i], allImports[i]);
@@ -765,6 +854,80 @@ void IRGen::genUnitTopLevel(const SourceUnit& u) {
 //  频繁用到的类型判断与多态数组公共类型推断。
 // ============================================================
 
+std::string IRGen::wrapperClassNameFor(TypeKind prim) {
+    switch (prim) {
+        case TypeKind::Int:     return "lang$Integer";
+        case TypeKind::Long:    return "lang$Long";
+        case TypeKind::Double:  return "lang$Double";
+        case TypeKind::Float:   return "lang$Float";
+        case TypeKind::Bool:    return "lang$Boolean";
+        case TypeKind::Short:   return "lang$Short";
+        case TypeKind::Byte:    return "lang$Byte";
+        case TypeKind::SByte:   return "lang$SByte";
+        case TypeKind::UShort:  return "lang$UShort";
+        case TypeKind::UInt:    return "lang$UInt";
+        case TypeKind::ULong:   return "lang$ULong";
+        case TypeKind::UIntPtr: return "lang$ULong"; // 与 ULong 同包装族
+        case TypeKind::Char:    return "lang$Character";
+        default: return "";
+    }
+}
+
+TypeKind IRGen::primitiveKindForWrapper(const std::string& className) {
+    if (className == "lang$Integer" || className == "Integer") return TypeKind::Int;
+    if (className == "lang$Long" || className == "Long") return TypeKind::Long;
+    if (className == "lang$Double" || className == "Double") return TypeKind::Double;
+    if (className == "lang$Float" || className == "Float") return TypeKind::Float;
+    if (className == "lang$Boolean" || className == "Boolean") return TypeKind::Bool;
+    if (className == "lang$Short" || className == "Short") return TypeKind::Short;
+    if (className == "lang$Byte" || className == "Byte") return TypeKind::Byte;
+    if (className == "lang$SByte" || className == "SByte") return TypeKind::SByte;
+    if (className == "lang$UShort" || className == "UShort") return TypeKind::UShort;
+    if (className == "lang$UInt" || className == "UInt") return TypeKind::UInt;
+    if (className == "lang$ULong" || className == "ULong") return TypeKind::ULong;
+    if (className == "lang$Character" || className == "Character") return TypeKind::Char;
+    return TypeKind::Unknown;
+}
+
+const char* IRGen::unboxMethodName(TypeKind prim) {
+    switch (prim) {
+        case TypeKind::Int:     return "intValue";
+        case TypeKind::Long:    return "longValue";
+        case TypeKind::Double:  return "doubleValue";
+        case TypeKind::Float:   return "floatValue";
+        case TypeKind::Bool:    return "booleanValue";
+        case TypeKind::Short:   return "shortValue";
+        case TypeKind::Byte:    return "byteValue";
+        case TypeKind::SByte:   return "sbyteValue";
+        case TypeKind::UShort:  return "ushortValue";
+        case TypeKind::UInt:    return "uintValue";
+        case TypeKind::ULong:
+        case TypeKind::UIntPtr: return "ulongValue";
+        case TypeKind::Char:    return "charValue";
+        default: return nullptr;
+    }
+}
+
+bool IRGen::isPrimitiveToWrapper(const TypePtr& from, const TypePtr& to) const {
+    if (!from || !to || from->nullable || to->nullable) return false;
+    if (to->kind != TypeKind::Class) return false;
+    std::string want = wrapperClassNameFor(from->kind);
+    if (want.empty()) return false;
+    if (to->className == want) return true;
+    size_t dol = want.rfind('$');
+    if (dol != std::string::npos && to->className == want.substr(dol + 1))
+        return true;
+    return false;
+}
+
+bool IRGen::isWrapperToPrimitive(const TypePtr& from, const TypePtr& to) const {
+    if (!from || !to || from->nullable || to->nullable) return false;
+    if (from->kind != TypeKind::Class) return false;
+    TypeKind pk = primitiveKindForWrapper(from->className);
+    if (pk == TypeKind::Unknown) return false;
+    return to->kind == pk;
+}
+
 bool IRGen::isAssignable(const TypePtr& from, const TypePtr& to) {
     if (!from || !to) return false;
 
@@ -775,10 +938,32 @@ bool IRGen::isAssignable(const TypePtr& from, const TypePtr& to) {
     // 由 coerce 负责）
     if (!from->nullable && to->nullable && from->sameShape(*to)) return true;
 
+    // v0.59：原生 ↔ 对应包装（禁止错对，如 Int→lang.Long）
+    if (isPrimitiveToWrapper(from, to) || isWrapperToPrimitive(from, to))
+        return true;
+
+    // 原生 → Object：隐式装箱到对应包装再向上（coerce 负责）
+    if (to->kind == TypeKind::Class &&
+        (to->className == "object$Object" || to->className == "Object") &&
+        !from->nullable && !from->isNull() &&
+        !wrapperClassNameFor(from->kind).empty())
+        return true;
+
     // 先用不依赖符号表的通用规则
     if (from->assignableTo(*to)) return true;
 
     if (from->nullable && !to->nullable) return false;
+
+    // 接口 / 类 / 数组 / 字符串 → Object 根（对标 Java）
+    // 须在 Class→Class 之前：泛型 mono 尚未入表时 classOfType 失败会挡住此路径
+    if (to->kind == TypeKind::Class &&
+        (to->className == "object$Object" || to->className == "Object") &&
+        (from->kind == TypeKind::Class || from->kind == TypeKind::Interface ||
+         from->kind == TypeKind::Array || from->kind == TypeKind::String ||
+         from->kind == TypeKind::Func) &&
+        !from->isNull()) {
+        return true;
+    }
 
     // 子类 -> 父类：对象布局保证父类字段在前、虚表槽位一致，
     // 因此无需任何指针调整。泛型类型需先转为单态化实例名。
@@ -786,18 +971,156 @@ bool IRGen::isAssignable(const TypePtr& from, const TypePtr& to) {
         !from->isNull()) {
         auto ci = classOfType(from);
         auto tc = classOfType(to);
-        return ci && tc && ci->isSubclassOf(tc->name);
+        if (ci && tc && ci->isSubclassOf(tc->name)) return true;
+        // 子类继承 mono 实例（JSONObject : LinkedHashMap$…），raw 模板 is/as
+        if (ci && tc && tc->isGenericTemplate()) {
+            for (const ClassInfo* c = ci.get(); c; c = c->base) {
+                if (!c->instanceOf.empty() && c->instanceOf == tc->name) return true;
+            }
+        }
     }
 
-    // 类 -> 它（或其祖先）实现的接口：运行时都是 ptr，
-    // 虚表指针已在对象内，无需转换。泛型接口按实例名匹配
-    //（Iterable<Int> 记为 Iterable$Int，类 interfaceNames 存实例名）。
+    // 类 -> 它（或其祖先）实现的接口（含父接口）
     if (from->kind == TypeKind::Class && to->kind == TypeKind::Interface) {
+        // v0.59：ArrayList<Dog> → List<? extends Animal>（PECS）
+        if (to->hasWildcardArg() &&
+            from->typeArgs.size() == to->typeArgs.size() &&
+            !to->typeArgs.empty()) {
+            auto ci = classOfType(from);
+            if (ci) {
+                auto matchesTmpl = [&](const std::string& iname) {
+                    return iname == to->className ||
+                           iname.rfind(to->className + "$", 0) == 0;
+                };
+                bool impl = false;
+                for (const ClassInfo* c = ci.get(); c; c = c->base) {
+                    for (const auto& n : c->interfaceNames)
+                        if (matchesTmpl(n)) { impl = true; break; }
+                    if (impl) break;
+                }
+                if (impl) {
+                    bool ok = true;
+                    for (size_t i = 0; i < to->typeArgs.size(); ++i)
+                        if (!typeArgPecsAssignable(from->typeArgs[i], to->typeArgs[i]))
+                            { ok = false; break; }
+                    if (ok) return true;
+                }
+            }
+        }
         auto ci = classOfType(from);
-        std::string iname = to->typeArgs.empty()
-            ? to->className
-            : Type::makeInterface(to->className, to->typeArgs)->monoName();
-        return ci && ci->implementsInterface(iname);
+        if (!ci) return false;
+        auto ifaceMatches = [&](const std::string& iname) -> bool {
+            if (to->typeArgs.empty() || to->hasWildcardArg()) {
+                std::string tmpl = to->className;
+                if (iname == tmpl || iname.rfind(tmpl + "$", 0) == 0) return true;
+            } else {
+                std::string want = Type::makeInterface(to->className, to->typeArgs)->monoName();
+                if (iname == want) return true;
+            }
+            // 父接口链
+            auto ii = lookupInterface(iname);
+            if (!ii) return false;
+            std::vector<std::string> q = ii->baseInterfaces;
+            std::set<std::string> seen;
+            while (!q.empty()) {
+                std::string n = q.back();
+                q.pop_back();
+                if (!seen.insert(n).second) continue;
+                if (to->typeArgs.empty() || to->hasWildcardArg()) {
+                    if (n == to->className || n.rfind(to->className + "$", 0) == 0)
+                        return true;
+                } else {
+                    if (n == Type::makeInterface(to->className, to->typeArgs)->monoName())
+                        return true;
+                }
+                auto bi = lookupInterface(n);
+                if (bi)
+                    for (const auto& p : bi->baseInterfaces) q.push_back(p);
+            }
+            return false;
+        };
+        auto walkIfaceChain = [&](auto&& body) {
+            for (const ClassInfo* c = ci.get(); c; c = c->base) body(c);
+            if (!ci->base && !ci->baseName.empty()) {
+                if (auto bc = lookupClass(ci->baseName))
+                    for (const ClassInfo* c = bc.get(); c; c = c->base) body(c);
+            }
+        };
+        bool hit = false;
+        walkIfaceChain([&](const ClassInfo* c) {
+            if (hit) return;
+            for (const auto& iname : c->interfaceNames) {
+                if (ifaceMatches(iname)) { hit = true; return; }
+            }
+        });
+        if (hit) return true;
+        return false;
+    }
+
+    // 接口 → 父接口（B : A 则可 B→A）
+    if (from->kind == TypeKind::Interface && to->kind == TypeKind::Interface) {
+        // v0.59 PECS：同模板 List<Dog> → List<? extends Animal>
+        if (from->className == to->className &&
+            from->typeArgs.size() == to->typeArgs.size() &&
+            !to->typeArgs.empty() && to->hasWildcardArg()) {
+            bool ok = true;
+            for (size_t i = 0; i < to->typeArgs.size(); ++i)
+                if (!typeArgPecsAssignable(from->typeArgs[i], to->typeArgs[i]))
+                    { ok = false; break; }
+            if (ok) return true;
+            return false;
+        }
+        std::string fromName = (from->typeArgs.empty() || from->hasWildcardArg())
+            ? from->className : from->monoName();
+        std::string toName = (to->typeArgs.empty() || to->hasWildcardArg())
+            ? to->className : to->monoName();
+        if (fromName == toName) return true;
+        auto ii = lookupInterface(fromName);
+        if (!ii) return false;
+        std::vector<std::string> q = ii->baseInterfaces;
+        std::set<std::string> seen;
+        while (!q.empty()) {
+            std::string n = q.back();
+            q.pop_back();
+            if (!seen.insert(n).second) continue;
+            if (n == toName || n == to->className) return true;
+            auto bi = lookupInterface(n);
+            if (bi)
+                for (const auto& p : bi->baseInterfaces) q.push_back(p);
+        }
+        return false;
+    }
+    return false;
+}
+
+bool IRGen::typeArgPecsAssignable(const TypePtr& fromArg, const TypePtr& toArg) {
+    if (!fromArg || !toArg) return false;
+    if (fromArg->equals(*toArg)) return true;
+
+    if (toArg->kind == TypeKind::Wildcard &&
+        toArg->wildVar == WildcardVariance::Unbounded)
+        return true;
+
+    if (toArg->kind == TypeKind::Wildcard &&
+        toArg->wildVar == WildcardVariance::Extends && toArg->elem) {
+        TypePtr U = toArg->elem;
+        if (fromArg->kind == TypeKind::Wildcard) {
+            if (fromArg->wildVar == WildcardVariance::Extends && fromArg->elem)
+                return isAssignable(fromArg->elem, U);
+            return false;
+        }
+        return isAssignable(fromArg, U);
+    }
+
+    if (toArg->kind == TypeKind::Wildcard &&
+        toArg->wildVar == WildcardVariance::Super && toArg->elem) {
+        TypePtr L = toArg->elem;
+        if (fromArg->kind == TypeKind::Wildcard) {
+            if (fromArg->wildVar == WildcardVariance::Super && fromArg->elem)
+                return isAssignable(L, fromArg->elem);
+            return false;
+        }
+        return isAssignable(L, fromArg);
     }
     return false;
 }
@@ -1117,6 +1440,13 @@ void IRGen::collectGenericFunctions(const SourceUnit& u) {
         tmpl.decl = fn;
         for (auto* id : fn->typeParams()->IDENT())
             tmpl.typeParams.push_back(id->getText());
+        {
+            std::set<std::string> savedParams = currentTypeParams_;
+            for (const auto& p : tmpl.typeParams) currentTypeParams_.insert(p);
+            if (auto* wc = fn->whereClause())
+                tmpl.constraints = parseWhereClause(wc);
+            currentTypeParams_ = savedParams;
+        }
         genericFns_[tmpl.name] = tmpl;
 
         auto sym = std::make_shared<Symbol>();
@@ -1181,6 +1511,16 @@ SymbolPtr IRGen::instantiateFunction(const std::string& tplName,
         currentTypeParams_ = savedParams0;
         currentPkgPrefix_ = savedPrefix0;
         return nullptr;
+    }
+
+    if (!tmpl.constraints.empty()) {
+        size_t errBefore = diags_.errorCount();
+        checkTypeConstraints(tmpl.constraints, subst, useSite);
+        if (diags_.errorCount() > errBefore) {
+            currentTypeParams_ = savedParams0;
+            currentPkgPrefix_ = savedPrefix0;
+            return nullptr;
+        }
     }
 
     // 实例名 firstOf$Int
@@ -1539,6 +1879,9 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
         if (!arrayByRef)
             emitDbgValueIf(ptype->llvmType(), argSrc, pname, dbgLine, argNo);
     }
+
+    /* 崩溃栈：入口参数 raw 快照（最多 4；禁 crash 路径 deref） */
+    emitRuntimeFrameArgs(hasThis, paramNames, paramTypes);
 
     // ---- 函数体：符号与参数同层；块 GC 作用域使顶层局部在落回出口前可清槽 ----
     /* v0.53.3：入口 safepoint，加密协作 STW（循环外长直线路径也能 park） */

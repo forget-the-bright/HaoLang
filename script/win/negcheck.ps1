@@ -32,7 +32,13 @@ $cases = @(
     @{ name = "ULong+Long"; code = "package main;`nfunc main() { var u: ULong = 1; var s: Long = 1; fmt.println(u + s); }" },
     @{ name = "ULong/Long"; code = "package main;`nfunc main() { var u: ULong = 1; var s: Long = 1; fmt.println(u / s); }" },
     @{ name = "UIntPtr-Long"; code = "package main;`nfunc main() { var u: UIntPtr = 1; var s: Long = 1; fmt.println(u - s); }" },
-    @{ name = "ULong&Long"; code = "package main;`nfunc main() { var u: ULong = 1; var s: Long = 1; fmt.println(u & s); }" }
+    @{ name = "ULong&Long"; code = "package main;`nfunc main() { var u: ULong = 1; var s: Long = 1; fmt.println(u & s); }" },
+    @{ name = "where violate"; code = "package main;`ninterface C {}`nclass Box<T> where T : C { var v: T;`nconstructor(v: T) { this.v = v } }`nclass P {}`nfunc main() { val b = new Box<P>(new P()); }" },
+    @{ name = "default conflict"; code = "package main;`ninterface A { func f(): Int { return 1 } }`ninterface B { func f(): Int { return 2 } }`ninterface C : A, B {}`nclass D : C {}`nfunc main() {}" },
+    @{ name = "Int to Long wrap"; code = "package main;`nfunc main() { var a: Int = 1; var bad: lang.Long = a; }" },
+    @{ name = "Integer to Long"; code = "package main;`nfunc main() { var a: Integer = Integer.valueOf(1); var bad: Long = a; }" },
+    @{ name = "wild extends add"; code = "package main;`nimport collections.*;`nclass Animal { constructor() {} }`nclass Dog : Animal { constructor() { super() } }`nfunc main() { val dogs: List<Dog> = new ArrayList<Dog>(); val view: List<? extends Animal> = dogs; view.add(new Dog()); }" },
+    @{ name = "wild super bad add"; code = "package main;`nimport collections.*;`nclass Animal { constructor() {} }`nclass Dog : Animal { constructor() { super() } }`nclass Cat : Animal { constructor() { super() } }`nfunc main() { val xs: List<? super Dog> = new ArrayList<Animal>(); xs.add(new Cat()); }" }
 )
 
 $dir = "target\test\negcheck"

@@ -5,7 +5,7 @@ import collections;
 // 从 lambda 返回类型推断，单态化为 List$Int.map$String 等具体方法。
 
 func main() {
-    val list = new collections.List<Int>();
+    val list = new collections.ArrayList<Int>();
     list.add(1);
     list.add(2);
     list.add(3);

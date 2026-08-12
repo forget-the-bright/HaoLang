@@ -12,7 +12,7 @@ class Node {
 func main() {
     var keep = new Node();
     keep.tag = 1;
-    var junk = new List<Node>();
+    var junk = new ArrayList<Node>();
     var i = 0;
     while (i < 2000) {
         var n = new Node();
@@ -24,7 +24,7 @@ func main() {
         n.next = keep;
         i += 1;
     }
-    junk = new List<Node>();
+    junk = new ArrayList<Node>();
     gc.GC.collect();
     fmt.println(keep.tag == 1); // true：存活根未丢
     fmt.println(gc.GC.concurrentMarkCycles() >= 0); // true

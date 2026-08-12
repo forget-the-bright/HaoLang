@@ -33,11 +33,15 @@ int64_t hao_time_now_ns(void) {
 #endif
 }
 
-/* 本地时区相对 UTC 的偏移（秒） */
+/* 本地时区相对 UTC 的偏移（秒，东向为正；北京 ≈ +28800） */
 int32_t hao_time_offset(void) {
     time_t t = time(NULL);
-    struct tm l, g;
-    if (HLT_LOCALTIME(&t, &l) != 0) return 0;
+    struct tm g;
+    time_t as_local;
     if (HLT_GMTIME(&t, &g) != 0) return 0;
-    return (int32_t)(mktime(&g) - mktime(&l));
+    g.tm_isdst = 0;
+    /* 把 UTC 民用字段当成「本地」喂 mktime，差即东向偏移 */
+    as_local = mktime(&g);
+    if (as_local == (time_t)-1) return 0;
+    return (int32_t)((int64_t)t - (int64_t)as_local);
 }

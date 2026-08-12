@@ -47,6 +47,10 @@ public:
 
     virtual std::any visitTypeParams(HaoLangParser::TypeParamsContext *context) = 0;
 
+    virtual std::any visitWhereClause(HaoLangParser::WhereClauseContext *context) = 0;
+
+    virtual std::any visitWhereBinding(HaoLangParser::WhereBindingContext *context) = 0;
+
     virtual std::any visitModifier(HaoLangParser::ModifierContext *context) = 0;
 
     virtual std::any visitClassDecl(HaoLangParser::ClassDeclContext *context) = 0;
@@ -92,6 +96,8 @@ public:
     virtual std::any visitArrayType(HaoLangParser::ArrayTypeContext *context) = 0;
 
     virtual std::any visitFuncType(HaoLangParser::FuncTypeContext *context) = 0;
+
+    virtual std::any visitTypeArg(HaoLangParser::TypeArgContext *context) = 0;
 
     virtual std::any visitTypeArgs(HaoLangParser::TypeArgsContext *context) = 0;
 

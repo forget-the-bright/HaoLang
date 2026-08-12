@@ -15,7 +15,7 @@ class Box {
 func main() {
     var round = 0;
     while (round < 40) {
-        var junk = new List<Object>();
+        var junk = new ArrayList<Object>();
         var i = 0;
         while (i < 500) {
             junk.add(new Box("c-" + Integer.toStr(i)));

@@ -13,7 +13,7 @@ class Stack<T> : Iterable<T> {
     // 构造空栈。
     // 复杂度：O(1)
     constructor() {
-        this.items = new List<T>();
+        this.items = new ArrayList<T>();
     }
 
     // Iterable：toArray 拷贝后迭代（首元素为栈底）。

@@ -251,6 +251,28 @@ std::string IRGen::formatCallArg(const TypePtr& paramTy,
 Value IRGen::coerce(const Value& v, const TypePtr& target, size_t line, size_t col) {
     if (!v.valid() || !target) return v;
 
+    // v0.59：原生 → 对应包装（Integer.valueOf 等）
+    if (isPrimitiveToWrapper(v.type, target)) {
+        Value boxed = emitBoxToWrapper(v, target);
+        if (boxed.valid()) return boxed;
+    }
+    // 包装 → 对应原生
+    if (isWrapperToPrimitive(v.type, target)) {
+        Value raw = emitUnboxWrapper(v, target);
+        if (raw.valid()) return raw;
+    }
+    // 原生 → Object：先装箱再改静态类型
+    if (target->kind == TypeKind::Class &&
+        (target->className == "object$Object" || target->className == "Object") &&
+        !v.type->nullable) {
+        std::string wn = wrapperClassNameFor(v.type->kind);
+        if (!wn.empty()) {
+            TypePtr wrapTy = Type::makeClass(wn);
+            Value boxed = emitBoxToWrapper(v, wrapTy);
+            if (boxed.valid()) return Value(boxed.ir, target);
+        }
+    }
+
     // 数值互转（拓宽 / 窄化）；可空装箱另案，不走此路径
     if (v.type->isNumeric() && target->isNumeric() &&
         !v.type->nullable && !target->nullable &&
@@ -354,6 +376,44 @@ Value IRGen::coerce(const Value& v, const TypePtr& target, size_t line, size_t c
 
     (void)line; (void)col;
     return v;
+}
+
+Value IRGen::emitBoxToWrapper(const Value& prim, const TypePtr& wrapTy) {
+    if (!prim.valid() || !wrapTy) return Value();
+    std::string cname = wrapTy->className;
+    if (cname.find('$') == std::string::npos) {
+        std::string full = wrapperClassNameFor(prim.type->kind);
+        if (!full.empty()) cname = full;
+    }
+    auto ci = lookupClass(cname);
+    if (!ci) ci = lookupClass(wrapperClassNameFor(prim.type->kind));
+    if (!ci) return Value();
+    std::vector<TypePtr> want = { prim.type };
+    const MethodInfo* mi = ci->findStaticMethod("valueOf", want);
+    if (!mi) mi = ci->findStaticMethod("valueOf");
+    if (!mi) return Value();
+    emitStaticEnsureInit(ci);
+    std::string reg = emitCall(mi->returnType->llvmType(), mi->irName,
+                               prim.type->llvmType() + " " + prim.ir);
+    TypePtr outTy = mi->returnType ? mi->returnType : wrapTy;
+    return Value(reg, outTy);
+}
+
+Value IRGen::emitUnboxWrapper(const Value& wrap, const TypePtr& primTy) {
+    if (!wrap.valid() || !primTy) return Value();
+    auto ci = classOfType(wrap.type);
+    if (!ci) {
+        std::string full = wrapperClassNameFor(primTy->kind);
+        if (!full.empty()) ci = lookupClass(full);
+    }
+    if (!ci) return Value();
+    const char* mname = unboxMethodName(primTy->kind);
+    if (!mname) return Value();
+    const MethodInfo* mi = ci->findMethod(mname);
+    if (!mi) return Value();
+    std::string reg = emitCall(mi->returnType->llvmType(), mi->irName,
+                               "ptr " + wrap.ir);
+    return Value(reg, primTy);
 }
 
 bool IRGen::ensureNonNullOperand(const Value& v, antlr4::ParserRuleContext* ctx,

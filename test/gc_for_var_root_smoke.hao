@@ -5,7 +5,7 @@ import gc;
 import collections.*;
 
 func main() {
-    var outer = new List<Object>();
+    var outer = new ArrayList<Object>();
     var k = 0;
     while (k < 30) {
         outer.add(String.valueOf("o-" + Integer.toStr(k)));
@@ -14,7 +14,7 @@ func main() {
     var round = 0;
     while (round < 25) {
         for (item in outer) {
-            var junk = new List<Object>();
+            var junk = new ArrayList<Object>();
             junk.add(item);
             junk.add(String.valueOf("f-" + Integer.toStr(round)));
         }

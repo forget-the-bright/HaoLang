@@ -73,6 +73,16 @@ class JSON {
         return JSON.stringifyTreeMap(m, 0, 0, stack, 0);
     }
 
+    static func toJSONString(obj: JSONObject): String {
+        var stack: [Long] = [];
+        return JSON.stringifyObj(obj, 0, 0, stack, 0);
+    }
+
+    static func toJSONString(arr: JSONArray): String {
+        var stack: [Long] = [];
+        return JSON.stringifyArr(arr, 0, 0, stack, 0);
+    }
+
     static func parseObjectFromFile(path: String): JSONObject {
         val t = os.readFile(path);
         if (t == null) {
@@ -271,7 +281,13 @@ class JSON {
             return JSON.quote(value.toString());
         }
         val next2 = JSON.stackPush(stack, p);
-        // Hutool/Java：Map → entrySet 遍历（禁 hao_array_*；泛型 is Map 不可用故 reflect）
+        if (value is Map) {
+            return JSON.stringifyMapIface(value as Map<String, Object>, features, indent, next2, depth + 1);
+        }
+        if (value is List) {
+            return JSON.stringifyListIface(value as List<Object>, features, indent, next2, depth + 1);
+        }
+        // 反射 duck typing 兜底（非 Map/List 接口形态）
         if (JSON.looksLikeMap(t)) {
             return JSON.stringifyMapReflect(value, t, features, indent, next2, depth + 1);
         }
@@ -451,6 +467,48 @@ class JSON {
         return r + "}";
     }
 
+    static func stringifyMapIface(m: Map<String, Object>, features: Int, indent: Int, stack: [Long], depth: Int): String {
+        val pretty = (features & JSON.PrettyFormat) != 0;
+        var r = "{";
+        var first = true;
+        for (ent in m.entrySet().toArray()) {
+            val kStr = ent.getKey();
+            val child = ent.getValue();
+            if (!first) { r = r + ","; }
+            first = false;
+            if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
+            r = r + JSON.quote(kStr) + ":";
+            if (pretty) { r = r + " "; }
+            if (child == null) {
+                r = r + "null";
+            } else {
+                r = r + JSON.stringifyAt(child!!, features, indent + 1, stack, depth);
+            }
+        }
+        if (pretty && !first) { r = r + "\n" + JSON.pad(indent); }
+        return r + "}";
+    }
+
+    static func stringifyListIface(lst: List<Object>, features: Int, indent: Int, stack: [Long], depth: Int): String {
+        val pretty = (features & JSON.PrettyFormat) != 0;
+        var r = "[";
+        var i = 0;
+        val sz = lst.size();
+        while (i < sz) {
+            if (i > 0) { r = r + ","; }
+            if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
+            val child = lst.get(i);
+            if (child == null) {
+                r = r + "null";
+            } else {
+                r = r + JSON.stringifyAt(child!!, features, indent + 1, stack, depth);
+            }
+            i += 1;
+        }
+        if (pretty && sz > 0) { r = r + "\n" + JSON.pad(indent); }
+        return r + "]";
+    }
+
     static func stringifyList(value: Object, t: reflect.Class, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
         var emptyArgs: [Long] = [];
@@ -515,19 +573,14 @@ class JSON {
         val pretty = (features & JSON.PrettyFormat) != 0;
         val writeNull = (features & JSON.WriteMapNullValue) != 0;
         // 键名快照：while 内 `r` 与 `k` 曾疑似 spill 别名，导致后续键被污染成结果串前缀
-        val nkeys = obj.keys.length;
-        var keySnap: [String] = [];
-        var si = 0;
-        while (si < nkeys) {
-            keySnap += obj.keys[si];
-            si += 1;
-        }
+        val keySnap = obj.keys();
+        val nkeys = keySnap.length;
         var r = "{";
         var first = true;
         var i = 0;
         while (i < nkeys) {
             val k = keySnap[i];
-            val v = obj.map.get(k);
+            val v = obj.get(k);
             i += 1;
             if (v == null) { continue; }
             if ((!writeNull) && (v!! is JSONNull)) { continue; }

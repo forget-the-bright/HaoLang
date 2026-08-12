@@ -11,7 +11,7 @@ class Box {
 }
 
 func main() {
-    var items = new List<Object>();
+    var items = new ArrayList<Object>();
     var k = 0;
     while (k < 20) {
         items.add(new Box("i-" + Integer.toStr(k)));

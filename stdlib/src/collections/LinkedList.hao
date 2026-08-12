@@ -23,7 +23,7 @@ class LinkedListNode<T> {
     }
 }
 
-class LinkedList<T> : Iterable<T> {
+class LinkedList<T> : List<T> {
     var head: LinkedListNode<T>?;
     var tail: LinkedListNode<T>?;
     var count: Int;

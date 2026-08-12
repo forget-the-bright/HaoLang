@@ -76,11 +76,12 @@ $okStack = $false
 if (Test-Path $log) {
     $txt = Get-Content $log -Raw
     $n = ([regex]::Matches($txt, "#\d+ .*stack\.hao:\d+:")).Count
-    if ($txt -match "src=.*stack\.hao:\d+:" -and $n -ge 2) { $okStack = $true }
+    $hasMethods = $txt -match "hao_stack:[\s\S]*boom\(" -and $txt -match "hao_stack:[\s\S]*main\("
+    if ($txt -match "src=.*stack\.hao:\d+:" -and $n -ge 2 -and $hasMethods) { $okStack = $true }
     if ($txt -match "src=.*native\.hao") { $okStack = $false }
 }
 if ($okStack) {
-    Write-Host "OK   stack has >=2 frames (caller+callee)"
+    Write-Host "OK   stack has >=2 frames with method names"
 } else {
     Write-Host "FAIL cross-fn stack frames"
     if (Test-Path $log) { Get-Content $log }
@@ -108,7 +109,7 @@ class Box {
 }
 
 func main() {
-    var junk = new List<Object>()
+    var junk = new ArrayList<Object>()
     junk.add(new Box("x"))
     var p: String? = null
     fmt.println(p!!)
@@ -163,10 +164,13 @@ if (Test-Path $log) {
     $txt = Get-Content $log -Raw
     $hasAccess = $txt -match "access=" -or $txt -match "av_addr="
     $hasUser = $txt -match "av\.hao:\d+"
-    if ($hasAccess -and $hasUser) { $okAv = $true }
+    $hasTime = $txt -match "time=\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}"
+    $hasWhere = $txt -match "where=.* at .*av\.hao:\d+:\d+"
+    $hasHaoStack = $txt -match "hao_stack:[\s\S]*main\("
+    if ($hasAccess -and $hasUser -and $hasTime -and $hasWhere -and $hasHaoStack) { $okAv = $true }
 }
 if ($okAv) {
-    Write-Host "OK   AV crash has access=/av_addr= and user stack"
+    Write-Host "OK   AV crash has time=/where=/hao_stack=method + access="
 } else {
     Write-Host "FAIL AV crash log incomplete"
     if (Test-Path $log) { Get-Content $log }
@@ -186,7 +190,7 @@ Reset-CrashLog
 $okThrow = $false
 if (Test-Path $log) {
     $txt = Get-Content $log -Raw
-    if ($txt -match "src=.*throw\.hao:\d+:\d+" -or $txt -match "stack:[\s\S]*throw\.hao:\d+") {
+    if ($txt -match "src=.*throw\.hao:\d+:\d+" -or $txt -match "hao_stack:[\s\S]*throw\.hao:\d+") {
         $okThrow = $true
     }
     if ($txt -match "src=.*native\.hao") { $okThrow = $false }
@@ -221,7 +225,7 @@ $okTls = $false
 if (Test-Path $log) {
     $txt = Get-Content $log -Raw
     # Worker frame must appear; process exits in worker so stack is that thread's TLS
-    if ($txt -match "tlsstack\.hao:\d+" -and $txt -match "stack:") {
+    if ($txt -match "tlsstack\.hao:\d+" -and $txt -match "hao_stack:") {
         $okTls = $true
     }
 }
@@ -255,7 +259,7 @@ if (Test-Path $log) {
     if ($txt -match "kind=gc_verify" -and
         $txt -match "shadow_i=" -and
         $txt -match "ptr=" -and
-        ($txt -match "src=.*verify_bad\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_bad\.hao:\d+")) {
+        ($txt -match "src=.*verify_bad\.hao:\d+" -or $txt -match "hao_stack:[\s\S]*verify_bad\.hao:\d+")) {
         $okVfy = $true
     }
     if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_bad\.hao") {
@@ -284,7 +288,7 @@ class Box {
 
 func main() {
     hao_debug_poison_shadow_root();
-    var xs = new List<Object>();
+    var xs = new ArrayList<Object>();
     var i = 0;
     while (i < 8000) {
         xs.add(new Box("pad-0123456789abcdef0123456789abcdef"));
@@ -304,7 +308,7 @@ if (Test-Path $log) {
     if ($txt -match "kind=gc_verify" -and
         $txt -match "shadow_i=" -and
         $txt -match "ptr=" -and
-        ($txt -match "src=.*verify_alloc\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_alloc\.hao:\d+")) {
+        ($txt -match "src=.*verify_alloc\.hao:\d+" -or $txt -match "hao_stack:[\s\S]*verify_alloc\.hao:\d+")) {
         $okVa = $true
     }
     if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_alloc\.hao") {
@@ -358,7 +362,7 @@ class Box {
 }
 
 func main() {
-    var xs = new List<Object>()
+    var xs = new ArrayList<Object>()
     xs.add(new Box("a"))
     xs.add(new Box("b"))
     for (it in xs) {
@@ -454,7 +458,7 @@ if (Test-Path $log) {
     if ($txt -match "kind=gc_verify" -and
         $txt -match "pin_i=" -and
         $txt -match "ptr=" -and
-        ($txt -match "src=.*verify_pin\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_pin\.hao:\d+")) {
+        ($txt -match "src=.*verify_pin\.hao:\d+" -or $txt -match "hao_stack:[\s\S]*verify_pin\.hao:\d+")) {
         $okPin = $true
     }
     if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_pin\.hao") {
@@ -546,7 +550,7 @@ if (Test-Path $log) {
     if ($txt -match "kind=gc_verify" -and
         $txt -match "remset_i=" -and
         $txt -match "ptr=" -and
-        ($txt -match "src=.*verify_remset\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_remset\.hao:\d+")) {
+        ($txt -match "src=.*verify_remset\.hao:\d+" -or $txt -match "hao_stack:[\s\S]*verify_remset\.hao:\d+")) {
         $okRem = $true
     }
     if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_remset\.hao") {
@@ -606,7 +610,7 @@ if (Test-Path $log) {
     if ($txt -match "kind=gc_verify" -and
         $txt -match "refl_i64_i=" -and
         $txt -match "ptr=" -and
-        ($txt -match "src=.*verify_refl\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_refl\.hao:\d+")) {
+        ($txt -match "src=.*verify_refl\.hao:\d+" -or $txt -match "hao_stack:[\s\S]*verify_refl\.hao:\d+")) {
         $okRfl = $true
     }
     if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_refl\.hao") {
@@ -718,7 +722,7 @@ if (Test-Path $log) {
     if ($txt -match "kind=gc_verify" -and
         $txt -match "gpr_i=" -and
         $txt -match "ptr=" -and
-        ($txt -match "src=.*verify_gpr\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_gpr\.hao:\d+")) {
+        ($txt -match "src=.*verify_gpr\.hao:\d+" -or $txt -match "hao_stack:[\s\S]*verify_gpr\.hao:\d+")) {
         $okGpr = $true
     }
     if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_gpr\.hao") {
@@ -782,7 +786,7 @@ if (Test-Path $log) {
     if ($txt -match "kind=gc_verify" -and
         $txt -match "leaf_i=" -and
         $txt -match "ptr=" -and
-        ($txt -match "src=.*verify_leaf\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_leaf\.hao:\d+")) {
+        ($txt -match "src=.*verify_leaf\.hao:\d+" -or $txt -match "hao_stack:[\s\S]*verify_leaf\.hao:\d+")) {
         $okLeaf = $true
     }
     if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_leaf\.hao") {
@@ -953,7 +957,7 @@ if (Test-Path $log) {
     if ($txt -match "kind=gc_verify" -and
         $txt -match "ext_i=" -and
         $txt -match "ptr=" -and
-        ($txt -match "src=.*verify_ext\.hao:\d+" -or $txt -match "stack:[\s\S]*verify_ext\.hao:\d+")) {
+        ($txt -match "src=.*verify_ext\.hao:\d+" -or $txt -match "hao_stack:[\s\S]*verify_ext\.hao:\d+")) {
         $okExt = $true
     }
     if ($txt -match "src=.*native\.hao" -and $txt -notmatch "src=.*verify_ext\.hao") {
@@ -1026,3 +1030,4 @@ if ($fail -eq 0) {
 }
 Write-Host "loc_smoke: $fail FAIL(s)"
 exit 1
+

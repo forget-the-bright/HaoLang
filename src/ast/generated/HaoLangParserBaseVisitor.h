@@ -71,6 +71,14 @@ public:
     return visitChildren(ctx);
   }
 
+  virtual std::any visitWhereClause(HaoLangParser::WhereClauseContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitWhereBinding(HaoLangParser::WhereBindingContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
   virtual std::any visitModifier(HaoLangParser::ModifierContext *ctx) override {
     return visitChildren(ctx);
   }
@@ -160,6 +168,10 @@ public:
   }
 
   virtual std::any visitFuncType(HaoLangParser::FuncTypeContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitTypeArg(HaoLangParser::TypeArgContext *ctx) override {
     return visitChildren(ctx);
   }
 

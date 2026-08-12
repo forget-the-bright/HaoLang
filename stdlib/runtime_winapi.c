@@ -162,6 +162,8 @@ static long __stdcall hao_crash_uef(void* ep) {
         FILE* f = fopen("hao-crash.log", "a");
         if (f) {
             fprintf(f, "---- crash ----\n");
+            hao_dbg_fprint_time(f);
+            hao_dbg_fprint_where(f);
             fprintf(f, "exception=0x%08X flags=0x%X addr=%p rva=0x%llx base=%p tid=%u\n",
                     (unsigned)code, (unsigned)flags, at, (unsigned long long)rva,
                     base, (unsigned)tid);
@@ -192,7 +194,7 @@ static long __stdcall hao_crash_uef(void* ep) {
                 /* rcx 常为 Win64 第一形参（hao_str_len 的 s） */
                 hao_crash_fprint_rva(f, "rcx", (const void*)gprs[1], base);
             }
-            fprintf(f, "stack_frames=%u\n", (unsigned)nstack);
+            fprintf(f, "native_stack=%u\n", (unsigned)nstack);
             for (i = 0; i < (int)nstack; ++i) {
                 const void* fp = stack[i];
                 if (base && fp && (uintptr_t)fp >= (uintptr_t)base)

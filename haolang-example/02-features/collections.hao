@@ -4,7 +4,7 @@ package main;
 import collections;
 
 func main() {
-    val list = new collections.List<Int>();
+    val list = new collections.ArrayList<Int>();
     list.add(10);
     list.add(20);
     list.add(30);

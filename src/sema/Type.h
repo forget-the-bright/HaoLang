@@ -40,7 +40,11 @@ enum class TypeKind {
     Class,
     Interface,
     TypeParam,
+    Wildcard,  // 类型实参槽中的 ? / ? extends T / ? super T（非可空后缀）
 };
+
+// 通配方差（仅 TypeKind::Wildcard）
+enum class WildcardVariance { Unbounded, Extends, Super };
 
 class Type;
 using TypePtr = std::shared_ptr<Type>;
@@ -49,10 +53,11 @@ class Type {
 public:
     TypeKind kind = TypeKind::Unknown;
     bool nullable = false;
-    TypePtr elem;
+    TypePtr elem;   // Array 元素；Func 返回；Wildcard 的 extends/super 上界
     std::vector<TypePtr> params;
     std::string className;
     std::vector<TypePtr> typeArgs;
+    WildcardVariance wildVar = WildcardVariance::Unbounded;
 
     Type() = default;
     explicit Type(TypeKind k) : kind(k) {}
@@ -106,6 +111,21 @@ public:
         t->className = std::move(name);
         return t;
     }
+    static TypePtr makeWildcard() {
+        return std::make_shared<Type>(TypeKind::Wildcard);
+    }
+    static TypePtr makeWildcardExtends(TypePtr bound) {
+        auto t = std::make_shared<Type>(TypeKind::Wildcard);
+        t->wildVar = WildcardVariance::Extends;
+        t->elem = std::move(bound);
+        return t;
+    }
+    static TypePtr makeWildcardSuper(TypePtr bound) {
+        auto t = std::make_shared<Type>(TypeKind::Wildcard);
+        t->wildVar = WildcardVariance::Super;
+        t->elem = std::move(bound);
+        return t;
+    }
     static TypePtr makeNull() {
         auto t = std::make_shared<Type>(TypeKind::Class);
         t->className = "";
@@ -126,6 +146,23 @@ public:
         return kind == TypeKind::String || kind == TypeKind::Class ||
                kind == TypeKind::Interface || kind == TypeKind::Array ||
                kind == TypeKind::Func || kind == TypeKind::TypeParam;
+    }
+
+    // 类型实参中是否含不定泛型 ?
+    bool hasWildcardArg() const {
+        if (kind == TypeKind::Wildcard) return true;
+        if (elem && elem->hasWildcardArg()) return true;
+        for (const auto& a : typeArgs) if (a->hasWildcardArg()) return true;
+        for (const auto& p : params)   if (p->hasWildcardArg()) return true;
+        return false;
+    }
+
+    // is/as 查 typeids 用：全具体实参 → mono；裸/含 ? → 模板名（类型族）
+    std::string typeIdKey() const {
+        if (kind != TypeKind::Class && kind != TypeKind::Interface)
+            return className;
+        if (typeArgs.empty() || hasWildcardArg()) return className;
+        return monoName();
     }
 
     // ------------------------------------------------------------
@@ -363,6 +400,10 @@ public:
             }
             case TypeKind::TypeParam:
                 return className == o.className;
+            case TypeKind::Wildcard:
+                if (wildVar != o.wildVar) return false;
+                if (wildVar == WildcardVariance::Unbounded) return true;
+                return elem && o.elem && elem->sameShape(*o.elem);
             case TypeKind::Func: {
                 if (params.size() != o.params.size()) return false;
                 for (size_t i = 0; i < params.size(); ++i)
@@ -433,6 +474,14 @@ public:
             case TypeKind::TypeParam:
                 base = className;
                 break;
+            case TypeKind::Wildcard:
+                if (wildVar == WildcardVariance::Extends && elem)
+                    base = "? extends " + elem->toString();
+                else if (wildVar == WildcardVariance::Super && elem)
+                    base = "? super " + elem->toString();
+                else
+                    base = "?";
+                break;
             case TypeKind::Array:
                 base = "[" + (elem ? elem->toString() : "?") + "]";
                 break;
@@ -473,6 +522,7 @@ public:
             case TypeKind::String: case TypeKind::Array:
             case TypeKind::Class: case TypeKind::Interface:
             case TypeKind::Func: case TypeKind::TypeParam:
+            case TypeKind::Wildcard:
                 return "ptr";
             case TypeKind::Unknown: return "i64";
         }
@@ -490,12 +540,16 @@ public:
             case TypeKind::Bool: case TypeKind::Char: case TypeKind::String:
             case TypeKind::Unit: case TypeKind::Unknown:
                 return kindDisplayName(kind);
+            case TypeKind::Wildcard:
+                return "_";
             default: break;
         }
         std::string n = className;
         for (const auto& a : typeArgs) {
             n += "$";
-            if (a->isInteger() || a->isFloating() ||
+            if (a->kind == TypeKind::Wildcard) {
+                n += "_";
+            } else if (a->isInteger() || a->isFloating() ||
                 a->kind == TypeKind::Bool || a->kind == TypeKind::Char ||
                 a->kind == TypeKind::String || a->kind == TypeKind::Unit) {
                 n += kindDisplayName(a->kind);

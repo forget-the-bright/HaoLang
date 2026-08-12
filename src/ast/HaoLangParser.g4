@@ -76,7 +76,7 @@ enumConstant
 // 可选 @link("ws2_32", ...) 声明该符号所在的外部链接库（追加到链接命令）。
 funcDecl
     : annotationUse* modifier* FUNC IDENT typeParams? LPAREN paramList? RPAREN returnType?
-      (ASSIGN STRING_LIT)? linkDecl? (block | SEMI)
+      whereClause? (ASSIGN STRING_LIT)? linkDecl? (block | SEMI)
     ;
 
 linkDecl
@@ -99,6 +99,15 @@ typeParams
     : LT IDENT (COMMA IDENT)* GT
     ;
 
+// 泛型约束：where T : Comparable, U : Speaker（每绑定一个上界；同参可重复 AND）
+whereClause
+    : WHERE whereBinding (COMMA whereBinding)*
+    ;
+
+whereBinding
+    : IDENT COLON type
+    ;
+
 modifier
     : PUBLIC | PRIVATE | PROTECTED | INTERNAL
     | STATIC | ABSTRACT | OVERRIDE | VIRTUAL | ASYNC | EXTERN
@@ -109,7 +118,7 @@ modifier
 // ============================================================
 
 classDecl
-    : annotationUse* modifier* CLASS IDENT typeParams? classBase? LBRACE classMember* RBRACE
+    : annotationUse* modifier* CLASS IDENT typeParams? classBase? whereClause? LBRACE classMember* RBRACE
     ;
 
 // 类的"根基"两种写法任选其一：
@@ -123,7 +132,7 @@ classBase
     ;
 
 interfaceDecl
-    : modifier* INTERFACE IDENT typeParams? (COLON typeList)? LBRACE interfaceMember* RBRACE
+    : modifier* INTERFACE IDENT typeParams? (COLON typeList)? whereClause? LBRACE interfaceMember* RBRACE
     ;
 
 typeList
@@ -146,7 +155,7 @@ staticCtorDecl
     ;
 
 interfaceMember
-    : modifier* FUNC IDENT typeParams? LPAREN paramList? RPAREN returnType? (block | SEMI?)
+    : modifier* FUNC IDENT typeParams? LPAREN paramList? RPAREN returnType? whereClause? (block | SEMI?)
     | propertyDecl
     ;
 
@@ -210,8 +219,14 @@ baseType
     | LPAREN typeList? RPAREN ARROW type   # funcType
     ;
 
+// typeArg：具体类型，或 ? / ? extends T / ? super T（可空仍是 type 后缀 T?）
+typeArg
+    : type
+    | QUESTION (EXTENDS type | SUPER type)?
+    ;
+
 typeArgs
-    : LT type (COMMA type)* GT
+    : LT typeArg (COMMA typeArg)* GT
     ;
 
 // ============================================================

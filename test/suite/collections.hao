@@ -24,7 +24,7 @@ class CKeyPerson {
 
 func collectionsTest() {
     // ---------- List<T> ----------
-    val list = new collections.List<Int>();
+    val list = new collections.ArrayList<Int>();
     list.add(10);
     list.add(20);
     list.add(30);
@@ -38,7 +38,7 @@ func collectionsTest() {
     fmt.println(list.get(0));      // 99
 
     // ---------- List 泛型方法 map/filter/forEach（R 从 lambda 推断）----------
-    val nums = new collections.List<Int>();
+    val nums = new collections.ArrayList<Int>();
     nums.add(1); nums.add(2); nums.add(3);
     val doubled = nums.map({ it * 2 });
     fmt.println(doubled.get(0));       // 2

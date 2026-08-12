@@ -21,7 +21,7 @@ func main() {
         var raw = t ?? "x";
         // trim 返回语言 String，再装箱才能 toUpperCase
         var s = String.valueOf(String.valueOf(raw).trim()).toUpperCase();
-        var junk = new List<Object>();
+        var junk = new ArrayList<Object>();
         var i = 0;
         while (i < 400) {
             junk.add(new Box(s + "-" + Integer.toStr(i)));

@@ -7,14 +7,14 @@ import collections.*;
 func main() {
     var round = 0;
     while (round < 8) {
-        var junk = new List<Object>();
+        var junk = new ArrayList<Object>();
         var i = 0;
         while (i < 4000) {
             junk.add(String.valueOf("r-" + Integer.toStr(i)));
             i += 1;
         }
         // 丢弃引用：短会话结束
-        junk = new List<Object>();
+        junk = new ArrayList<Object>();
         round += 1;
     }
     gc.GC.collect();

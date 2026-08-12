@@ -1,12 +1,22 @@
 // HaoLang 标准库 —— collections 包
 // ----------------------------------------------
-//  List<T>：基于动态数组的泛型列表（对标 Java ArrayList 语义）。
+//  List<T>：序列接口（对标 Java java.util.List）。
+//  ArrayList<T>：基于动态数组的实现（对标 Java ArrayList 语义）。
 //  底层复用语言内建 [T]（自动 2 倍扩容、GC 回收）。
 //  线程安全：否。随机访问 O(1)，中部删除 O(n)。
 //  不是：LinkedList（链表）；也不是不可变列表。
 package collections;
 
-class List<T> : Iterable<T> {
+interface List<T> : Iterable<T> {
+    func size(): Int;
+    func add(item: T);
+    func get(index: Int): T;
+    func set(index: Int, item: T);
+    func removeAt(index: Int): T;
+    func isEmpty(): Bool;
+}
+
+class ArrayList<T> : List<T> {
     var items: [T];
 
     // 构造空列表。
@@ -80,14 +90,14 @@ class List<T> : Iterable<T> {
         return this.items;
     }
 
-    // ---------- 函数式 API（v0.9.0 起为泛型方法）----------
+    // ---------- 函数式 API（v0.9.0 起为泛型方法；ArrayList 专有）----------
 
     // 把每个元素经 f 转换，返回新 List<R>。
     // @param f 映射函数；R 由 lambda 返回类型推断
     // @return 新列表，不修改 this
     // 复杂度：O(n)
     func map<R>(f: (T) -> R): List<R> {
-        val result = new List<R>();
+        val result = new ArrayList<R>();
         var i = 0;
         while (i < this.items.length) {
             result.add(f(this.items[i]));
@@ -101,7 +111,7 @@ class List<T> : Iterable<T> {
     // @return 新列表
     // 复杂度：O(n)
     func filter(f: (T) -> Bool): List<T> {
-        val result = new List<T>();
+        val result = new ArrayList<T>();
         var i = 0;
         while (i < this.items.length) {
             if (f(this.items[i])) {

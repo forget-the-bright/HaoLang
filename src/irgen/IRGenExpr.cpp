@@ -543,6 +543,51 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                 /* D10：实例字段复合薄 dbg.value */
                 emitDbgValueIf(fi->type->llvmType(), out.ir, fname, 0, 0);
                 return out;
+            } else if (recv.type->kind == TypeKind::Interface) {
+                if (recv.type->nullable) {
+                    error(pf, "不能对可空接口直接赋值属性，请使用 '!!'");
+                    return Value();
+                }
+                if (op != "=") {
+                    error(pf, "接口属性不支持复合赋值 '" + op + "'");
+                    return Value();
+                }
+                std::string fname = mem->IDENT()->getText();
+                std::string iname = recv.type->typeArgs.empty()
+                    ? recv.type->className
+                    : recv.type->monoName();
+                auto ii = lookupInterface(iname);
+                if (!ii) {
+                    error(pf, "未定义的接口 '" + iname + "'");
+                    return Value();
+                }
+                std::string sname = propSetterName(fname);
+                const MethodInfo* im = ii->findMethod(sname);
+                if (!im || im->propFieldName != fname) {
+                    error(pf, "接口 '" + iname + "' 没有可写属性 '" + fname + "'");
+                    return Value();
+                }
+                Value rhs = genAssign(e->assignExpr());
+                if (!rhs.valid()) return Value();
+                if (!isAssignable(rhs.type, im->paramTypes[0])) {
+                    error(e, "无法将 " + rhs.type->toString() + " 赋值给属性 '" +
+                             fname + "'（" + im->paramTypes[0]->toString() + "）");
+                    return Value();
+                }
+                rhs = coerce(rhs, im->paramTypes[0], 0, 0);
+                rootGcOperand(recv);
+                rootGcOperand(rhs);
+                std::string vtp = emitGep("ptr", recv.ir, "i64", "0");
+                std::string vt = emitLoad("ptr", vtp);
+                std::string mp = emitGep("ptr", vt, "i64",
+                                         std::to_string(im->vtableSlot));
+                std::string fp = emitLoad("ptr", mp);
+                pinRuntimeCallSite(pf);
+                std::string fnTy = "void (ptr, " + im->paramTypes[0]->llvmType() + ")";
+                emitCallTyped(fnTy, fp,
+                              "ptr " + recv.ir + ", " +
+                              im->paramTypes[0]->llvmType() + " " + rhs.ir);
+                return rhs;
             }
         }
     }
@@ -1255,6 +1300,29 @@ Value IRGen::genRelational(HaoLangParser::RelationalExprContext* e) {
         TypePtr target = resolveType(e->type());
         bool isIs = (e->IS() != nullptr);
 
+        // v0.59：原生 ↔ 包装 的 as/is（显式装箱/拆箱）
+        if (isPrimitiveToWrapper(obj.type, target) ||
+            isWrapperToPrimitive(obj.type, target)) {
+            if (isIs) {
+                diags_.warning(e->getStart()->getLine(),
+                               e->getStart()->getCharPositionInLine(),
+                               obj.type->toString() + " 与 " + target->toString() +
+                               " 为装箱对，is 恒为真");
+                return Value("1", Type::makeBool());
+            }
+            return coerce(obj, target,
+                          e->getStart()->getLine(),
+                          e->getStart()->getCharPositionInLine());
+        }
+        // 原生 as Object：装箱
+        if (!isIs && target->kind == TypeKind::Class &&
+            (target->className == "object$Object" || target->className == "Object") &&
+            !wrapperClassNameFor(obj.type->kind).empty()) {
+            return coerce(obj, target,
+                          e->getStart()->getLine(),
+                          e->getStart()->getCharPositionInLine());
+        }
+
         if (obj.type->kind != TypeKind::Class &&
             obj.type->kind != TypeKind::Interface) {
             error(e, std::string(isIs ? "is" : "as") +
@@ -1262,10 +1330,37 @@ Value IRGen::genRelational(HaoLangParser::RelationalExprContext* e) {
             return Value();
         }
         if (target->kind != TypeKind::Class && target->kind != TypeKind::Interface) {
+            // as Int 等：若源是包装已在上面处理；否则拒绝
             error(e, std::string(isIs ? "is" : "as") +
                      " 的目标必须是类或接口，实际为 " + target->toString());
             return Value();
         }
+
+        // 裸 / ? 目标：as 后静态类型擦成 Object 实参 mono，便于调方法
+        auto eraseRawTarget = [&](TypePtr t) -> TypePtr {
+            if (t->kind != TypeKind::Interface && t->kind != TypeKind::Class)
+                return t;
+            if (!(t->typeArgs.empty() || t->hasWildcardArg()))
+                return t;
+            // 查模板 arity
+            size_t n = 0;
+            if (t->kind == TypeKind::Interface) {
+                auto it = interfaces_.find(t->className);
+                if (it != interfaces_.end()) n = it->second->typeParams.size();
+            } else {
+                auto it = classes_.find(t->className);
+                if (it != classes_.end()) n = it->second->typeParams.size();
+            }
+            if (n == 0) return t;
+            std::vector<TypePtr> objs(n, Type::makeClass("object$Object"));
+            if (t->kind == TypeKind::Interface) {
+                auto erased = Type::makeInterface(t->className, objs);
+                ensureInterfaceInstances(erased);
+                return erased;
+            }
+            instantiateClass(t->className, objs, e);
+            return Type::makeClass(t->className, objs);
+        };
 
         // 编译期可判定的情形：目标是自身或父类型，判定恒为真
         if (isAssignable(obj.type, target)) {
@@ -1276,11 +1371,14 @@ Value IRGen::genRelational(HaoLangParser::RelationalExprContext* e) {
                                target->toString() + "，该 is 判定恒为真");
                 return Value("1", Type::makeBool());
             }
-            // as 向上转型：运行时无需任何操作
-            return Value(obj.ir, target);
+            // as 向上转型：运行时无需任何操作；裸/? 擦成 Object 实参
+            return Value(obj.ir, eraseRawTarget(target));
         }
 
-        auto it = typeIdLists_.find(target->className);
+        std::string tidKey = target->typeIdKey();
+        if (!typeIdLists_.count(tidKey))
+            ensureTypeIdList(target);
+        auto it = typeIdLists_.find(tidKey);
         if (it == typeIdLists_.end()) {
             // 目标类型没有任何可实例化的实现，判定恒为假
             if (isIs) {
@@ -1313,8 +1411,8 @@ Value IRGen::genRelational(HaoLangParser::RelationalExprContext* e) {
 
         em_.emitLabel(okL);
         blockTerminated_ = false;
-        // 转换成功后指针不变，只是静态类型改变
-        return Value(obj.ir, target);
+        // 转换成功后指针不变，只是静态类型改变（裸/? → Object 实参）
+        return Value(obj.ir, eraseRawTarget(target));
     }
 
     auto shifts = e->shiftExpr();
@@ -1730,8 +1828,37 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
     }
 
     if (base.type->kind == TypeKind::Interface) {
-        error(ctx, "不能通过接口访问字段 '" + field + "'（接口只有方法）");
-        return Value();
+        // 接口自动属性：.name → getName() 虚调用
+        std::string iname = base.type->typeArgs.empty()
+            ? base.type->className
+            : base.type->monoName();
+        auto ii = lookupInterface(iname);
+        if (!ii) {
+            error(ctx, "未定义的接口 '" + iname + "'");
+            return Value();
+        }
+        std::string gname = propGetterName(field);
+        const MethodInfo* im = ii->findMethod(gname);
+        if (!im || im->propFieldName != field) {
+            // 也允许显式 getName 当成员名（已有方法路径）；属性名须匹配
+            error(ctx, "不能通过接口访问字段 '" + field +
+                       "'（接口属性请声明 get，或改用方法调用）");
+            return Value();
+        }
+        if (base.ir.empty()) {
+            error(ctx, "静态上下文不能访问接口属性 '" + field + "'");
+            return Value();
+        }
+        Value baseR = base;
+        rootGcOperand(baseR);
+        std::string vtp = emitGep("ptr", baseR.ir, "i64", "0");
+        std::string vt = emitLoad("ptr", vtp);
+        std::string mp = emitGep("ptr", vt, "i64", std::to_string(im->vtableSlot));
+        std::string fp = emitLoad("ptr", mp);
+        pinRuntimeCallSite(ctx);
+        std::string fnTy = im->returnType->llvmType() + " (ptr)";
+        std::string reg = emitCall(fnTy, fp, "ptr " + baseR.ir);
+        return Value(reg, im->returnType);
     }
 
     error(ctx, base.type->toString() + " 类型没有成员 '" + field + "'");
@@ -1814,11 +1941,14 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
 
     // ===== 接口方法：经虚表动态分派 =====
     if (recvR.type->kind == TypeKind::Interface) {
-        // 泛型接口按实例名解析（Iterable<Int> -> Iterable$Int，槽位继承模板）
-        std::string iname = recvR.type->typeArgs.empty()
+        // 泛型接口按实例名解析；含 ? 时用模板名（不 mono）
+        std::string iname = (recvR.type->typeArgs.empty() ||
+                             recvR.type->hasWildcardArg())
             ? recvR.type->className
             : recvR.type->monoName();
         auto ii = lookupInterface(iname);
+        if (!ii && recvR.type->hasWildcardArg())
+            ii = lookupInterface(recvR.type->className);
         if (!ii) {
             error(ctx, "未定义的接口 '" + iname + "'");
             return Value();
@@ -1829,23 +1959,65 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
             return Value();
         }
 
+        // v0.59 PECS：? extends / 无界 ? 禁止写入型方法（add/set/put）
+        if (recvR.type->hasWildcardArg()) {
+            bool producerOnly = false;
+            for (const auto& a : recvR.type->typeArgs) {
+                if (a->kind == TypeKind::Wildcard &&
+                    (a->wildVar == WildcardVariance::Extends ||
+                     a->wildVar == WildcardVariance::Unbounded))
+                    producerOnly = true;
+            }
+            if (producerOnly &&
+                (method == "add" || method == "set" || method == "put")) {
+                error(ctx, "上界/无界通配类型不能调用写入方法 '" + method +
+                           "'（PECS：? extends / ? 只读）");
+                return Value();
+            }
+        }
+
+        // 通配捕获：把方法签名里的类型参数换成 bound / Object
+        auto captureTy = [&](const TypePtr& t) -> TypePtr {
+            if (!t || !recvR.type->hasWildcardArg() || ii->typeParams.empty())
+                return t;
+            if (t->kind == TypeKind::TypeParam) {
+                for (size_t i = 0; i < ii->typeParams.size() &&
+                                   i < recvR.type->typeArgs.size(); ++i) {
+                    if (ii->typeParams[i] != t->className) continue;
+                    const auto& wa = recvR.type->typeArgs[i];
+                    if (wa->kind != TypeKind::Wildcard)
+                        return wa;
+                    if (wa->wildVar == WildcardVariance::Extends && wa->elem)
+                        return wa->elem;
+                    // super / unbounded → Object（读侧）
+                    return Type::makeClass("object$Object");
+                }
+            }
+            return t;
+        };
+
+        std::vector<TypePtr> expectParams;
+        for (const auto& pt : im->paramTypes)
+            expectParams.push_back(captureTy(pt));
+        TypePtr expectRet = captureTy(im->returnType);
+
         std::vector<Value> args;
         std::vector<antlr4::tree::ParseTree*> argExprs;
         if (auto* al = call->argList())
             for (size_t k = 0; k < al->arg().size(); ++k) {
-                if (k < im->paramTypes.size())
-                    expectedTypes_.push_back(im->paramTypes[k]);
+                if (k < expectParams.size())
+                    expectedTypes_.push_back(expectParams[k]);
                 auto* aex = al->arg(k)->expr();
                 Value av = genExpr(aex);
-                if (k < im->paramTypes.size()) expectedTypes_.pop_back();
+                if (k < expectParams.size()) expectedTypes_.pop_back();
                 if (!av.valid()) return Value();
                 rootGcOperand(av);
                 args.push_back(av);
                 argExprs.push_back(aex);
             }
-        if (args.size() != im->paramTypes.size()) {
+        if (args.size() != expectParams.size()) {
             error(ctx, "接口方法 '" + ii->name + "." + method + "' 需要 " +
-                       std::to_string(im->paramTypes.size()) + " 个参数，实际提供 " +
+                       std::to_string(expectParams.size()) + " 个参数，实际提供 " +
                        std::to_string(args.size()) + " 个");
             return Value();
         }
@@ -1859,26 +2031,45 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
         std::string argStr = "ptr " + recvR.ir;
         std::string sigTypes = "ptr";
         for (size_t i = 0; i < args.size(); ++i) {
-            if (!isAssignable(args[i].type, im->paramTypes[i])) {
+            TypePtr want = expectParams[i];
+            // ? super L：写入期望 L（及子类）
+            if (recvR.type->hasWildcardArg() && i < recvR.type->typeArgs.size() &&
+                i < ii->typeParams.size() &&
+                im->paramTypes[i]->kind == TypeKind::TypeParam &&
+                im->paramTypes[i]->className == ii->typeParams[i]) {
+                const auto& wa = recvR.type->typeArgs[i];
+                if (wa->kind == TypeKind::Wildcard &&
+                    wa->wildVar == WildcardVariance::Super && wa->elem &&
+                    (method == "add" || method == "set" || method == "put")) {
+                    want = wa->elem;
+                }
+            }
+            if (!isAssignable(args[i].type, want)) {
                 error(ctx, "接口方法 '" + ii->name + "." + method + "' 第 " +
                            std::to_string(i + 1) + " 个参数类型不匹配：期望 " +
-                           im->paramTypes[i]->toString() +
+                           want->toString() +
                            "，实际 " + args[i].type->toString());
                 return Value();
             }
-            argStr  += ", " + formatCallArg(im->paramTypes[i], argExprs[i], args[i]);
-            sigTypes += ", " + im->paramTypes[i]->llvmType();
+            TypePtr passTy = im->paramTypes[i];
+            if (passTy->kind == TypeKind::TypeParam)
+                passTy = Type::makeClass("object$Object");
+            argStr  += ", " + formatCallArg(passTy, argExprs[i], args[i]);
+            sigTypes += ", " + passTy->llvmType();
         }
 
         pinRuntimeCallSite(ctx);
-        // 间接调用需显式写出函数类型
-        std::string fnTy = im->returnType->llvmType() + " (" + sigTypes + ")";
+        TypePtr retLl = expectRet ? expectRet : im->returnType;
+        if (retLl && retLl->kind == TypeKind::TypeParam)
+            retLl = Type::makeClass("object$Object");
+        std::string retTyStr = (retLl && !retLl->isUnit()) ? retLl->llvmType() : "void";
+        std::string fnTy = retTyStr + " (" + sigTypes + ")";
         if (im->returnType->isUnit()) {
             emitCallTyped(fnTy, fp, argStr);
             return Value("", Type::makeUnit());
         }
-        std::string reg = emitCall(fnTy, fp, argStr);
-        return Value(reg, im->returnType);
+        std::string reg = emitCall(retTyStr, fp, argStr);
+        return Value(reg, expectRet ? expectRet : im->returnType);
     }
 
     // ===== 类方法 =====

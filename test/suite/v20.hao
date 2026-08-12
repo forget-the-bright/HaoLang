@@ -112,7 +112,7 @@ func v20InvokeTest() {
 //  GC v2（stop-the-world + 线程注册表 + 扫所有线程栈）后，worker 可自由
 //  分配对象。每个线程各建一个大 List 并求和，结果写不同下标，验证无误回收。
 func v20Build(n: Int): Int {
-    val list = new collections.List<Int>();
+    val list = new collections.ArrayList<Int>();
     var i = 0;
     while (i < n) { list.add(i); i = i + 1; }
     var sum = 0;

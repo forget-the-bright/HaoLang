@@ -21,7 +21,7 @@ func main() {
         sink(new Box("a-" + Integer.toStr(round)),
              new Box("b-" + Integer.toStr(round)),
              new Box("c-" + Integer.toStr(round)));
-        var arr = new List<Object>();
+        var arr = new ArrayList<Object>();
         arr.add(keep);
         arr.add(new Box("x"));
         // 下标 + 拼接：base/左串跨右值

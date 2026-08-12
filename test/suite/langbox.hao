@@ -4,13 +4,19 @@
 package main;
 
 func langBoxTest() {
-    // Integer 装箱 / 拆箱
+    // Integer 装箱 / 拆箱（显式 + v0.59 隐式）
     val bi = Integer.valueOf(42);
     fmt.println(bi.intValue());
     fmt.println(bi.toString());
     fmt.println(bi.equals(Integer.valueOf(42)));
     fmt.println(bi.equals(Integer.valueOf(7)));
     fmt.println(Integer.toStr(99));
+    var wi: Integer = 42;
+    fmt.println(wi.intValue());
+    var rawFromBox: Int = wi;
+    fmt.println(rawFromBox);
+    var oBox: Object = 7;
+    fmt.println((oBox as Integer)!!.intValue());
 
     // Int? 可空装箱（编译器）与 parse
     val p = Integer.parse("100");

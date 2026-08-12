@@ -205,13 +205,24 @@ void hao_trace(const char* module, const char* fmt, ...);
 void hao_assert_fail(const char* expr, const char* file, int line);
 /* 统一 fatal：stderr + hao-crash.log + GC 只读快照后 exit(1) */
 void hao_report_fatal(const char* kind, const char* msg);
-/* L0b/P1：最近 .hao 源码位（TLS）+ 调用帧栈；panic/crash 打印 src=/stack= */
+/* L0b/P1：最近 .hao 源码位（TLS）+ 调用帧栈；panic/crash 打印 time=/where=/hao_stack= */
+#define HAO_DBG_ARG_I64  0
+#define HAO_DBG_ARG_PTR  1
+#define HAO_DBG_ARG_BOOL 2
+#define HAO_DBG_ARG_F64  3 /* IEEE bits in raw */
+#define HAO_DBG_ARG_MAX  4
 void hao_dbg_set_src_loc(const char* file, int32_t line, int32_t col);
 void hao_dbg_clear_src_loc(void);
-void hao_dbg_push_frame(const char* file, int32_t line, int32_t col);
+void hao_dbg_push_frame(const char* file, int32_t line, int32_t col, const char* func);
 void hao_dbg_pop_frame(void);
+void hao_dbg_clear_frame_args(void);
+void hao_dbg_add_frame_arg(const char* name, int32_t kind, int64_t raw);
+void hao_dbg_fprint_time(FILE* f);
+void hao_dbg_fprint_where(FILE* f);
 void hao_dbg_fprint_src_loc(FILE* f);
 void hao_dbg_fprint_stack(FILE* f);
+int32_t hao_time_offset(void);
+int64_t hao_time_now_ns(void);
 /* loc_smoke：稳定触发 AV，验证 crash log access=/用户 stack */
 void hao_debug_trap_av(void);
 /* loc_smoke / VERIFY：向本线程 shadow 压入非法非堆指针槽 */
@@ -300,6 +311,10 @@ void* hao_parse_float(HaoString* s);
 void* hao_parse_double(HaoString* s);
 /* P7c 自研浮点；禁 libc strto* 与 %g */
 int hao_fmt_double(double v, char* out, int cap);
+/* 手写十进制/指针（禁 Win64 未对齐栈进 snprintf） */
+int hao_fmt_i64_dec(char* out, int cap, int64_t v);
+int hao_fmt_u64_dec(char* out, int cap, uint64_t v);
+int hao_fmt_ptr_angle(char* out, int cap, const void* p);
 int hao_parse_double_cstr(const char* p, const char** endp, double* out);
 
 /* ============================================================

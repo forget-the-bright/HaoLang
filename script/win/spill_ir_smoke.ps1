@@ -23,7 +23,7 @@ func main() {
     var round = 0;
     while (round < 2) {
         {
-            var junk = new List<Object>();
+            var junk = new ArrayList<Object>();
             var i = 0;
             while (i < 1) {
                 junk.add(new Box("x"));
@@ -407,7 +407,7 @@ class Box {
     public constructor(s: String) { this.s = s; }
 }
 func main() {
-    var xs = new List<Object>()
+    var xs = new ArrayList<Object>()
     var i = 0
     while (i < 20) {
         xs.add(new Box(Integer.toStr(i)))
@@ -668,3 +668,4 @@ if ($fail -eq 0) {
 }
 Write-Host "spill_ir_smoke: $fail FAIL(s)"
 exit 1
+

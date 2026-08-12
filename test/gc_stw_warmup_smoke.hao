@@ -24,7 +24,7 @@ func main() {
     val warm = new Thread();
     warm.start({
         while (true) {
-            var junk = new List<Object>();
+            var junk = new ArrayList<Object>();
             var i = 0;
             while (i < 4000) {
                 junk.add(String.valueOf("warm-" + Integer.toStr(i)));

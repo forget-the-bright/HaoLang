@@ -326,7 +326,11 @@ void IRGen::genTry(HaoLangParser::TryStmtContext* st) {
             tryStack_.pop_back();
             return;
         }
-        auto it = typeIdLists_.find(ce.type->className);
+        auto it = typeIdLists_.find(ce.type->typeIdKey());
+        if (it == typeIdLists_.end()) {
+            ensureTypeIdList(ce.type);
+            it = typeIdLists_.find(ce.type->typeIdKey());
+        }
         if (it == typeIdLists_.end()) {
             // 没有任何可实例化类型满足，恒不匹配
             emitBr(nextL);

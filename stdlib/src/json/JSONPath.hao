@@ -23,7 +23,7 @@ class JSONPath {
     }
 
     static func extract(root: Object, path: String): List<Object> {
-        var cur = new List<Object>();
+        var cur: List<Object> = new ArrayList<Object>();
         cur.add(root);
         var i = 0;
         if (path.length > 0 && path[0] == 36) {
@@ -94,7 +94,7 @@ class JSONPath {
     }
 
     static func childKey(nodes: List<Object>, key: String): List<Object> {
-        var out = new List<Object>();
+        var out = new ArrayList<Object>();
         var i = 0;
         while (i < nodes.size()) {
             val n = nodes.get(i);
@@ -108,7 +108,7 @@ class JSONPath {
     }
 
     static func descendAll(nodes: List<Object>, key: String): List<Object> {
-        var out = new List<Object>();
+        var out = new ArrayList<Object>();
         var i = 0;
         while (i < nodes.size()) {
             JSONPath.collectKey(nodes.get(i), key, out);
@@ -122,9 +122,10 @@ class JSONPath {
             val obj = node as JSONObject;
             val v = obj.get(key);
             if (v != null) { out.add(v!!); }
+            val objKeys = obj.keys();
             var i = 0;
-            while (i < obj.keys.length) {
-                val child = obj.get(obj.keys[i]);
+            while (i < objKeys.length) {
+                val child = obj.get(objKeys[i]);
                 if (child != null) { JSONPath.collectKey(child!!, key, out); }
                 i += 1;
             }
@@ -153,12 +154,12 @@ class JSONPath {
         }
         // 下标
         val idx = Integer.parse(body);
-        if (idx == null) { return new List<Object>(); }
+        if (idx == null) { return new ArrayList<Object>(); }
         return JSONPath.indexNodes(nodes, idx!!);
     }
 
     static func expandWild(nodes: List<Object>): List<Object> {
-        var out = new List<Object>();
+        var out = new ArrayList<Object>();
         var i = 0;
         while (i < nodes.size()) {
             val n = nodes.get(i);
@@ -171,9 +172,10 @@ class JSONPath {
                 }
             } else if (n is JSONObject) {
                 val obj = n as JSONObject;
+                val objKeys = obj.keys();
                 var k = 0;
-                while (k < obj.keys.length) {
-                    val v = obj.get(obj.keys[k]);
+                while (k < objKeys.length) {
+                    val v = obj.get(objKeys[k]);
                     if (v != null) { out.add(v!!); }
                     k += 1;
                 }
@@ -184,7 +186,7 @@ class JSONPath {
     }
 
     static func indexNodes(nodes: List<Object>, idx: Int): List<Object> {
-        var out = new List<Object>();
+        var out = new ArrayList<Object>();
         var i = 0;
         while (i < nodes.size()) {
             val n = nodes.get(i);
@@ -212,7 +214,7 @@ class JSONPath {
             val p = Integer.parse(b);
             if (p != null) { endv = p!!; }
         }
-        var out = new List<Object>();
+        var out = new ArrayList<Object>();
         var i = 0;
         while (i < nodes.size()) {
             val n = nodes.get(i);
@@ -231,7 +233,7 @@ class JSONPath {
 
     // 形式：?(@.name=~/pattern/)
     static func filterRegex(nodes: List<Object>, body: String): List<Object> {
-        var out = new List<Object>();
+        var out = new ArrayList<Object>();
         // 找 @.key=~/pat/
         val s = body;
         val at = String.valueOf(s).indexOf("@.");
@@ -251,7 +253,7 @@ class JSONPath {
         var i = 0;
         while (i < nodes.size()) {
             val n = nodes.get(i);
-            var candidates = new List<Object>();
+            var candidates = new ArrayList<Object>();
             if (n is JSONArray) {
                 val arr = n as JSONArray;
                 var j = 0;

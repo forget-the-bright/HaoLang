@@ -20,44 +20,45 @@ public:
     RETURN = 30, BREAK = 31, CONTINUE = 32, TRY = 33, CATCH = 34, FINALLY = 35, 
     THROW = 36, HAOROUTINE = 37, SELECT = 38, CASE = 39, DEFAULT = 40, THIS = 41, 
     SUPER = 42, IS = 43, AS = 44, TRUE = 45, FALSE = 46, NULL_LIT = 47, 
-    QQ_ASSIGN = 48, QQ = 49, ARROW = 50, PLUS_ASSIGN = 51, MINUS_ASSIGN = 52, 
-    STAR_ASSIGN = 53, SLASH_ASSIGN = 54, PCT_ASSIGN = 55, AMP_ASSIGN = 56, 
-    PIPE_ASSIGN = 57, CARET_ASSIGN = 58, LSHIFT_ASSIGN = 59, RSHIFT_ASSIGN = 60, 
-    INCR = 61, DECR = 62, EQ = 63, NEQ = 64, LE = 65, GE = 66, LSHIFT = 67, 
-    AND_AND = 68, OR_OR = 69, ASSIGN = 70, PLUS = 71, MINUS = 72, STAR = 73, 
-    SLASH = 74, PCT = 75, BANG = 76, TILDE = 77, AMP = 78, PIPE = 79, CARET = 80, 
-    LT = 81, GT = 82, QUESTION = 83, COLON = 84, SEMI = 85, COMMA = 86, 
-    ELLIPSIS = 87, DOT = 88, VERBATIM_TEMPLATE_START = 89, VERBATIM_STRING = 90, 
-    AT = 91, LPAREN = 92, RPAREN = 93, LBRACK = 94, RBRACK = 95, LBRACE = 96, 
-    RBRACE = 97, TEMPLATE_START = 98, STRING_LIT = 99, CHAR_LIT = 100, FLOAT_LIT = 101, 
-    INT_LIT = 102, IDENT = 103, LINE_COMMENT = 104, BLOCK_COMMENT = 105, 
-    WS = 106, UNKNOWN_CHAR = 107, TEMPLATE_END = 108, TEMPLATE_INTERP_START = 109, 
-    TEMPLATE_TEXT = 110
+    WHERE = 48, QQ_ASSIGN = 49, QQ = 50, ARROW = 51, PLUS_ASSIGN = 52, MINUS_ASSIGN = 53, 
+    STAR_ASSIGN = 54, SLASH_ASSIGN = 55, PCT_ASSIGN = 56, AMP_ASSIGN = 57, 
+    PIPE_ASSIGN = 58, CARET_ASSIGN = 59, LSHIFT_ASSIGN = 60, RSHIFT_ASSIGN = 61, 
+    INCR = 62, DECR = 63, EQ = 64, NEQ = 65, LE = 66, GE = 67, LSHIFT = 68, 
+    AND_AND = 69, OR_OR = 70, ASSIGN = 71, PLUS = 72, MINUS = 73, STAR = 74, 
+    SLASH = 75, PCT = 76, BANG = 77, TILDE = 78, AMP = 79, PIPE = 80, CARET = 81, 
+    LT = 82, GT = 83, QUESTION = 84, COLON = 85, SEMI = 86, COMMA = 87, 
+    ELLIPSIS = 88, DOT = 89, VERBATIM_TEMPLATE_START = 90, VERBATIM_STRING = 91, 
+    AT = 92, LPAREN = 93, RPAREN = 94, LBRACK = 95, RBRACK = 96, LBRACE = 97, 
+    RBRACE = 98, TEMPLATE_START = 99, STRING_LIT = 100, CHAR_LIT = 101, 
+    FLOAT_LIT = 102, INT_LIT = 103, IDENT = 104, LINE_COMMENT = 105, BLOCK_COMMENT = 106, 
+    WS = 107, UNKNOWN_CHAR = 108, TEMPLATE_END = 109, TEMPLATE_INTERP_START = 110, 
+    TEMPLATE_TEXT = 111
   };
 
   enum {
     RuleCompilationUnit = 0, RulePackageDecl = 1, RuleImportDecl = 2, RuleQualifiedName = 3, 
     RuleTopLevelDecl = 4, RuleDelegateDecl = 5, RuleEnumDecl = 6, RuleEnumConstant = 7, 
     RuleFuncDecl = 8, RuleLinkDecl = 9, RuleReturnType = 10, RuleParamList = 11, 
-    RuleParam = 12, RuleTypeParams = 13, RuleModifier = 14, RuleClassDecl = 15, 
-    RuleClassBase = 16, RuleInterfaceDecl = 17, RuleTypeList = 18, RuleClassMember = 19, 
-    RuleStaticCtorDecl = 20, RuleInterfaceMember = 21, RuleConstructorDecl = 22, 
-    RulePropertyDecl = 23, RuleAccessor = 24, RuleFieldDecl = 25, RuleAnnotationUse = 26, 
-    RuleAnnotationArgs = 27, RuleAnnotationArg = 28, RuleAnnotationDecl = 29, 
-    RuleAnnotationMember = 30, RuleType = 31, RuleBaseType = 32, RuleTypeArgs = 33, 
-    RuleBlock = 34, RuleStatement = 35, RuleHaoroutineStmt = 36, RuleSelectStmt = 37, 
-    RuleSelectCase = 38, RuleSelectComm = 39, RuleVarDecl = 40, RuleIfStmt = 41, 
-    RuleWhileStmt = 42, RuleForStmt = 43, RuleWhenStmt = 44, RuleWhenBranch = 45, 
-    RuleReturnStmt = 46, RuleBreakStmt = 47, RuleContinueStmt = 48, RuleTryStmt = 49, 
-    RuleCatchClause = 50, RuleFinallyClause = 51, RuleThrowStmt = 52, RuleExprStmt = 53, 
-    RuleExprList = 54, RuleExpr = 55, RuleAssignExpr = 56, RuleAssignOp = 57, 
-    RuleTernaryExpr = 58, RuleNullCoalesceExpr = 59, RuleOrExpr = 60, RuleAndExpr = 61, 
-    RuleBitOrExpr = 62, RuleBitXorExpr = 63, RuleBitAndExpr = 64, RuleEqualityExpr = 65, 
-    RuleRelationalExpr = 66, RuleShiftExpr = 67, RuleAdditiveExpr = 68, 
-    RuleMultiplicativeExpr = 69, RuleUnaryExpr = 70, RulePostfixExpr = 71, 
-    RulePostfixOp = 72, RuleArgList = 73, RuleArg = 74, RulePrimary = 75, 
-    RuleLambda = 76, RuleLambdaParams = 77, RuleArrayLiteral = 78, RuleArrayElementList = 79, 
-    RuleArrayElement = 80, RuleLiteral = 81, RuleTemplateString = 82, RuleTemplatePart = 83
+    RuleParam = 12, RuleTypeParams = 13, RuleWhereClause = 14, RuleWhereBinding = 15, 
+    RuleModifier = 16, RuleClassDecl = 17, RuleClassBase = 18, RuleInterfaceDecl = 19, 
+    RuleTypeList = 20, RuleClassMember = 21, RuleStaticCtorDecl = 22, RuleInterfaceMember = 23, 
+    RuleConstructorDecl = 24, RulePropertyDecl = 25, RuleAccessor = 26, 
+    RuleFieldDecl = 27, RuleAnnotationUse = 28, RuleAnnotationArgs = 29, 
+    RuleAnnotationArg = 30, RuleAnnotationDecl = 31, RuleAnnotationMember = 32, 
+    RuleType = 33, RuleBaseType = 34, RuleTypeArg = 35, RuleTypeArgs = 36, 
+    RuleBlock = 37, RuleStatement = 38, RuleHaoroutineStmt = 39, RuleSelectStmt = 40, 
+    RuleSelectCase = 41, RuleSelectComm = 42, RuleVarDecl = 43, RuleIfStmt = 44, 
+    RuleWhileStmt = 45, RuleForStmt = 46, RuleWhenStmt = 47, RuleWhenBranch = 48, 
+    RuleReturnStmt = 49, RuleBreakStmt = 50, RuleContinueStmt = 51, RuleTryStmt = 52, 
+    RuleCatchClause = 53, RuleFinallyClause = 54, RuleThrowStmt = 55, RuleExprStmt = 56, 
+    RuleExprList = 57, RuleExpr = 58, RuleAssignExpr = 59, RuleAssignOp = 60, 
+    RuleTernaryExpr = 61, RuleNullCoalesceExpr = 62, RuleOrExpr = 63, RuleAndExpr = 64, 
+    RuleBitOrExpr = 65, RuleBitXorExpr = 66, RuleBitAndExpr = 67, RuleEqualityExpr = 68, 
+    RuleRelationalExpr = 69, RuleShiftExpr = 70, RuleAdditiveExpr = 71, 
+    RuleMultiplicativeExpr = 72, RuleUnaryExpr = 73, RulePostfixExpr = 74, 
+    RulePostfixOp = 75, RuleArgList = 76, RuleArg = 77, RulePrimary = 78, 
+    RuleLambda = 79, RuleLambdaParams = 80, RuleArrayLiteral = 81, RuleArrayElementList = 82, 
+    RuleArrayElement = 83, RuleLiteral = 84, RuleTemplateString = 85, RuleTemplatePart = 86
   };
 
   explicit HaoLangParser(antlr4::TokenStream *input);
@@ -91,6 +92,8 @@ public:
   class ParamListContext;
   class ParamContext;
   class TypeParamsContext;
+  class WhereClauseContext;
+  class WhereBindingContext;
   class ModifierContext;
   class ClassDeclContext;
   class ClassBaseContext;
@@ -110,6 +113,7 @@ public:
   class AnnotationMemberContext;
   class TypeContext;
   class BaseTypeContext;
+  class TypeArgContext;
   class TypeArgsContext;
   class BlockContext;
   class StatementContext;
@@ -317,6 +321,7 @@ public:
     TypeParamsContext *typeParams();
     ParamListContext *paramList();
     ReturnTypeContext *returnType();
+    WhereClauseContext *whereClause();
     antlr4::tree::TerminalNode *ASSIGN();
     antlr4::tree::TerminalNode *STRING_LIT();
     LinkDeclContext *linkDecl();
@@ -413,6 +418,38 @@ public:
 
   TypeParamsContext* typeParams();
 
+  class  WhereClauseContext : public antlr4::ParserRuleContext {
+  public:
+    WhereClauseContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    antlr4::tree::TerminalNode *WHERE();
+    std::vector<WhereBindingContext *> whereBinding();
+    WhereBindingContext* whereBinding(size_t i);
+    std::vector<antlr4::tree::TerminalNode *> COMMA();
+    antlr4::tree::TerminalNode* COMMA(size_t i);
+
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  WhereClauseContext* whereClause();
+
+  class  WhereBindingContext : public antlr4::ParserRuleContext {
+  public:
+    WhereBindingContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    antlr4::tree::TerminalNode *IDENT();
+    antlr4::tree::TerminalNode *COLON();
+    TypeContext *type();
+
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  WhereBindingContext* whereBinding();
+
   class  ModifierContext : public antlr4::ParserRuleContext {
   public:
     ModifierContext(antlr4::ParserRuleContext *parent, size_t invokingState);
@@ -449,6 +486,7 @@ public:
     ModifierContext* modifier(size_t i);
     TypeParamsContext *typeParams();
     ClassBaseContext *classBase();
+    WhereClauseContext *whereClause();
     std::vector<ClassMemberContext *> classMember();
     ClassMemberContext* classMember(size_t i);
 
@@ -519,6 +557,7 @@ public:
     TypeParamsContext *typeParams();
     antlr4::tree::TerminalNode *COLON();
     TypeListContext *typeList();
+    WhereClauseContext *whereClause();
     std::vector<InterfaceMemberContext *> interfaceMember();
     InterfaceMemberContext* interfaceMember(size_t i);
 
@@ -594,6 +633,7 @@ public:
     TypeParamsContext *typeParams();
     ParamListContext *paramList();
     ReturnTypeContext *returnType();
+    WhereClauseContext *whereClause();
     antlr4::tree::TerminalNode *SEMI();
     PropertyDeclContext *propertyDecl();
 
@@ -837,13 +877,29 @@ public:
 
   BaseTypeContext* baseType();
 
+  class  TypeArgContext : public antlr4::ParserRuleContext {
+  public:
+    TypeArgContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    TypeContext *type();
+    antlr4::tree::TerminalNode *QUESTION();
+    antlr4::tree::TerminalNode *EXTENDS();
+    antlr4::tree::TerminalNode *SUPER();
+
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  TypeArgContext* typeArg();
+
   class  TypeArgsContext : public antlr4::ParserRuleContext {
   public:
     TypeArgsContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
     antlr4::tree::TerminalNode *LT();
-    std::vector<TypeContext *> type();
-    TypeContext* type(size_t i);
+    std::vector<TypeArgContext *> typeArg();
+    TypeArgContext* typeArg(size_t i);
     antlr4::tree::TerminalNode *GT();
     std::vector<antlr4::tree::TerminalNode *> COMMA();
     antlr4::tree::TerminalNode* COMMA(size_t i);

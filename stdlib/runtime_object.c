@@ -43,9 +43,60 @@ int8_t hao_object_equals(void* a, void* b) {
     return a == b;
 }
 
+int hao_fmt_u64_dec(char* out, int cap, uint64_t u) {
+    char tmp[24];
+    int n = 0, len = 0;
+    if (!out || cap <= 0) return 0;
+    do {
+        tmp[n++] = (char)('0' + (u % 10));
+        u /= 10;
+    } while (u && n < (int)sizeof(tmp));
+    if (n >= cap) n = cap - 1;
+    for (int i = 0; i < n; ++i) out[len++] = tmp[n - 1 - i];
+    out[len] = '\0';
+    return len;
+}
+
+int hao_fmt_i64_dec(char* out, int cap, int64_t v) {
+    uint64_t u;
+    int len = 0;
+    if (!out || cap <= 0) return 0;
+    if (v < 0) {
+        if (cap < 2) { out[0] = '\0'; return 0; }
+        out[len++] = '-';
+        u = (uint64_t)(-(v + 1)) + 1ull;
+    } else {
+        u = (uint64_t)v;
+    }
+    return len + hao_fmt_u64_dec(out + len, cap - len, u);
+}
+
+int hao_fmt_ptr_angle(char* out, int cap, const void* p) {
+    static const char* hex = "0123456789abcdef";
+    uint64_t u = (uint64_t)(uintptr_t)p;
+    char tmp[16];
+    int n = 0, len = 0, i;
+    if (!out || cap < 5) {
+        if (out && cap > 0) out[0] = '\0';
+        return 0;
+    }
+    out[len++] = '<';
+    out[len++] = '0';
+    out[len++] = 'x';
+    do {
+        tmp[n++] = hex[u & 0xf];
+        u >>= 4;
+    } while (u && n < 16);
+    while (n < 16) tmp[n++] = '0'; /* 固定 16 位宽，对齐旧 snprintf %016llx */
+    if (len + n + 2 >= cap) n = cap - len - 2;
+    for (i = 0; i < n; ++i) out[len++] = tmp[n - 1 - i];
+    out[len++] = '>';
+    out[len] = '\0';
+    return len;
+}
+
 HaoString* hao_object_toString(void* obj) {
     char buf[32];
-    int n = snprintf(buf, sizeof buf, "<0x%016llx>",
-                     (unsigned long long)(uintptr_t)obj);
+    int n = hao_fmt_ptr_angle(buf, (int)sizeof buf, obj);
     return hao_str_from_bytes(buf, n);
 }

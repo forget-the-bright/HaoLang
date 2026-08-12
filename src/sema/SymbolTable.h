@@ -29,12 +29,21 @@ struct AnnotationUse {
     std::vector<std::pair<std::string, std::string>> args;  // {键, 值字符串}
 };
 
+// 泛型约束：where T : Bound（Bound 为类或接口）
+struct TypeParamConstraint {
+    std::string paramName;
+    TypePtr bound;   // Class 或 Interface（可含尚未替换的其它类型参数）
+};
+
 // 类的字段
 struct FieldInfo {
     std::string name;
     TypePtr type;
     int slot = 0;        // 在对象中的槽位下标（每槽 8 字节）
     bool isMutable = true;
+
+    // 自动属性降级的字段（{ get; set; }）
+    bool isAutoProperty = false;
 
     // 是否静态字段（类级全局变量，不占对象布局槽位）
     bool isStatic = false;
@@ -73,6 +82,15 @@ struct MethodInfo {
 
     // 抽象方法：接口方法，或抽象类中无实现体的方法
     bool isAbstract = false;
+
+    // 接口默认方法体（interfaceMember 的 block；非接口则为 null）
+    void* defaultBody = nullptr;
+    // 默认方法所属接口名（冲突检测 / 代码生成）
+    std::string defaultOwner;
+
+    // 自动属性合成的 getX/setX（无 AST，由 genSyntheticPropMethods 发射）
+    bool isSyntheticProp = false;
+    std::string propFieldName;   //  backing 字段名
 
     // 是否静态方法（无隐式 this，ClassName.f() 直接静态调用）
     bool isStatic = false;
@@ -118,10 +136,14 @@ struct InterfaceInfo {
     // 方法按声明顺序排列，下标即虚表槽位
     std::vector<MethodInfo> methods;
 
+    // 直接父接口（内部名）；接口继承接口（v0.58.0）
+    std::vector<std::string> baseInterfaces;
+
     // ---- 泛型接口（v0.18.0）----
     //  与泛型类同路线：typeParams 非空 => 本条目是泛型接口模板，不参与运行时；
     //  接口实例（Iterable$Int）是模板副本 + substType 替换，instanceOf 指向模板名。
     std::vector<std::string> typeParams;
+    std::vector<TypeParamConstraint> constraints;
     // 模板的语法树节点（void* 以避免头文件依赖 ANTLR 类型），实例化时从中取方法
     void* declNode = nullptr;
     std::string instanceOf;
@@ -157,6 +179,7 @@ struct ClassInfo {
     //
     //  typeParams 非空 => 本条目是泛型模板，不参与代码生成
     std::vector<std::string> typeParams;
+    std::vector<TypeParamConstraint> constraints;
     // 模板的语法树节点（void* 以避免头文件依赖 ANTLR 类型），
     // 实例化时重新遍历它并施加类型替换
     void* declNode = nullptr;

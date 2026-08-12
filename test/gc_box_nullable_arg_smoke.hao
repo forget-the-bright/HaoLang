@@ -13,7 +13,7 @@ func main() {
     while (round < 50) {
         // 三个字面量各自 hao_box；后一个 box 可 safepoint 杀掉前一个
         sink(round, round + 1, round + 2);
-        var junk = new List<Object>();
+        var junk = new ArrayList<Object>();
         var i = 0;
         while (i < 300) {
             junk.add(Integer.valueOf(i));

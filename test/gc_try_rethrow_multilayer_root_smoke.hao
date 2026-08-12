@@ -48,7 +48,7 @@ func main() {
 
     // 3) for × break × finally（补 U4 continue / U6a while-break）
     var keep = new Box("keep");
-    var xs = new List<Object>();
+    var xs = new ArrayList<Object>();
     xs.add(new Box("a"));
     xs.add(new Box("b"));
     xs.add(new Box("c"));

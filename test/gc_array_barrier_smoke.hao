@@ -5,21 +5,21 @@ import gc;
 import collections.*;
 
 func main() {
-    var a = new List<Object>();
+    var a = new ArrayList<Object>();
     var i = 0;
     while (i < 2048) {
         a.add(String.valueOf("x" + Integer.toStr(i)));
         i += 1;
     }
     // 丢掉唯一强引用；触发回收后堆不应因扩容漏标而崩，且应能完成 collect
-    a = new List<Object>();
+    a = new ArrayList<Object>();
     gc.GC.collect();
     var j = 0;
     while (j < 512) {
         a.add(String.valueOf("y" + Integer.toStr(j)));
         j += 1;
     }
-    a = new List<Object>();
+    a = new ArrayList<Object>();
     gc.GC.collect();
     fmt.println(gc.GC.collectCount() >= 2);
     fmt.println(gc.GC.stwMarkAllFallbacks() == 0);

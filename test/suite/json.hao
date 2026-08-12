@@ -75,7 +75,7 @@ func jsonTest() {
     fmt.println(String.valueOf(mj).indexOf("\"a\":1") >= 0);              // true
     fmt.println(String.valueOf(mj).indexOf("\"b\":\"x\"") >= 0);          // true
 
-    val lst = new collections.List<Object>();
+    val lst = new collections.ArrayList<Object>();
     lst.add(Integer.valueOf(9));
     lst.add(String.valueOf("z"));
     val lj = json.JSON.toJSONString(lst);

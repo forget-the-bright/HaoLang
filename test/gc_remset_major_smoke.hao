@@ -7,14 +7,14 @@ import collections.*;
 import thread.*;
 
 func burnRound(n: Int) {
-    var junk = new List<Object>();
+    var junk = new ArrayList<Object>();
     var i = 0;
     while (i < n) {
         junk.add(String.valueOf("rs-" + Integer.toStr(i)));
         i += 1;
     }
     // 丢掉根：下一轮 / collect 后应不可达
-    junk = new List<Object>();
+    junk = new ArrayList<Object>();
 }
 
 func main() {

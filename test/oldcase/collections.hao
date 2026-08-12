@@ -4,7 +4,7 @@ import collections;
 
 func main() {
     // List<T> 来自标准库 collections 包
-    val list = new collections.List<Int>();
+    val list = new collections.ArrayList<Int>();
     list.add(10);
     list.add(20);
     list.add(30);
@@ -28,7 +28,7 @@ func main() {
     fmt.println(sum);             // 99 + 30 = 129
 
     // 字符串列表
-    val names = new collections.List<String>();
+    val names = new collections.ArrayList<String>();
     names.add("甲");
     names.add("乙");
     fmt.println(names.size());    // 2

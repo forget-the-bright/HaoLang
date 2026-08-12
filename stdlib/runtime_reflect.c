@@ -388,23 +388,23 @@ HaoString* hao_reflect_field_get(HaoNativeHandle* h, void* obj, HaoString* fname
     t = f->typeStr;
     /* 非空标量按值读；String/String? 按指针；T? 数值勿走此路（槽内是指针） */
     if (t && strcmp(t, "Int") == 0) {
-        snprintf(buf, sizeof buf, "%d", (int)(*(int32_t*)base));
+        hao_fmt_i64_dec(buf, (int)sizeof buf, (int64_t)(*(int32_t*)base));
     } else if (t && strcmp(t, "Long") == 0) {
-        snprintf(buf, sizeof buf, "%lld", (long long)(*(int64_t*)base));
+        hao_fmt_i64_dec(buf, (int)sizeof buf, *(int64_t*)base);
     } else if (t && strcmp(t, "UInt") == 0) {
-        snprintf(buf, sizeof buf, "%u", (unsigned)(*(uint32_t*)base));
+        hao_fmt_u64_dec(buf, (int)sizeof buf, (uint64_t)(*(uint32_t*)base));
     } else if (t && strcmp(t, "ULong") == 0) {
-        snprintf(buf, sizeof buf, "%llu", (unsigned long long)(*(uint64_t*)base));
+        hao_fmt_u64_dec(buf, (int)sizeof buf, *(uint64_t*)base);
     } else if (t && strcmp(t, "UIntPtr") == 0) {
-        snprintf(buf, sizeof buf, "%llu", (unsigned long long)(*(uint64_t*)base));
+        hao_fmt_u64_dec(buf, (int)sizeof buf, *(uint64_t*)base);
     } else if (t && strcmp(t, "Short") == 0) {
-        snprintf(buf, sizeof buf, "%d", (int)(*(int16_t*)base));
+        hao_fmt_i64_dec(buf, (int)sizeof buf, (int64_t)(*(int16_t*)base));
     } else if (t && strcmp(t, "UShort") == 0) {
-        snprintf(buf, sizeof buf, "%u", (unsigned)(*(uint16_t*)base));
+        hao_fmt_u64_dec(buf, (int)sizeof buf, (uint64_t)(*(uint16_t*)base));
     } else if (t && strcmp(t, "Byte") == 0) {
-        snprintf(buf, sizeof buf, "%u", (unsigned)(*(uint8_t*)base));
+        hao_fmt_u64_dec(buf, (int)sizeof buf, (uint64_t)(*(uint8_t*)base));
     } else if (t && strcmp(t, "SByte") == 0) {
-        snprintf(buf, sizeof buf, "%d", (int)(*(int8_t*)base));
+        hao_fmt_i64_dec(buf, (int)sizeof buf, (int64_t)(*(int8_t*)base));
     } else if (t && strcmp(t, "Float") == 0) {
         hao_fmt_double((double)(*(float*)base), buf, (int)sizeof buf);
     } else if (t && strcmp(t, "Double") == 0) {
@@ -412,7 +412,7 @@ HaoString* hao_reflect_field_get(HaoNativeHandle* h, void* obj, HaoString* fname
     } else if (t && strcmp(t, "Bool") == 0) {
         strcpy(buf, (*(int8_t*)base) ? "true" : "false");
     } else if (t && strcmp(t, "Char") == 0) {
-        snprintf(buf, sizeof buf, "%d", (int)(*(int32_t*)base));
+        hao_fmt_i64_dec(buf, (int)sizeof buf, (int64_t)(*(int32_t*)base));
     } else if (type_is_base(t, "String")) {
         HaoString* s = *(HaoString**)base;
         if (s && !hao_gc_expect_heap_ptr(s)) {
@@ -426,8 +426,7 @@ HaoString* hao_reflect_field_get(HaoNativeHandle* h, void* obj, HaoString* fname
         hao_gc_remove_root(obj);
         return s;
     } else {
-        snprintf(buf, sizeof buf, "<0x%016llx>",
-                 (unsigned long long)(uintptr_t)(*(void**)base));
+        hao_fmt_ptr_angle(buf, (int)sizeof buf, *(void**)base);
     }
     {
         HaoString* r = hao_str_from_cstr(buf);

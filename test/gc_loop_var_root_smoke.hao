@@ -8,7 +8,7 @@ import collections.*;
 func main() {
     var round = 0;
     while (round < 40) {
-        var junk = new List<Object>();
+        var junk = new ArrayList<Object>();
         var i = 0;
         while (i < 2000) {
             junk.add(String.valueOf("lv-" + Integer.toStr(i)));

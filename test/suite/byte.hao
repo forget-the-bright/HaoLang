@@ -57,7 +57,7 @@ func byteTest() {
     fmt.println(ints[1]);        // 2
 
     // ---------- List<Byte> 冒烟 ----------
-    val list = new collections.List<Byte>();
+    val list = new collections.ArrayList<Byte>();
     list.add(1);
     list.add(255);
     fmt.println(list.size());    // 2

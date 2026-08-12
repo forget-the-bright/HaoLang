@@ -126,14 +126,17 @@ private:
         SourceLoc loc = locFrom(ctx);
         ops_.setDebugLoc(loc);
         em_.beginDebugSubprogram(name, loc.line);
-        emitRuntimePushFrame(loc);
+        emitRuntimePushFrame(loc, name);
     }
     // L0b/P1：TLS 源码位；函数帧 push/pop（与 -g 解耦）
     void emitRuntimeSrcLoc(const SourceLoc& loc);
     /* 调用/方法分派前钉 TLS src= 到调用点（禁漂到 callee/native） */
     void pinRuntimeCallSite(antlr4::ParserRuleContext* ctx);
-    void emitRuntimePushFrame(const SourceLoc& loc);
+    void emitRuntimePushFrame(const SourceLoc& loc, const std::string& funcName);
     void emitRuntimePopFrame();
+    void emitRuntimeFrameArgs(bool hasThis,
+                              const std::vector<std::string>& paramNames,
+                              const std::vector<TypePtr>& paramTypes);
 
     // 顶层声明是否带 private 修饰（mods 来自 *DeclContext::modifier()）
     static bool declIsPrivate(const std::vector<HaoLangParser::ModifierContext*>& mods);
@@ -147,6 +150,7 @@ private:
         std::string name;
         std::string pkgPrefix;       // 模板所属包前缀（main 为 ""）
         std::vector<std::string> typeParams;
+        std::vector<TypeParamConstraint> constraints;
         HaoLangParser::FuncDeclContext* decl = nullptr;
     };
     std::map<std::string, GenericFn> genericFns_;   // 模板名 -> 模板
@@ -185,6 +189,7 @@ private:
         std::string methodName;
         std::string pkgPrefix;          // 声明类所属包前缀
         std::vector<std::string> typeParams;   // 方法级类型参数（如 R）
+        std::vector<TypeParamConstraint> constraints;
         HaoLangParser::FuncDeclContext* decl = nullptr;
     };
     std::map<std::string, GenericMethod> genericMethods_;   // key = className + "." + methodName
@@ -225,6 +230,28 @@ private:
     void emitVTables();
     // 为 is / as 生成「类型及其所有子类的虚表列表」
     void emitTypeIdLists();
+    // is/as/catch 时按需补发 typeids（mono 可能在 codegen 中途才实例化）
+    bool ensureTypeIdList(const TypePtr& target);
+    // 接口继承展平 + 默认方法冲突检测（collectInterfaceMembers 之后）
+    void resolveInterfaceInheritance();
+    // 发射接口默认方法实现（@Iface.m.default）
+    void genInterfaceDefaultMethods();
+    // where 约束：解析 + 实例化时校验
+    std::vector<TypeParamConstraint> parseWhereClause(
+        HaoLangParser::WhereClauseContext* wc);
+    void checkTypeConstraints(const std::vector<TypeParamConstraint>& cs,
+                              const TypeSubst& subst,
+                              antlr4::ParserRuleContext* useSite);
+    // 自动属性：JavaBeans getX/setX 名
+    static std::string propGetterName(const std::string& prop);
+    static std::string propSetterName(const std::string& prop);
+    // 收集类/接口自动属性（字段 + 合成访问器；接口仅抽象访问器）
+    bool collectClassAutoProperty(HaoLangParser::PropertyDeclContext* pd,
+                                  const ClassInfoPtr& ci, int& slot);
+    bool collectInterfaceAutoProperty(HaoLangParser::PropertyDeclContext* pd,
+                                      const InterfaceInfoPtr& ii);
+    // 发射合成 get/set 方法体
+    void genSyntheticPropMethods(const ClassInfoPtr& ci);
     void genFunction(HaoLangParser::FuncDeclContext* fn);
     // 泛型实例化版本：用显式符号生成
     void genFunction(HaoLangParser::FuncDeclContext* fn,
@@ -542,6 +569,17 @@ private:
     // 赋值兼容性判断。相比 Type::assignableTo 额外处理
     // 「类 -> 它实现的接口」这一情形（需查符号表，故不能放在 Type 里）。
     bool isAssignable(const TypePtr& from, const TypePtr& to);
+
+    // v0.59：Java 风格原生↔包装装箱对（Int↔Integer 等）；"" = 非包装
+    static std::string wrapperClassNameFor(TypeKind prim);
+    static TypeKind primitiveKindForWrapper(const std::string& className);
+    static const char* unboxMethodName(TypeKind prim);
+    bool isPrimitiveToWrapper(const TypePtr& from, const TypePtr& to) const;
+    bool isWrapperToPrimitive(const TypePtr& from, const TypePtr& to) const;
+    bool typeArgPecsAssignable(const TypePtr& fromArg, const TypePtr& toArg);
+    // 插入 valueOf / *Value() 调用
+    Value emitBoxToWrapper(const Value& prim, const TypePtr& wrapTy);
+    Value emitUnboxWrapper(const Value& wrap, const TypePtr& primTy);
 
     // 找出一组值的公共父类型名（基类优先，其次接口），
     // 用于多态数组的元素类型推断；不存在则返回空串。

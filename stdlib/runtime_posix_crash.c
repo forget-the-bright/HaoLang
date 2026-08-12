@@ -30,6 +30,8 @@ static void hao_posix_crash_handler(int sig) {
     f = fopen("hao-crash.log", "a");
     if (f) {
         fprintf(f, "---- crash ----\n");
+        hao_dbg_fprint_time(f);
+        hao_dbg_fprint_where(f);
         fprintf(f, "signal=%s(%d)\n", name, sig);
         hao_dbg_fprint_src_loc(f);
         hao_dbg_fprint_stack(f);

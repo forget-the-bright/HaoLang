@@ -50,7 +50,7 @@ func webExtTest() {
     fmt.println(net.Html.render("Hi {{name}}!", map));           // Hi Ada!
     fmt.println(net.Html.escape("<a>"));                         // &lt;a&gt;
 
-    val items = new collections.List<Object>();
+    val items = new collections.ArrayList<Object>();
     items.add(new WebExtItem("A"));
     items.add(new WebExtItem("B"));
     val listModel = new collections.HashMap<String, Object>();

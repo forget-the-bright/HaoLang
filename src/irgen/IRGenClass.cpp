@@ -81,11 +81,7 @@ void IRGen::collectInterfaceMembers(const SourceUnit& u) {
         auto ii = lookupInterface(iname);
         if (!ii) continue;   // 阶段 A 已报错
 
-        if (itf->typeList())
-            error(itf, "当前版本尚不支持接口继承接口");
-
-        // 泛型接口：解析方法签名时须让 T 解析为 TypeParam（而非同名类）。
-        // 若声明了 typeParams 但未在阶段 A 记录（理论不可能），此处兜底补齐。
+        // 泛型接口：先解析 typeParams，以便 `: Iterable<T>` 中的 T 解析为 TypeParam
         if (itf->typeParams() && ii->typeParams.empty())
             for (auto* tp : itf->typeParams()->IDENT())
                 ii->typeParams.push_back(tp->getText());
@@ -96,9 +92,26 @@ void IRGen::collectInterfaceMembers(const SourceUnit& u) {
         currentTypeParams_ = savedParams;
         for (const auto& p : ifaceParams) currentTypeParams_.insert(p);
 
+        // 父接口列表（阶段末 resolveInterfaceInheritance 再展平方法）
+        if (auto* tl = itf->typeList()) {
+            for (auto* t : tl->type()) {
+                TypePtr bt = resolveType(t);
+                if (bt->kind != TypeKind::Interface) {
+                    error(t, "接口只能继承接口，实际为 " + bt->toString());
+                    continue;
+                }
+                std::string bname = bt->typeArgs.empty()
+                    ? bt->className
+                    : Type::makeInterface(bt->className, bt->typeArgs)->monoName();
+                ii->baseInterfaces.push_back(bname);
+            }
+        }
+
+        // typeParams 已在上方解析
+
         for (auto* mem : itf->interfaceMember()) {
             if (mem->propertyDecl()) {
-                error(mem, "当前版本尚不支持接口中的属性");
+                collectInterfaceAutoProperty(mem->propertyDecl(), ii);
                 continue;
             }
             if (!mem->IDENT()) continue;
@@ -109,8 +122,12 @@ void IRGen::collectInterfaceMembers(const SourceUnit& u) {
                 ? resolveType(mem->returnType()->type())
                 : Type::makeUnit();
             mi.isAbstract = (mem->block() == nullptr);
-            if (!mi.isAbstract)
-                error(mem, "当前版本尚不支持接口方法的默认实现");
+            if (!mi.isAbstract) {
+                mi.defaultBody = mem->block();
+                mi.defaultOwner = iname;
+                mi.ownerClass = iname;
+                mi.irName = "@" + iname + "." + mi.name + ".default";
+            }
 
             if (auto* pl = mem->paramList()) {
                 for (auto* p : pl->param()) {
@@ -127,13 +144,38 @@ void IRGen::collectInterfaceMembers(const SourceUnit& u) {
             ii->methods.push_back(mi);
         }
 
+        if (auto* wc = itf->whereClause())
+            ii->constraints = parseWhereClause(wc);
+
         currentTypeParams_ = savedParams;
     }
 }
 
 InterfaceInfoPtr IRGen::lookupInterface(const std::string& name) {
     auto it = interfaces_.find(name);
-    return it == interfaces_.end() ? nullptr : it->second;
+    if (it == interfaces_.end()) return nullptr;
+    auto ii = it->second;
+    // 入口包先于依赖收集时，可能先实例化了空方法表的 mono；此处按模板补拷
+    if (ii->isGenericInstance() && ii->methods.empty() && !ii->instanceOf.empty()) {
+        auto tmpl = lookupInterface(ii->instanceOf);
+        if (tmpl && !tmpl->methods.empty() &&
+            ii->typeArgs.size() == tmpl->typeParams.size()) {
+            TypeSubst subst;
+            for (size_t i = 0; i < tmpl->typeParams.size(); ++i)
+                subst[tmpl->typeParams[i]] = ii->typeArgs[i];
+            for (const auto& m : tmpl->methods) {
+                MethodInfo im = m;
+                im.paramTypes.clear();
+                for (const auto& pt : m.paramTypes)
+                    im.paramTypes.push_back(substType(pt, subst));
+                im.returnType = m.returnType ? substType(m.returnType, subst) : nullptr;
+                for (const auto& pt : im.paramTypes) ensureInterfaceInstances(pt);
+                ensureInterfaceInstances(im.returnType);
+                ii->methods.push_back(std::move(im));
+            }
+        }
+    }
+    return ii;
 }
 
 // ============================================================
@@ -176,15 +218,28 @@ InterfaceInfoPtr IRGen::instantiateInterface(const std::string& templateName,
         }
     }
 
-    // ---- 已实例化则直接复用 ----
+    // ---- 已实例化则直接复用（过早实例化可能方法表仍空，补拷）----
     std::string instName = Type::makeInterface(templateName, args)->monoName();
     auto exist = interfaces_.find(instName);
-    if (exist != interfaces_.end()) return exist->second;
+    if (exist != interfaces_.end()) {
+        if (!exist->second->methods.empty() &&
+            exist->second->methods.size() >= tmpl->methods.size())
+            return exist->second;
+        // 模板方法数变化（如接口继承展平后）或过早实例化：重建
+        interfaces_.erase(exist);
+    }
 
     // ---- 建立替换表并复制模板方法（槽位继承模板）----
     TypeSubst subst;
     for (size_t i = 0; i < tmpl->typeParams.size(); ++i)
         subst[tmpl->typeParams[i]] = args[i];
+
+    if (!tmpl->constraints.empty()) {
+        size_t errBefore = diags_.errorCount();
+        checkTypeConstraints(tmpl->constraints, subst, useSite);
+        if (diags_.errorCount() > errBefore)
+            return nullptr;
+    }
 
     auto inst = std::make_shared<InterfaceInfo>();
     inst->name       = instName;
@@ -290,6 +345,13 @@ ClassInfoPtr IRGen::instantiateClass(const std::string& templateName,
     for (size_t i = 0; i < tmpl->typeParams.size(); ++i)
         subst[tmpl->typeParams[i]] = args[i];
 
+    if (!tmpl->constraints.empty()) {
+        size_t errBefore = diags_.errorCount();
+        checkTypeConstraints(tmpl->constraints, subst, useSite);
+        if (diags_.errorCount() > errBefore)
+            return nullptr;
+    }
+
     auto* cls = static_cast<HaoLangParser::ClassDeclContext*>(tmpl->declNode);
     if (!cls) return nullptr;
 
@@ -336,7 +398,7 @@ ClassInfoPtr IRGen::instantiateClass(const std::string& templateName,
                 rt->typeArgs.empty() ? tn
                                      : Type::makeInterface(tn, rt->typeArgs)->monoName());
         } else if (!tn.empty() && inst->baseName.empty()) {
-            inst->baseName = tn;
+            inst->baseName = rt->typeArgs.empty() ? tn : rt->monoName();
         }
     };
     if (auto* cb = cls->classBase()) {
@@ -474,8 +536,8 @@ ClassInfoPtr IRGen::instantiateClass(const std::string& templateName,
             continue;
         }
 
-        if (mem->propertyDecl())
-            error(mem, "当前版本尚不支持自动属性（get/set）");
+        if (auto* pd = mem->propertyDecl())
+            collectClassAutoProperty(pd, inst, slot);
     }
 
     currentSubst_      = savedSubst;
@@ -561,6 +623,7 @@ void IRGen::genPendingInstantiations() {
                     genMethod(fn, inst);
                 }
             }
+            genSyntheticPropMethods(inst);
 
             currentSubst_      = savedSubst;
             currentTypeParams_ = savedParams;
@@ -819,9 +882,21 @@ void IRGen::fillVtableEntries() {
         // 未被本类实现的槽位填 null；正确性由实现检查保证
         ci->vtableEntries.assign(totalSlots, "null");
 
-        // 接口方法校验（沿继承链：父类实现的接口子类同样满足）
+        // 接口方法校验（沿继承链：父类实现的接口子类同样满足；含父接口）
         for (const ClassInfo* c = ci.get(); c; c = c->base) {
-            for (const auto& iname : c->interfaceNames) {
+            std::vector<std::string> ifaces = c->interfaceNames;
+            // 展开父接口
+            {
+                std::set<std::string> seen(ifaces.begin(), ifaces.end());
+                for (size_t i = 0; i < ifaces.size(); ++i) {
+                    auto bi = lookupInterface(ifaces[i]);
+                    if (!bi) continue;
+                    for (const auto& p : bi->baseInterfaces) {
+                        if (seen.insert(p).second) ifaces.push_back(p);
+                    }
+                }
+            }
+            for (const auto& iname : ifaces) {
                 auto ii = lookupInterface(iname);
                 if (!ii) {
                     if (c == ci.get())
@@ -833,6 +908,14 @@ void IRGen::fillVtableEntries() {
                 for (const auto& im : ii->methods) {
                     MethodInfo* cm = ci->findMethodMut(im.name);
                     if (!cm) {
+                        // 接口默认方法：类未覆写则填默认实现
+                        if (!im.isAbstract && !im.irName.empty()) {
+                            if (im.vtableSlot >= 0 &&
+                                static_cast<size_t>(im.vtableSlot) < ci->vtableEntries.size())
+                                ci->vtableEntries[static_cast<size_t>(im.vtableSlot)] =
+                                    im.irName;
+                            continue;
+                        }
                         if (!ci->isAbstract)
                             diags_.error(ci->line, ci->column,
                                          "类 '" + cname + "' 未实现接口 '" + iname +
@@ -847,9 +930,9 @@ void IRGen::fillVtableEntries() {
                                      im.signatureString() + " 不一致");
                         continue;
                     }
-                    // 接口方法的全局槽位优先（可能与继承槽位不同，
-                    // 此时两个槽位都填同一实现，保证两种调用路径都对）
-                    ci->vtableEntries[static_cast<size_t>(im.vtableSlot)] = cm->irName;
+                    if (im.vtableSlot >= 0 &&
+                        static_cast<size_t>(im.vtableSlot) < ci->vtableEntries.size())
+                        ci->vtableEntries[static_cast<size_t>(im.vtableSlot)] = cm->irName;
                 }
             }
         }
@@ -1440,15 +1523,42 @@ std::string IRGen::emitInvokeThunk(const ClassInfoPtr& ci, const MethodInfo& mi)
 //  「自身 + 全部子类（或实现类）的虚表」列表，运行时线性查找。
 //  类层次通常很浅，查找成本可忽略；换来的是无需在对象里额外
 void IRGen::emitTypeIdLists() {
-    // ---- 类：自身 + 所有子类 ----
+    auto walkBases = [this](const ClassInfo* start, auto&& fn) {
+        std::set<const ClassInfo*> vis;
+        auto step = [&](const ClassInfo* c) {
+            while (c && vis.insert(c).second) {
+                fn(c);
+                c = c->base;
+            }
+        };
+        if (!start) return;
+        step(start);
+        if (!start->base && !start->baseName.empty()) {
+            if (auto bc = lookupClass(start->baseName)) step(bc.get());
+        }
+    };
+
+    // ---- 类：自身 + 所有子类；泛型模板另发类型族（全部 mono 实例）----
     for (auto& [cname, ci] : classes_) {
         std::vector<std::string> vts;
         for (auto& [oname, oc] : classes_) {
-            if (!oc->hasVTable) continue;          // 无虚表的类无法参与判定
-            if (oc->isAbstract) continue;          // 抽象类不会被实例化
-            if (oc->isSubclassOf(cname)) vts.push_back(oc->vtableIRName);
+            if (!oc->hasVTable) continue;
+            if (oc->isAbstract) continue;
+            if (oc->isGenericTemplate()) continue;
+            bool hit = oc->isSubclassOf(cname);
+            // 类型族：HashMap$… 的 instanceOf == HashMap 模板名
+            if (!hit && ci->isGenericTemplate() &&
+                !oc->instanceOf.empty() && oc->instanceOf == cname)
+                hit = true;
+            // 子类继承某个 mono 实例（JSONObject : LinkedHashMap$…）
+            if (!hit && ci->isGenericTemplate()) {
+                walkBases(oc.get(), [&](const ClassInfo* b) {
+                    if (!hit && !b->instanceOf.empty() && b->instanceOf == cname)
+                        hit = true;
+                });
+            }
+            if (hit) vts.push_back(oc->vtableIRName);
         }
-        // typeIdLists_ 已含该名（第 2 遍：泛型实例生成后补发）则跳过，避免重复定义
         if (vts.empty() || typeIdLists_.count(cname)) continue;
 
         std::string name = "@" + cname + ".typeids";
@@ -1457,16 +1567,33 @@ void IRGen::emitTypeIdLists() {
         std::string def = name + " = private unnamed_addr constant [" +
                           std::to_string(vts.size() + 1) + " x ptr] [";
         for (const auto& v : vts) def += "ptr " + v + ", ";
-        def += "ptr null]";                        // NULL 结尾
+        def += "ptr null]";
         em_.addGlobal(def);
     }
 
-    // ---- 接口：所有实现该接口的类 ----
+    // ---- 接口：实现类；泛型模板另发类型族（任一 Map$*）----
     for (auto& [iname, ii] : interfaces_) {
         std::vector<std::string> vts;
+        std::set<std::string> seen;
         for (auto& [oname, oc] : classes_) {
-            if (!oc->hasVTable || oc->isAbstract) continue;
-            if (oc->implementsInterface(iname)) vts.push_back(oc->vtableIRName);
+            if (!oc->hasVTable || oc->isAbstract || oc->isGenericTemplate()) continue;
+            bool hit = oc->implementsInterface(iname);
+            if (!hit && ii->isGenericTemplate()) {
+                // 实现任一 Template$… mono 接口
+                walkBases(oc.get(), [&](const ClassInfo* c) {
+                    if (hit) return;
+                    for (const auto& n : c->interfaceNames) {
+                        if (n == iname || n.rfind(iname + "$", 0) == 0) {
+                            hit = true;
+                            return;
+                        }
+                    }
+                });
+            }
+            if (hit && !seen.count(oc->vtableIRName)) {
+                seen.insert(oc->vtableIRName);
+                vts.push_back(oc->vtableIRName);
+            }
         }
         if (vts.empty() || typeIdLists_.count(iname)) continue;
 
@@ -1478,6 +1605,568 @@ void IRGen::emitTypeIdLists() {
         for (const auto& v : vts) def += "ptr " + v + ", ";
         def += "ptr null]";
         em_.addGlobal(def);
+    }
+}
+
+bool IRGen::ensureTypeIdList(const TypePtr& target) {
+    if (!target) return false;
+    if (target->kind != TypeKind::Class && target->kind != TypeKind::Interface)
+        return false;
+    std::string key = target->typeIdKey();
+    if (typeIdLists_.count(key)) return true;
+
+    // 精确 mono 接口：先确保实例存在
+    if (target->kind == TypeKind::Interface &&
+        !target->typeArgs.empty() && !target->hasWildcardArg())
+        ensureInterfaceInstances(target);
+
+    auto walkBases = [this](const ClassInfo* start, auto&& fn) {
+        std::set<const ClassInfo*> vis;
+        auto step = [&](const ClassInfo* c) {
+            while (c && vis.insert(c).second) {
+                fn(c);
+                c = c->base;
+            }
+        };
+        if (!start) return;
+        step(start);
+        if (!start->base && !start->baseName.empty()) {
+            if (auto bc = lookupClass(start->baseName)) step(bc.get());
+        }
+    };
+
+    std::vector<std::string> vts;
+    std::set<std::string> seen;
+    if (target->kind == TypeKind::Class) {
+        for (auto& [oname, oc] : classes_) {
+            if (!oc->hasVTable || oc->isAbstract || oc->isGenericTemplate()) continue;
+            bool hit = oc->isSubclassOf(key);
+            if (!hit) {
+                auto tmpl = classes_.find(key);
+                if (tmpl != classes_.end() && tmpl->second->isGenericTemplate() &&
+                    !oc->instanceOf.empty() && oc->instanceOf == key)
+                    hit = true;
+            }
+            if (!hit) {
+                auto tmpl = classes_.find(key);
+                if (tmpl != classes_.end() && tmpl->second->isGenericTemplate()) {
+                    walkBases(oc.get(), [&](const ClassInfo* b) {
+                        if (!hit && !b->instanceOf.empty() && b->instanceOf == key)
+                            hit = true;
+                    });
+                }
+            }
+            // mono 精确名
+            if (!hit && oname == key) hit = true;
+            if (hit && !seen.count(oc->vtableIRName)) {
+                seen.insert(oc->vtableIRName);
+                vts.push_back(oc->vtableIRName);
+            }
+        }
+    } else {
+        std::string tmpl = target->className;
+        bool family = target->typeArgs.empty() || target->hasWildcardArg();
+        std::string mono = family ? std::string() : target->monoName();
+        for (auto& [oname, oc] : classes_) {
+            if (!oc->hasVTable || oc->isAbstract || oc->isGenericTemplate()) continue;
+            bool hit = false;
+            if (family) {
+                walkBases(oc.get(), [&](const ClassInfo* c) {
+                    if (hit) return;
+                    for (const auto& n : c->interfaceNames) {
+                        if (n == tmpl || n.rfind(tmpl + "$", 0) == 0) {
+                            hit = true;
+                            return;
+                        }
+                    }
+                });
+            } else {
+                hit = oc->implementsInterface(mono);
+            }
+            if (hit && !seen.count(oc->vtableIRName)) {
+                seen.insert(oc->vtableIRName);
+                vts.push_back(oc->vtableIRName);
+            }
+        }
+    }
+    if (vts.empty()) return false;
+
+    std::string name = "@" + key + ".typeids";
+    typeIdLists_[key] = name;
+    std::string def = name + " = private unnamed_addr constant [" +
+                      std::to_string(vts.size() + 1) + " x ptr] [";
+    for (const auto& v : vts) def += "ptr " + v + ", ";
+    def += "ptr null]";
+    em_.addGlobal(def);
+    return true;
+}
+
+void IRGen::resolveInterfaceInheritance() {
+    // 多轮展平：把父接口方法并入子接口（子声明优先；双默认冲突标 abstract）
+    for (int pass = 0; pass < 8; ++pass) {
+        bool changed = false;
+        for (auto& [iname, ii] : interfaces_) {
+            if (ii->baseInterfaces.empty()) continue;
+            for (const auto& bname : ii->baseInterfaces) {
+                auto bi = lookupInterface(bname);
+                if (!bi) {
+                    // `List<T> : Iterable<T>` 存为 Iterable$T；回退到模板名
+                    auto pos = bname.rfind('$');
+                    if (pos != std::string::npos && pos > 0)
+                        bi = lookupInterface(bname.substr(0, pos));
+                }
+                if (!bi) {
+                    diags_.error(0, 0, "接口 '" + iname + "' 的父接口 '" +
+                                 bname + "' 未定义");
+                    continue;
+                }
+                // 父接口类型参数 → 子接口同名 TypeParam（继承方法签名对齐）
+                TypeSubst ifaceParamMap;
+                for (size_t pi = 0; pi < bi->typeParams.size(); ++pi) {
+                    const std::string& pn = bi->typeParams[pi];
+                    for (const auto& cp : ii->typeParams)
+                        if (cp == pn) {
+                            ifaceParamMap[pn] = Type::makeTypeParam(cp);
+                            break;
+                        }
+                }
+                for (const auto& bm : bi->methods) {
+                    MethodInfo* existing = nullptr;
+                    for (auto& m : ii->methods)
+                        if (m.name == bm.name) { existing = &m; break; }
+                    if (!existing) {
+                        MethodInfo copy = bm;
+                        copy.paramTypes.clear();
+                        for (const auto& pt : bm.paramTypes)
+                            copy.paramTypes.push_back(substType(pt, ifaceParamMap));
+                        copy.returnType = bm.returnType
+                            ? substType(bm.returnType, ifaceParamMap) : nullptr;
+                        copy.vtableSlot = static_cast<int>(ii->methods.size());
+                        ii->methods.push_back(copy);
+                        changed = true;
+                        continue;
+                    }
+                    // 子已声明同名：若双方都有默认且子未写体 → 冲突，强制 abstract
+                    if (!existing->isAbstract && !bm.isAbstract &&
+                        existing->defaultOwner != bm.defaultOwner &&
+                        existing->defaultOwner != iname) {
+                        // 两个父默认：标 abstract，类必须 override
+                        existing->isAbstract = true;
+                        existing->defaultBody = nullptr;
+                        existing->defaultOwner.clear();
+                        existing->irName.clear();
+                    }
+                }
+            }
+        }
+        if (!changed) break;
+    }
+}
+
+void IRGen::genInterfaceDefaultMethods() {
+    for (auto& [iname, ii] : interfaces_) {
+        if (ii->isGenericTemplate()) continue;
+        for (auto& m : ii->methods) {
+            if (!m.defaultBody || m.irName.empty()) continue;
+            auto* block = static_cast<HaoLangParser::BlockContext*>(m.defaultBody);
+            if (!block) continue;
+
+            // 与 genMethodBodyFromMI 对齐：重置函数态 + flush entry alloca
+            em_.resetFunctionState();
+            currentReturn_ = m.returnType ? m.returnType : Type::makeUnit();
+            sawReturn_ = false;
+            blockTerminated_ = false;
+            inMain_ = false;
+            inConstructor_ = false;
+            thisAddr_.clear();
+
+            ClassInfoPtr fake = std::make_shared<ClassInfo>();
+            fake->name = iname;
+            fake->hasVTable = true;
+            fake->interfaceNames.push_back(iname);
+            for (const auto& im : ii->methods) {
+                MethodInfo cm = im;
+                cm.ownerClass = iname;
+                fake->methods.push_back(cm);
+            }
+            ClassInfoPtr savedClass = currentClass_;
+            currentClass_ = fake;
+
+            std::string sig = "define " + currentReturn_->llvmType() + " " +
+                              m.irName + "(ptr %this.arg";
+            for (size_t i = 0; i < m.paramTypes.size(); ++i)
+                sig += ", " + m.paramTypes[i]->llvmType() + " %" +
+                       m.paramNames[i] + ".arg";
+            sig += ") {";
+
+            em_.emitBlank();
+            em_.emitRaw(sig);
+            em_.emitLabel("entry");
+            beginDebugFunction(block, iname + "." + m.name + ".default");
+            genFunctionBody(block, m.paramNames, m.paramTypes, currentReturn_,
+                            /*isMain=*/false, /*hasThis=*/true, iname,
+                            block, "接口默认方法 '" + iname + "." + m.name + "'");
+            em_.flushEntryAllocas();
+            em_.emitRaw("}");
+
+            currentClass_ = savedClass;
+            thisAddr_.clear();
+        }
+    }
+}
+
+std::string IRGen::propGetterName(const std::string& prop) {
+    std::string c = prop;
+    if (!c.empty() && c[0] >= 'a' && c[0] <= 'z')
+        c[0] = static_cast<char>(c[0] - 'a' + 'A');
+    return "get" + c;
+}
+
+std::string IRGen::propSetterName(const std::string& prop) {
+    std::string c = prop;
+    if (!c.empty() && c[0] >= 'a' && c[0] <= 'z')
+        c[0] = static_cast<char>(c[0] - 'a' + 'A');
+    return "set" + c;
+}
+
+std::vector<TypeParamConstraint> IRGen::parseWhereClause(
+    HaoLangParser::WhereClauseContext* wc) {
+    std::vector<TypeParamConstraint> out;
+    if (!wc) return out;
+    for (auto* b : wc->whereBinding()) {
+        TypeParamConstraint c;
+        c.paramName = b->IDENT()->getText();
+        c.bound = resolveType(b->type());
+        if (!c.bound || (c.bound->kind != TypeKind::Class &&
+                         c.bound->kind != TypeKind::Interface)) {
+            error(b, "where 约束的上界必须是类或接口，实际为 " +
+                     (c.bound ? c.bound->toString() : "?"));
+            continue;
+        }
+        out.push_back(std::move(c));
+    }
+    return out;
+}
+
+void IRGen::checkTypeConstraints(const std::vector<TypeParamConstraint>& cs,
+                                 const TypeSubst& subst,
+                                 antlr4::ParserRuleContext* useSite) {
+    for (const auto& c : cs) {
+        auto it = subst.find(c.paramName);
+        if (it == subst.end() || !it->second) {
+            if (useSite)
+                error(useSite, "where 约束参数 '" + c.paramName + "' 未实例化");
+            continue;
+        }
+        TypePtr actual = it->second;
+        TypePtr bound = substType(c.bound, subst);
+        if (!bound) bound = c.bound;
+
+        auto fail = [&](const std::string& msg) {
+            if (useSite) error(useSite, msg);
+            else diags_.error(0, 0, msg);
+        };
+
+        if (bound->kind == TypeKind::Interface) {
+            std::string iname = bound->typeArgs.empty()
+                ? bound->className
+                : Type::makeInterface(bound->className, bound->typeArgs)->monoName();
+            if (actual->kind == TypeKind::Class) {
+                auto ci = classOfType(actual);
+                if (!ci || !ci->implementsInterface(iname)) {
+                    // 裸模板名也试一下（implements 可能记的是 mono）
+                    bool ok = false;
+                    if (ci) {
+                        for (const auto& n : ci->interfaceNames) {
+                            if (n == iname || n == bound->className ||
+                                n.find(bound->className + "$") == 0) {
+                                ok = true; break;
+                            }
+                        }
+                        // 父接口
+                        if (!ok) {
+                            for (const auto& n : ci->interfaceNames) {
+                                auto ii = lookupInterface(n);
+                                if (!ii) continue;
+                                for (const auto& p : ii->baseInterfaces)
+                                    if (p == iname || p == bound->className) {
+                                        ok = true; break;
+                                    }
+                                if (ok) break;
+                            }
+                        }
+                    }
+                    if (!ok)
+                        fail("类型实参 '" + actual->toString() + "' 不满足约束 '" +
+                             c.paramName + " : " + bound->toString() + "'");
+                }
+            } else if (actual->kind == TypeKind::Interface) {
+                std::string an = actual->typeArgs.empty()
+                    ? actual->className : actual->monoName();
+                if (an != iname && actual->className != bound->className) {
+                    auto ai = lookupInterface(an);
+                    bool ok = false;
+                    if (ai) {
+                        for (const auto& p : ai->baseInterfaces)
+                            if (p == iname || p == bound->className) {
+                                ok = true; break;
+                            }
+                    }
+                    if (!ok)
+                        fail("类型实参 '" + actual->toString() + "' 不满足约束 '" +
+                             c.paramName + " : " + bound->toString() + "'");
+                }
+            } else {
+                fail("类型实参 '" + actual->toString() + "' 不满足约束 '" +
+                     c.paramName + " : " + bound->toString() + "'");
+            }
+        } else if (bound->kind == TypeKind::Class) {
+            if (actual->kind != TypeKind::Class) {
+                fail("类型实参 '" + actual->toString() + "' 不满足约束 '" +
+                     c.paramName + " : " + bound->toString() + "'（需要类）");
+                continue;
+            }
+            auto ci = classOfType(actual);
+            std::string bname = bound->typeArgs.empty()
+                ? bound->className : bound->monoName();
+            if (!ci || !ci->isSubclassOf(bname)) {
+                // isSubclassOf 可能要内部名；再比 className
+                bool ok = false;
+                if (ci) {
+                    for (const ClassInfo* cwalk = ci.get(); cwalk; cwalk = cwalk->base)
+                        if (cwalk->name == bname || cwalk->name == bound->className ||
+                            (!cwalk->instanceOf.empty() &&
+                             cwalk->instanceOf == bound->className)) {
+                            ok = true; break;
+                        }
+                }
+                if (!ok)
+                    fail("类型实参 '" + actual->toString() + "' 不满足约束 '" +
+                         c.paramName + " : " + bound->toString() + "'");
+            }
+        }
+    }
+}
+
+bool IRGen::collectClassAutoProperty(HaoLangParser::PropertyDeclContext* pd,
+                                     const ClassInfoPtr& ci, int& slot) {
+    if (!pd || !ci) return false;
+    std::string pname = pd->IDENT()->getText();
+    TypePtr pty = resolveType(pd->type());
+    bool isVar = pd->VAR() != nullptr;
+    bool hasGet = false, hasSet = false;
+    for (auto* acc : pd->accessor()) {
+        std::string an = acc->IDENT()->getText();
+        if (an == "get") {
+            if (acc->block()) {
+                error(acc, "自动属性暂不支持自定义 get 体，请写 get;");
+                return false;
+            }
+            hasGet = true;
+        } else if (an == "set") {
+            if (acc->block()) {
+                error(acc, "自动属性暂不支持自定义 set 体，请写 set;");
+                return false;
+            }
+            hasSet = true;
+        } else {
+            error(acc, "属性访问器只能是 get 或 set，实际为 '" + an + "'");
+            return false;
+        }
+    }
+    if (!hasGet) {
+        error(pd, "自动属性必须声明 get");
+        return false;
+    }
+    if (!isVar && hasSet) {
+        error(pd, "val 自动属性不能有 set");
+        return false;
+    }
+    if (isVar && !hasSet) {
+        error(pd, "var 自动属性必须声明 set");
+        return false;
+    }
+    bool isStatic = false;
+    FieldInfo::Vis vis = FieldInfo::Vis::Public;
+    for (auto* mod : pd->modifier()) {
+        if (mod->STATIC()) isStatic = true;
+        else if (mod->PRIVATE()) vis = FieldInfo::Vis::Private;
+        else if (mod->PROTECTED()) vis = FieldInfo::Vis::Protected;
+        else if (mod->INTERNAL()) vis = FieldInfo::Vis::Internal;
+    }
+    if (isStatic) {
+        error(pd, "当前版本尚不支持静态自动属性");
+        return false;
+    }
+    if (ci->findField(pname)) {
+        error(pd, "字段 '" + pname + "' 在类 '" + ci->name + "' 中重复定义");
+        return false;
+    }
+
+    FieldInfo fi;
+    fi.name = pname;
+    fi.type = pty;
+    fi.isMutable = isVar && hasSet;
+    fi.isAutoProperty = true;
+    fi.ownerClass = ci->name;
+    fi.visibility = vis;
+    fi.line = pd->getStart()->getLine();
+    fi.column = pd->getStart()->getCharPositionInLine();
+    fi.slot = slot++;
+    ci->fields.push_back(fi);
+
+    // 合成 getX / setX，供接口属性实现与虚表
+    std::string gname = propGetterName(pname);
+    if (!ci->findMethod(gname)) {
+        MethodInfo mg;
+        mg.name = gname;
+        mg.ownerClass = ci->name;
+        mg.returnType = pty;
+        mg.isSyntheticProp = true;
+        mg.propFieldName = pname;
+        mg.irName = "@" + ci->name + "." + gname;
+        mg.line = fi.line;
+        mg.column = fi.column;
+        ci->methods.push_back(mg);
+    }
+    if (hasSet) {
+        std::string sname = propSetterName(pname);
+        if (!ci->findMethod(sname)) {
+            MethodInfo ms;
+            ms.name = sname;
+            ms.ownerClass = ci->name;
+            ms.returnType = Type::makeUnit();
+            ms.paramNames = { "value" };
+            ms.paramTypes = { pty };
+            ms.isSyntheticProp = true;
+            ms.propFieldName = pname;
+            ms.irName = "@" + ci->name + "." + sname;
+            ms.line = fi.line;
+            ms.column = fi.column;
+            ci->methods.push_back(ms);
+        }
+    }
+    return true;
+}
+
+bool IRGen::collectInterfaceAutoProperty(HaoLangParser::PropertyDeclContext* pd,
+                                         const InterfaceInfoPtr& ii) {
+    if (!pd || !ii) return false;
+    std::string pname = pd->IDENT()->getText();
+    TypePtr pty = resolveType(pd->type());
+    bool isVar = pd->VAR() != nullptr;
+    bool hasGet = false, hasSet = false;
+    for (auto* acc : pd->accessor()) {
+        std::string an = acc->IDENT()->getText();
+        if (an == "get") {
+            if (acc->block()) {
+                error(acc, "接口属性暂不支持自定义 get 体");
+                return false;
+            }
+            hasGet = true;
+        } else if (an == "set") {
+            if (acc->block()) {
+                error(acc, "接口属性暂不支持自定义 set 体");
+                return false;
+            }
+            hasSet = true;
+        } else {
+            error(acc, "属性访问器只能是 get 或 set，实际为 '" + an + "'");
+            return false;
+        }
+    }
+    if (!hasGet) {
+        error(pd, "接口属性必须声明 get");
+        return false;
+    }
+    if (!isVar && hasSet) {
+        error(pd, "val 接口属性不能有 set");
+        return false;
+    }
+    if (isVar && !hasSet) {
+        error(pd, "var 接口属性必须声明 set");
+        return false;
+    }
+
+    std::string gname = propGetterName(pname);
+    if (ii->findMethod(gname)) {
+        error(pd, "方法 '" + gname + "' 在接口 '" + ii->name + "' 中重复声明");
+        return false;
+    }
+    MethodInfo mg;
+    mg.name = gname;
+    mg.ownerClass = ii->name;
+    mg.returnType = pty;
+    mg.isAbstract = true;
+    mg.propFieldName = pname; // 标记来源属性，供 iface 点号语法
+    mg.vtableSlot = static_cast<int>(ii->methods.size());
+    mg.line = pd->getStart()->getLine();
+    mg.column = pd->getStart()->getCharPositionInLine();
+    ii->methods.push_back(mg);
+
+    if (hasSet) {
+        std::string sname = propSetterName(pname);
+        if (ii->findMethod(sname)) {
+            error(pd, "方法 '" + sname + "' 在接口 '" + ii->name + "' 中重复声明");
+            return false;
+        }
+        MethodInfo ms;
+        ms.name = sname;
+        ms.ownerClass = ii->name;
+        ms.returnType = Type::makeUnit();
+        ms.paramNames = { "value" };
+        ms.paramTypes = { pty };
+        ms.isAbstract = true;
+        ms.propFieldName = pname;
+        ms.vtableSlot = static_cast<int>(ii->methods.size());
+        ms.line = mg.line;
+        ms.column = mg.column;
+        ii->methods.push_back(ms);
+    }
+    return true;
+}
+
+void IRGen::genSyntheticPropMethods(const ClassInfoPtr& ci) {
+    if (!ci || ci->isGenericTemplate()) return;
+    for (const auto& m : ci->methods) {
+        if (!m.isSyntheticProp || m.propFieldName.empty()) continue;
+        // 仅本类声明的合成访问器；继承来的由父类已生成
+        if (m.ownerClass != ci->name) continue;
+        const FieldInfo* fi = ci->findField(m.propFieldName);
+        if (!fi) continue;
+
+        em_.resetFunctionState();
+        currentReturn_ = m.returnType;
+        sawReturn_ = false;
+        blockTerminated_ = false;
+        inMain_ = false;
+        currentClass_ = ci;
+        inConstructor_ = false;
+        thisAddr_.clear();
+
+        bool isGetter = m.paramTypes.empty();
+        std::string sig = "define " + m.returnType->llvmType() + " " + m.irName +
+                          "(ptr %this.arg";
+        if (!isGetter)
+            sig += ", " + m.paramTypes[0]->llvmType() + " %value.arg";
+        sig += ") {";
+        em_.emitBlank();
+        em_.emitRaw(sig);
+        em_.emitLabel("entry");
+
+        if (isGetter) {
+            std::string fp = fieldPtr("%this.arg", fi->slot);
+            std::string reg = emitLoad(fi->type->llvmType(), fp);
+            emitRet(fi->type->llvmType(), reg);
+        } else {
+            std::string fp = fieldPtr("%this.arg", fi->slot);
+            emitHeapStore(fp, "%value.arg", fi->type, "%this.arg");
+            emitRetVoid();
+        }
+        em_.flushEntryAllocas();
+        em_.emitRaw("}");
+        currentClass_ = nullptr;
+        thisAddr_.clear();
     }
 }
 
@@ -1602,8 +2291,15 @@ void IRGen::collectClassMembers(const SourceUnit& u) {
         auto ci = lookupClass(cname);
         if (!ci) continue;
 
-        // 泛型类模板的成员在实例化时解析
-        if (ci->isGenericTemplate()) continue;
+        // 泛型类模板：只收 where；成员在实例化时解析
+        if (ci->isGenericTemplate()) {
+            std::set<std::string> savedParams = currentTypeParams_;
+            for (const auto& p : ci->typeParams) currentTypeParams_.insert(p);
+            if (auto* wc = cls->whereClause())
+                ci->constraints = parseWhereClause(wc);
+            currentTypeParams_ = savedParams;
+            continue;
+        }
 
         // ---- 类级注解（v0.19.0）----
         ci->annotations = resolveAnnotationUses(cls->annotationUse());
@@ -1638,7 +2334,8 @@ void IRGen::collectClassMembers(const SourceUnit& u) {
                     error(cls, "类 '" + shortName + "' 不能继承自身");
                     return;
                 }
-                ci->baseName = tn;
+                // 泛型 mono 基类（JSONObject : LinkedHashMap<String,Object>）
+                ci->baseName = rt->typeArgs.empty() ? tn : rt->monoName();
             }
         };
 
@@ -1846,10 +2543,14 @@ void IRGen::collectClassMembers(const SourceUnit& u) {
             }
 
             if (auto* pd = mem->propertyDecl()) {
-                error(pd, "当前版本尚不支持自动属性（get/set）");
+                collectClassAutoProperty(pd, ci, slot);
                 continue;
             }
         }
+
+        // where 约束（类级）
+        if (auto* wc = cls->whereClause())
+            ci->constraints = parseWhereClause(wc);
     }
 
     // ---- 注解：收集字段（v0.19.0）----
@@ -1984,8 +2685,9 @@ void IRGen::genClass(HaoLangParser::ClassDeclContext* cls) {
             if (mi && mi->isAbstract) continue;
             genMethod(fn, ci);
         }
-        // 字段与属性无需生成代码
+        // 字段与属性无需生成代码（合成访问器另发）
     }
+    genSyntheticPropMethods(ci);
 }
 
 // 生成枚举类代码。成员在 collectClassMembers 中已合成（见 collectEnumMembers）；

@@ -24,7 +24,7 @@ HaoLang（好语言）是**静态类型、编译至原生机器码**的语言：
 | OOP | 类/接口/继承/虚表 + `Object` 根（Java/C# 味） |
 | 函数式 | lambda / 闭包 / `Func`·`Action`（C# 味） |
 
-**不是**：解释型语言、字节码 VM、有隐式装箱的 Java 超集、或 Go 的 CSP 全套（channel 载荷目前固定 Long）。
+**不是**：解释型语言、字节码 VM、或 Go 的 CSP 全套（channel 载荷目前固定 Long）。隐式装箱/拆箱对标 Java（仅匹配对；`T?` 可空与包装类正交）。
 
 ---
 
@@ -132,7 +132,9 @@ func main(args: [String]): Int { return 0; }
 | 可空装箱 | `Int?` | 空安全；编译器 `hao_box_*` |
 | 包装对象 | `Integer`、`lang.String` | 需要 `Object` / 内容 equals 时 |
 
-- **无** Java 式隐式自动装箱/拆箱。需要包装时显式 `Integer.valueOf(1)`，拆箱 `.intValue()`。
+- **有** Java 式隐式自动装箱/拆箱（仅匹配对）：`Int`↔`Integer`、`Long`↔`lang.Long` 等；`Object o = 10` ≡ 装箱到对应包装再向上。显式仍可用 `Integer.valueOf` / `x as Integer` / `box as Int`。
+- **禁止** 数值拓宽与装箱合并（`Int` 不能一步赋给 `lang.Long`）；`Object o = 10; o as Long` 运行时 panic（实际是 Integer）。
+- `T?`（`hao_box_*`）仍是可空值形态，与包装类正交。
 - `new Int(1)` 非法。
 - 数值包装提供 `SIZE` / `BYTES` / `MAX_VALUE` / `MIN_VALUE` 等。
 - **`Bit`**：位模式工具（≠ `Boolean`）；`getBit`→`Bool`；静态 API 对 Int/Long 重载。
@@ -178,7 +180,7 @@ val forced = s!!;          // null → panic
 | `int` / `String` / `int[]` | `Int` / `String` / `[Int]`（数组对象是引用） | `int` / `string` / `[]int` | `int` / `String` / `int[]` | `int` / `string` / `int[]` |
 | 字符串长度 | **码点** | 字节（`len`）/ rune | UTF-16 code unit | UTF-16 |
 | 可空 | `T?` 一等 | 指针 / 多返回 | 引用默认可 null + Optional | `T?`（可空值类型/引用注解） |
-| 装箱 | 显式包装 / `T?` | 少用装箱 | 自动装箱 | 装箱+可空 |
+| 装箱 | 自动装箱+显式 / `T?` | 少用装箱 | 自动装箱 | 装箱+可空 |
 | 泛型实现 | 单态化 | 近似字典/特例 | 擦除 | 再化/共享码（值类型特例） |
 | 根类型 | `Object` | 无统一根 | `Object` | `object` |
 
@@ -387,9 +389,10 @@ interface Iterable<T> { func iterator(): Iterator<T>; }
 
 | 支持 | 限制 |
 |------|------|
-| 泛型类/函数/方法/接口 | **无** `where T : Constraint`（未实现） |
+| 泛型类/函数/方法/接口 | 支持 `where T : Constraint`（类/接口/函数；无界约束） |
 | 嵌套泛型 | 泛型函数当值需先实例化 |
 | 接口单态化 `Iterable$Int` | 无 Java 式原始类型 |
+| 通配 `?` / `? extends T` / `? super T` | PECS 赋值与 `add`/`get`；不做声明处 `in`/`out`；完整 capture conversion 边角见坑债 |
 
 ---
 
@@ -565,7 +568,7 @@ extern func ntohs(x: Int): Int = "ntohs" @link("ws2_32");
 | CSP channel | 🔸子集 | ✅ | ❌ | 🔸 |
 | 异步 async/await | ⬜ | 🔸 | 🔸 | ✅ |
 | 宏/代码生成 | ⬜ | ✅ go gen | 🔸 | 🔸源生成 |
-| 隐式装箱 | ❌ | — | ✅ | ✅ |
+| 隐式装箱 | ✅ | — | ✅ | ✅ |
 
 ---
 
@@ -573,12 +576,12 @@ extern func ntohs(x: Int): Int = "ntohs" @link("ws2_32");
 
 | 特性 | 状态 |
 |------|------|
-| 泛型约束 `where T : X` | ⬜ |
-| 自动属性 `{ get; set; }` | 🔸 仅解析 |
 | 具名实参 | ⬜ |
-| 接口默认方法 / 接口继承接口 | ⬜ |
+| 声明处变型 `in`/`out`（C#） | ❌ 明确不做（选 Java `? extends`/`? super`） |
 
-以记忆文档第 3 章特性表为准；实现前当作不存在。
+**近期已交付（勿当缺口）**：v0.58 OOP（where / 自动属性 / 接口默认 / is·as 三形态 / List·ArrayList）；v0.59 装箱+PECS；v0.59.1 crash 可观测+本地时区——详记忆文档第 3 章 / 时间线合订。
+
+以记忆文档第 3 章特性表为准；上表未交付项实现前当作不存在。
 
 ---
 

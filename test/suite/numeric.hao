@@ -84,7 +84,7 @@ func numericTest() {
     fmt.println(bad == null);          // true
 
     // ---- List 冒烟 ----
-    val list = new collections.List<Long>();
+    val list = new collections.ArrayList<Long>();
     list.add(1);
     list.add(2);
     fmt.println(list.size());          // 2

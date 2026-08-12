@@ -252,7 +252,87 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "OK   p8 Map/JSON smoke"
 
-# ---- 15) P7b～P7e 功能冒烟 ----
+# ---- 15) P9 OOP 全量收口冒烟矩阵 ----
+$p9dir = Join-Path $root "target\p9-smoke"
+$p9files = @(
+    'oop_obj_assign',
+    'oop_is_as_mono',
+    'oop_is_as_raw',
+    'oop_is_as_wildcard',
+    'oop_iface_param',
+    'oop_entryset_for',
+    'oop_iface_extends',
+    'oop_default_method',
+    'oop_where',
+    'oop_autoprop',
+    'oop_list_arraylist',
+    'oop_json_inherit'
+)
+foreach ($name in $p9files) {
+    $src = Join-Path $p9dir "$name.hao"
+    if (-not (Test-Path $src)) { Fail "missing $src" }
+    & $hao run $src
+    if ($LASTEXITCODE -ne 0) { Fail "p9 $name failed" }
+    Write-Host "OK   p9 $name"
+}
+# where 违约束 / 双默认冲突须编译失败
+foreach ($neg in @('oop_where_neg','oop_default_conflict')) {
+    $src = Join-Path $p9dir "$neg.hao"
+    $ll = Join-Path $p9dir "$neg.ll"
+    if (-not (Test-Path $src)) { Fail "missing $src" }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & $hao emit $src -o $ll 2>$null | Out-Null
+    $ec = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($ec -eq 0) { Fail "p9 $neg should reject" }
+    Write-Host "OK   p9 $neg rejects"
+}
+
+# ---- 16) P10 类型系统 Java 对标（装箱 + 有界通配）----
+$p10dir = Join-Path $root "target\p10-smoke"
+$p10files = @(
+    'box_implicit',
+    'box_explicit_as',
+    'box_generic',
+    'wild_extends',
+    'wild_super'
+)
+foreach ($name in $p10files) {
+    $src = Join-Path $p10dir "$name.hao"
+    if (-not (Test-Path $src)) { Fail "missing $src" }
+    & $hao run $src
+    if ($LASTEXITCODE -ne 0) { Fail "p10 $name failed" }
+    Write-Host "OK   p10 $name"
+}
+# box_trap：运行时 panic（Object=10 后 as Long）
+$trapSrc = Join-Path $p10dir "box_trap.hao"
+$trapExe = Join-Path $p10dir "box_trap.exe"
+if (-not (Test-Path $trapSrc)) { Fail "missing $trapSrc" }
+& $hao build $trapSrc -o $trapExe
+if ($LASTEXITCODE -ne 0) { Fail "p10 box_trap build failed" }
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+& $trapExe 2>$null | Out-Null
+$trapEc = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($trapEc -eq 0) { Fail "p10 box_trap should panic" }
+Write-Host "OK   p10 box_trap panics"
+# 编译拒绝：Int→Long 包装链式；? extends/? super 非法写
+foreach ($neg in @('box_no_chain','wild_extends_neg','wild_super_neg')) {
+    $src = Join-Path $p10dir "$neg.hao"
+    $ll = Join-Path $p10dir "$neg.ll"
+    if (-not (Test-Path $src)) { Fail "missing $src" }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & $hao emit $src -o $ll 2>$null | Out-Null
+    $ec = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($ec -eq 0) { Fail "p10 $neg should reject" }
+    Write-Host "OK   p10 $neg rejects"
+}
+
+# ---- 17) P7b～P7e 功能冒烟 ----
 foreach ($name in @('p7b_smoke','p7c_smoke','p7d_smoke','p7e_smoke')) {
     $src = Join-Path $root "target\p7-smoke\$name.hao"
     $exe = Join-Path $root "target\p7-smoke\$name.exe"
@@ -263,5 +343,5 @@ foreach ($name in @('p7b_smoke','p7c_smoke','p7d_smoke','p7e_smoke')) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-Write-Host "P5_SMOKE+IR_SYNC+P7+P8 OK"
+Write-Host "P5_SMOKE+IR_SYNC+P7+P8+P9+P10 OK"
 exit 0
