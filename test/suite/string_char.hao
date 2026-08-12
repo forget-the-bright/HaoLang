@@ -81,7 +81,7 @@ func stringCharTest() {
     fmt.println(@"a\nb".length == 4);       // true（字面 a \ n b）
 
     // [Char] esz=4
-    var chars: [Char] = ['A', '好'];
+    var chars: [Char] = new [Char]{ 'A', '好' };
     fmt.println(chars.length);              // 2
     fmt.println(chars[0] == 'A');           // true
     fmt.println(chars[1] == '好');          // true

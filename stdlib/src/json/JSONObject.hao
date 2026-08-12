@@ -107,7 +107,7 @@ class JSONObject : LinkedHashMap<String, Object> {
     }
 
     func toJSONString(): String {
-        var stack: [Long] = [];
+        var stack: [Long] = new [Long]{};
         return JSON.stringifyObj(this, 0, 0, stack, 0);
     }
 
@@ -169,7 +169,7 @@ class JSONArray : ArrayList<Object> {
     }
 
     func toJSONString(): String {
-        var stack: [Long] = [];
+        var stack: [Long] = new [Long]{};
         return JSON.stringifyArr(this, 0, 0, stack, 0);
     }
 

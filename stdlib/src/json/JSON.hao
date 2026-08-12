@@ -54,32 +54,32 @@ class JSON {
 
     // 具体 Map 快路径（entrySet for-in；避免 Object 反射）
     static func toJSONString(m: HashMap<String, Object>): String {
-        var stack: [Long] = [];
+        var stack: [Long] = new [Long]{};
         return JSON.stringifyHashMap(m, 0, 0, stack, 0);
     }
 
     static func toJSONString(m: LinkedHashMap<String, Object>): String {
-        var stack: [Long] = [];
+        var stack: [Long] = new [Long]{};
         return JSON.stringifyLinkedHashMap(m, 0, 0, stack, 0);
     }
 
     static func toJSONString(m: ConcurrentHashMap<String, Object>): String {
-        var stack: [Long] = [];
+        var stack: [Long] = new [Long]{};
         return JSON.stringifyConcurrentHashMap(m, 0, 0, stack, 0);
     }
 
     static func toJSONString(m: TreeMap<String, Object>): String {
-        var stack: [Long] = [];
+        var stack: [Long] = new [Long]{};
         return JSON.stringifyTreeMap(m, 0, 0, stack, 0);
     }
 
     static func toJSONString(obj: JSONObject): String {
-        var stack: [Long] = [];
+        var stack: [Long] = new [Long]{};
         return JSON.stringifyObj(obj, 0, 0, stack, 0);
     }
 
     static func toJSONString(arr: JSONArray): String {
-        var stack: [Long] = [];
+        var stack: [Long] = new [Long]{};
         return JSON.stringifyArr(arr, 0, 0, stack, 0);
     }
 
@@ -203,7 +203,7 @@ class JSON {
     static val MAX_DEPTH: Int = 32;
 
     static func stringify(value: Object, features: Int, indent: Int): String {
-        var stack: [Long] = [];
+        var stack: [Long] = new [Long]{};
         return JSON.stringifyAt(value, features, indent, stack, 0);
     }
 
@@ -217,7 +217,7 @@ class JSON {
     }
 
     static func stackPush(stack: [Long], p: Long): [Long] {
-        var n: [Long] = [];
+        var n: [Long] = new [Long]{};
         var i = 0;
         while (i < stack.length) {
             n += stack[i];
@@ -300,7 +300,7 @@ class JSON {
     // 反射遍历 keySet（优先）或 entrySet；禁 hao_array_*
     static func stringifyMapReflect(value: Object, t: reflect.Class, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
-        var emptyArgs: [Long] = [];
+        var emptyArgs: [Long] = new [Long]{};
         // 优先 keySet：next 为 String 时可 invokeStr，避开 MapEntry 嵌套泛型
         if (t.methodParamCount("keySet") == 0) {
             val ksObj = t.invokeObj(value, "keySet", emptyArgs);
@@ -316,7 +316,7 @@ class JSON {
                     while (it.invokeBool(iter, "hasNext", emptyArgs)) {
                         val kStr = it.invokeStr(iter, "next", emptyArgs);
                         if (kStr == null) { continue; }
-                        var gargs: [Long] = [];
+                        var gargs: [Long] = new [Long]{};
                         gargs += reflect.ptrOfStr(kStr!!);
                         val child = t.invokeObj(value, "get", gargs);
                         if (!first) { r = r + ","; }
@@ -511,14 +511,14 @@ class JSON {
 
     static func stringifyList(value: Object, t: reflect.Class, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
-        var emptyArgs: [Long] = [];
+        var emptyArgs: [Long] = new [Long]{};
         val sz = t.invoke(value, "size", emptyArgs);
         var r = "[";
         var i = 0;
         while (i < sz) {
             if (i > 0) { r = r + ","; }
             if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
-            var gargs: [Long] = [];
+            var gargs: [Long] = new [Long]{};
             gargs += i;
             val child = t.invokeObj(value, "get", gargs);
             if (child == null) {

@@ -59,19 +59,19 @@ func primitivesTest() {
     fmt.println(~zl);                  // -1
 
     // ---- 紧凑数组 esz + push/pop（boxToI64 全类型）----
-    var sbytes: [SByte] = [0 - 1, 1];
+    var sbytes: [SByte] = new [SByte]{ 0 - 1, 1 };
     fmt.println(sbytes[0]);            // -1
     sbytes += 0 - 2;
     fmt.println(sbytes.pop());         // -2
-    var ushorts: [UShort] = [1, 2];
+    var ushorts: [UShort] = new [UShort]{ 1, 2 };
     fmt.println(ushorts[1]);           // 2
     ushorts += 3;
     fmt.println(ushorts.pop());        // 3
-    var uints: [UInt] = [1, 2];
+    var uints: [UInt] = new [UInt]{ 1, 2 };
     fmt.println(uints[0]);             // 1
     uints += 9;
     fmt.println(uints.pop());          // 9
-    var ulongs: [ULong] = [1, 2];
+    var ulongs: [ULong] = new [ULong]{ 1, 2 };
     fmt.println(ulongs[1]);            // 2
     ulongs += 7;
     fmt.println(ulongs.pop());         // 7

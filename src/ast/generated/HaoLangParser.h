@@ -57,8 +57,8 @@ public:
     RuleRelationalExpr = 69, RuleShiftExpr = 70, RuleAdditiveExpr = 71, 
     RuleMultiplicativeExpr = 72, RuleUnaryExpr = 73, RulePostfixExpr = 74, 
     RulePostfixOp = 75, RuleArgList = 76, RuleArg = 77, RulePrimary = 78, 
-    RuleLambda = 79, RuleLambdaParams = 80, RuleArrayLiteral = 81, RuleArrayElementList = 82, 
-    RuleArrayElement = 83, RuleLiteral = 84, RuleTemplateString = 85, RuleTemplatePart = 86
+    RuleLambda = 79, RuleLambdaParams = 80, RuleArrayElementList = 81, RuleArrayElement = 82, 
+    RuleLiteral = 83, RuleTemplateString = 84, RuleTemplatePart = 85
   };
 
   explicit HaoLangParser(antlr4::TokenStream *input);
@@ -159,7 +159,6 @@ public:
   class PrimaryContext;
   class LambdaContext;
   class LambdaParamsContext;
-  class ArrayLiteralContext;
   class ArrayElementListContext;
   class ArrayElementContext;
   class LiteralContext;
@@ -390,6 +389,7 @@ public:
     antlr4::tree::TerminalNode *IDENT();
     antlr4::tree::TerminalNode *COLON();
     TypeContext *type();
+    antlr4::tree::TerminalNode *ELLIPSIS();
     antlr4::tree::TerminalNode *ASSIGN();
     ExprContext *expr();
 
@@ -667,7 +667,8 @@ public:
   public:
     PropertyDeclContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
-    antlr4::tree::TerminalNode *IDENT();
+    std::vector<antlr4::tree::TerminalNode *> IDENT();
+    antlr4::tree::TerminalNode* IDENT(size_t i);
     antlr4::tree::TerminalNode *COLON();
     TypeContext *type();
     antlr4::tree::TerminalNode *LBRACE();
@@ -678,6 +679,11 @@ public:
     ModifierContext* modifier(size_t i);
     std::vector<AccessorContext *> accessor();
     AccessorContext* accessor(size_t i);
+    antlr4::tree::TerminalNode *ASSIGN();
+    ExprContext *expr();
+    antlr4::tree::TerminalNode *LPAREN();
+    antlr4::tree::TerminalNode *RPAREN();
+    antlr4::tree::TerminalNode *SEMI();
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
@@ -693,6 +699,8 @@ public:
     antlr4::tree::TerminalNode *IDENT();
     BlockContext *block();
     antlr4::tree::TerminalNode *SEMI();
+    std::vector<ModifierContext *> modifier();
+    ModifierContext* modifier(size_t i);
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
@@ -1750,11 +1758,15 @@ public:
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
   };
 
-  class  ArrayPrimaryContext : public PrimaryContext {
+  class  NewArrayInitPrimaryContext : public PrimaryContext {
   public:
-    ArrayPrimaryContext(PrimaryContext *ctx);
+    NewArrayInitPrimaryContext(PrimaryContext *ctx);
 
-    ArrayLiteralContext *arrayLiteral();
+    antlr4::tree::TerminalNode *NEW();
+    TypeContext *type();
+    antlr4::tree::TerminalNode *LBRACE();
+    antlr4::tree::TerminalNode *RBRACE();
+    ArrayElementListContext *arrayElementList();
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
   };
@@ -1829,21 +1841,6 @@ public:
   };
 
   LambdaParamsContext* lambdaParams();
-
-  class  ArrayLiteralContext : public antlr4::ParserRuleContext {
-  public:
-    ArrayLiteralContext(antlr4::ParserRuleContext *parent, size_t invokingState);
-    virtual size_t getRuleIndex() const override;
-    antlr4::tree::TerminalNode *LBRACK();
-    antlr4::tree::TerminalNode *RBRACK();
-    ArrayElementListContext *arrayElementList();
-
-
-    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
-  };
-
-  ArrayLiteralContext* arrayLiteral();
 
   class  ArrayElementListContext : public antlr4::ParserRuleContext {
   public:

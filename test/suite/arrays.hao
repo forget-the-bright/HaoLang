@@ -20,13 +20,13 @@ func arrSum(a: [Int]): Int {
 
 func arraysTest() {
     // ---------- 数组字面量与索引 ----------
-    val a = [10, 20, 30];
+    val a = new [Int]{ 10, 20, 30 };
     fmt.println(a.length);        // 3
     fmt.println(a[0]);            // 10
     fmt.println(a[2]);            // 30
 
     // ---------- 索引赋值 ----------
-    var b = [1, 2, 3];
+    var b = new [Int]{ 1, 2, 3 };
     b[1] = 99;
     fmt.println(b[1]);            // 99
     b[2] += 7;
@@ -39,16 +39,16 @@ func arraysTest() {
 
     // ---------- 数组作为参数 ----------
     fmt.println(arrSum(a));          // 60
-    fmt.println(arrSum([1, 2, 3, 4]));  // 10
+    fmt.println(arrSum(new [Int]{ 1, 2, 3, 4 }));  // 10
 
     // ---------- 空数组 ----------
-    val e = [];
+    val e = new [Int]{};
     fmt.println(e.length);        // 0
 
     // ---------- 浮点 / 字符串数组 ----------
-    val f = [1.5, 2.5, 3.0];
+    val f = new [Double]{ 1.5, 2.5, 3.0 };
     fmt.println(f[0] + f[1]);     // 4
-    val s = ["甲", "乙", "丙"];
+    val s = new [String]{ "甲", "乙", "丙" };
     for (x in s) {
         fmt.println(x);
     }
@@ -64,7 +64,7 @@ func arraysTest() {
     fmt.println($"break 后 n={n}");   // 6
 
     var odd = 0;
-    for (x in [1, 2, 3, 4, 5, 6]) {
+    for (x in new [Int]{ 1, 2, 3, 4, 5, 6 }) {
         if (x % 2 == 0) {
             continue;
         }
@@ -73,7 +73,7 @@ func arraysTest() {
     fmt.println($"奇数和={odd}");      // 9
 
     // ---------- 动态数组（带类型标注空数组 + push）----------
-    var xs: [Int] = [];
+    var xs: [Int] = new [Int]{};
     xs += 10;
     xs += 20;
     xs += 30;
@@ -91,20 +91,20 @@ func arraysTest() {
     fmt.println(xs[12]);         // 900
 
     // 字符串数组 push
-    var names: [String] = [];
+    var names: [String] = new [String]{};
     names += "alpha";
     names += "beta";
     names += "gamma";
     fmt.println(names[1]);       // beta
 
     // 字面量数组也可增长
-    var ds = [1.5, 2.5];
+    var ds = new [Double]{ 1.5, 2.5 };
     ds += 3.5;
     fmt.println(ds.length);      // 3
     fmt.println(ds[2]);          // 3.5
 
     // push 对象引用
-    var items: [ArrItem] = [];
+    var items: [ArrItem] = new [ArrItem]{};
     var m = 0;
     while (m < 5) {
         items += new ArrItem(m);
@@ -200,20 +200,20 @@ func arraysV32Extra() {
     fmt.println(zs[1]);                // x
 
     // ---------- v0.32：数组展开 [...a] ----------
-    val base = [1, 2];
-    val mid = [3, 4];
-    val spread = [...base, 9, ...mid];
+    val base = new [Int]{ 1, 2 };
+    val mid = new [Int]{ 3, 4 };
+    val spread = new [Int]{ ...base, 9, ...mid };
     fmt.println(spread.length);        // 5
     fmt.println(spread[0]);            // 1
     fmt.println(spread[2]);            // 9
     fmt.println(spread[4]);            // 4
-    val onlySpread = [...filled];
+    val onlySpread = new [Int]{ ...filled };
     fmt.println(onlySpread.length);    // 3
     fmt.println(onlySpread[1]);        // 7
 
     // ---------- 展开跨宽度：源按 esz 读再 coerce（勿用目标宽度 GEP）----------
     val z0: Long = 0;
-    val widen: [Long] = [z0, ...base];
+    val widen: [Long] = new [Long]{ z0, ...base };
     fmt.println(widen.length);         // 3
     fmt.println(widen[1]);             // 1
     fmt.println(widen[2]);             // 2

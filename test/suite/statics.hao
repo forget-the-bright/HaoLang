@@ -128,7 +128,7 @@ func staticsTest() {
     fmt.println(StColor.RED == StColor.RED);   // true
     fmt.println(StColor.RED == StColor.GREEN); // false
 
-    val colors = [StColor.RED, StColor.GREEN, StColor.BLUE];
+    val colors = new [StColor]{ StColor.RED, StColor.GREEN, StColor.BLUE };
     fmt.println(colors.length);          // 3
     for (c in colors) {
         fmt.println(c.ordinal());        // 0 1 2

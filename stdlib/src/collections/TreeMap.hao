@@ -30,7 +30,7 @@ class TreeMap<K, V> : Map<K, V> {
 
     func valueArray(): [V] {
         val ks = this.keys();
-        var out: [V] = [];
+        var out: [V] = new [V]{};
         var i = 0;
         while (i < ks.length) {
             out += this.get(ks[i])!!;
@@ -49,7 +49,7 @@ class TreeMap<K, V> : Map<K, V> {
 
     func entrySet(): Iterable<MapEntry<K, V>> {
         val ks = this.keys();
-        var out: [MapEntry<K, V>] = [];
+        var out: [MapEntry<K, V>] = new [MapEntry<K, V>]{};
         var i = 0;
         while (i < ks.length) {
             val k = ks[i];

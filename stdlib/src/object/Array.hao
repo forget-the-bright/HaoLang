@@ -1,0 +1,8 @@
+// HaoLang 标准库 —— object.Array（v0.60.3 / RFC-0005）
+// ------------------------------------------------------------
+//  所有 [T] 的统一基类（类型系统）。不可 new Array。
+//  length / capacity / clone 由编译器对数组接收者内建，不走实例虚表槽。
+package object;
+
+abstract class Array {
+}

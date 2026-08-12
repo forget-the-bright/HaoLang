@@ -14,7 +14,7 @@ func main() {
     var n = 1;
     when (n) {
         1 -> {
-            var xs: [Box] = [new Box("a"), new Box("b")];
+            var xs: [Box] = new [Box]{ new Box("a"), new Box("b") };
             for (it in xs) {
                 try {
                     gc.GC.collect();

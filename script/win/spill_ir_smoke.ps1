@@ -470,7 +470,7 @@ if ($traceEc -eq 0 -and $traceOut -match 'hao:irgen:acquire_spill next=') {
 # A8: HAO_IRGEN_TRACE=1 recycle_spill on for/continue emit
 @'
 func main() {
-    for (i in [0, 1, 2]) {
+    for (i in new [Int]{ 0, 1, 2 }) {
         var junk = "x"
         if (i == 0) { continue }
         fmt.println(junk == "x")

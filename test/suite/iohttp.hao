@@ -34,7 +34,7 @@ func ioHttpTest() {
     // FileStream：[Byte] 含 0x00 往返
     val path = "output/_suite_fs.bin";
     val w = os.FileStream.open(path, "wb");
-    var buf: [Byte] = [0, 1, 255, 128];
+    var buf: [Byte] = new [Byte]{ 0, 1, 255, 128 };
     fmt.println(w!!.writeBytes(buf));               // 4
     w!!.close();
     val r = os.FileStream.open(path, "rb");

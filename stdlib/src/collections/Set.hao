@@ -45,7 +45,7 @@ class Set<T> : Iterable<T> {
     // @return 新数组
     // 复杂度：O(capacity)
     func toArray(): [T] {
-        var keys: [T] = [];
+        var keys: [T] = new [T]{};
         var i = 0;
         while (i < this.map.table.length) {
             val e = this.map.table[i];

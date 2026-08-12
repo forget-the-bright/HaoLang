@@ -14,6 +14,12 @@ interface List<T> : Iterable<T> {
     func set(index: Int, item: T);
     func removeAt(index: Int): T;
     func isEmpty(): Bool;
+    func contains(item: T): Bool;
+    func indexOf(item: T): Int;
+    func lastIndexOf(item: T): Int;
+    func remove(item: T): Bool;
+    func addAll(items: [T]);
+    func clear();
 }
 
 class ArrayList<T> : List<T> {
@@ -22,7 +28,7 @@ class ArrayList<T> : List<T> {
     // 构造空列表。
     // 复杂度：O(1)
     constructor() {
-        this.items = [];
+        this.items = new [T]{};
     }
 
     // Iterable：返回迭代器（toArray 不拷贝，O(1)）。
@@ -81,6 +87,74 @@ class ArrayList<T> : List<T> {
     // 复杂度：O(1)
     func isEmpty(): Bool {
         return this.items.length == 0;
+    }
+
+    // 线性查找元素是否存在（相等用语言 ==）。
+    // @param item 目标元素
+    // @return 是否存在
+    // 复杂度：O(n)
+    func contains(item: T): Bool {
+        return this.indexOf(item) >= 0;
+    }
+
+    // 返回首次出现下标；未找到返回 -1。
+    // @param item 目标元素
+    // @return 0-based 下标或 -1
+    // 复杂度：O(n)
+    func indexOf(item: T): Int {
+        var i = 0;
+        while (i < this.items.length) {
+            if (this.items[i] == item) {
+                return i;
+            }
+            i += 1;
+        }
+        return -1;
+    }
+
+    // 返回末次出现下标；未找到返回 -1。
+    // @param item 目标元素
+    // @return 0-based 下标或 -1
+    // 复杂度：O(n)
+    func lastIndexOf(item: T): Int {
+        var i = this.items.length - 1;
+        while (i >= 0) {
+            if (this.items[i] == item) {
+                return i;
+            }
+            i -= 1;
+        }
+        return -1;
+    }
+
+    // 删除首次匹配元素。
+    // @param item 目标
+    // @return 是否删除成功
+    // 复杂度：O(n)
+    func remove(item: T): Bool {
+        val idx = this.indexOf(item);
+        if (idx < 0) {
+            return false;
+        }
+        this.removeAt(idx);
+        return true;
+    }
+
+    // 追加另一数组的全部元素。
+    // @param items 源数组
+    // 复杂度：O(n)
+    func addAll(items: [T]) {
+        var i = 0;
+        while (i < items.length) {
+            this.add(items[i]);
+            i += 1;
+        }
+    }
+
+    // 清空列表（重建空底层数组）。
+    // 复杂度：O(1)
+    func clear() {
+        this.items = new [T]{};
     }
 
     // 返回底层数组引用（不拷贝）。

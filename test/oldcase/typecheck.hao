@@ -80,7 +80,7 @@ func main() {
     fmt.println(s.speak());           // 汪汪
 
     // ---------- 数组中混合判定 ----------
-    val zoo = [new Dog(), new Cat(), new Dog()];
+    val zoo = new [Animal]{ new Dog(), new Cat(), new Dog() };
     var dogs = 0;
     for (x in zoo) {
         if (x is Dog) {

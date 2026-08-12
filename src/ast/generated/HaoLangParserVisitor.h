@@ -209,15 +209,13 @@ public:
 
     virtual std::any visitNewPrimary(HaoLangParser::NewPrimaryContext *context) = 0;
 
-    virtual std::any visitArrayPrimary(HaoLangParser::ArrayPrimaryContext *context) = 0;
+    virtual std::any visitNewArrayInitPrimary(HaoLangParser::NewArrayInitPrimaryContext *context) = 0;
 
     virtual std::any visitLambdaPrimary(HaoLangParser::LambdaPrimaryContext *context) = 0;
 
     virtual std::any visitLambda(HaoLangParser::LambdaContext *context) = 0;
 
     virtual std::any visitLambdaParams(HaoLangParser::LambdaParamsContext *context) = 0;
-
-    virtual std::any visitArrayLiteral(HaoLangParser::ArrayLiteralContext *context) = 0;
 
     virtual std::any visitArrayElementList(HaoLangParser::ArrayElementListContext *context) = 0;
 

@@ -15,7 +15,7 @@ interface gi_Iterator<T> {
 // 自定义泛型类实现泛型接口
 class gi_List<T> : gi_Iterable<T> {
     var items: [T];
-    constructor() { this.items = []; }
+    constructor() { this.items = new [T]{}; }
     func add(x: T) { this.items += x; }
     func size(): Int { return this.items.length; }
     func get(i: Int): T { return this.items[i]; }

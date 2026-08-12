@@ -652,6 +652,593 @@ const MethodInfo* IRGen::selectStaticOverload(
     return best.front();
 }
 
+bool IRGen::argListHasNamed(HaoLangParser::ArgListContext* al) {
+    if (!al) return false;
+    for (auto* a : al->arg())
+        if (a->IDENT()) return true;
+    return false;
+}
+
+bool IRGen::fillParamList(HaoLangParser::ParamListContext* pl,
+                          std::vector<std::string>& names,
+                          std::vector<TypePtr>& types,
+                          bool& isVarArg) {
+    isVarArg = false;
+    if (!pl) return true;
+    const auto params = pl->param();
+    for (size_t pi = 0; pi < params.size(); ++pi) {
+        auto* p = params[pi];
+        names.push_back(p->IDENT()->getText());
+        TypePtr pt = resolveType(p->type());
+        if (p->ELLIPSIS()) {
+            if (pi + 1 != params.size()) {
+                error(p, "可变参数 T... 必须位于参数列表末尾");
+                return false;
+            }
+            if (isVarArg) {
+                error(p, "只能有一个可变参数");
+                return false;
+            }
+            if (pt->kind == TypeKind::Array) {
+                error(p, "可变参数请写 T...，不要写 [T]...");
+                return false;
+            }
+            isVarArg = true;
+            pt = Type::makeArray(pt);
+        }
+        types.push_back(pt);
+    }
+    return true;
+}
+
+bool IRGen::bindCallArgExprs(HaoLangParser::ArgListContext* al,
+                             const std::vector<std::string>& paramNames,
+                             std::vector<HaoLangParser::ExprContext*>& slotExprs,
+                             std::vector<size_t>& sourceOrderSlots,
+                             antlr4::ParserRuleContext* ctx,
+                             bool allowNamed,
+                             bool reportErrors) {
+    const size_t n = paramNames.size();
+    const size_t nargs = al ? al->arg().size() : 0;
+    auto fail = [&](antlr4::ParserRuleContext* at, const std::string& msg) {
+        if (reportErrors) error(at ? at : ctx, msg);
+        return false;
+    };
+    if (nargs != n)
+        return fail(ctx, "需要 " + std::to_string(n) + " 个参数，实际 " +
+                             std::to_string(nargs) + " 个");
+
+    slotExprs.assign(n, nullptr);
+    sourceOrderSlots.clear();
+    sourceOrderSlots.reserve(nargs);
+    std::vector<bool> filled(n, false);
+    bool seenNamed = false;
+    size_t nextPos = 0;
+
+    for (size_t i = 0; i < nargs; ++i) {
+        auto* a = al->arg(i);
+        if (a->IDENT()) {
+            if (!allowNamed)
+                return fail(a, "此调用不支持具名实参");
+            seenNamed = true;
+            const std::string name = a->IDENT()->getText();
+            size_t slot = n;
+            for (size_t s = 0; s < n; ++s) {
+                if (paramNames[s] == name) {
+                    slot = s;
+                    break;
+                }
+            }
+            if (slot == n)
+                return fail(a, "未知的实参名 '" + name + "'");
+            if (filled[slot])
+                return fail(a, "实参 '" + name + "' 重复指定");
+            slotExprs[slot] = a->expr();
+            filled[slot] = true;
+            sourceOrderSlots.push_back(slot);
+        } else {
+            if (seenNamed)
+                return fail(a, "具名实参之后不能再写位置实参");
+            if (nextPos >= n)
+                return fail(a, "位置实参过多");
+            if (filled[nextPos])
+                return fail(a, "第 " + std::to_string(nextPos + 1) +
+                                   " 个参数已被具名指定");
+            slotExprs[nextPos] = a->expr();
+            filled[nextPos] = true;
+            sourceOrderSlots.push_back(nextPos);
+            ++nextPos;
+        }
+    }
+    for (size_t s = 0; s < n; ++s) {
+        if (!filled[s])
+            return fail(ctx, "缺少实参 '" + paramNames[s] + "'");
+    }
+    return true;
+}
+
+bool IRGen::collectCallArgsForFormals(
+    HaoLangParser::ArgListContext* al,
+    const std::vector<std::string>& paramNames,
+    const std::vector<TypePtr>& paramTypes,
+    std::vector<Value>& outArgs,
+    std::vector<antlr4::tree::ParseTree*>& outExprs,
+    antlr4::ParserRuleContext* ctx,
+    bool allowNamed,
+    bool isVarArg) {
+    if (!isVarArg) {
+        std::vector<HaoLangParser::ExprContext*> slotExprs;
+        std::vector<size_t> sourceOrderSlots;
+        if (!bindCallArgExprs(al, paramNames, slotExprs, sourceOrderSlots, ctx,
+                              allowNamed, true))
+            return false;
+
+        const size_t n = paramNames.size();
+        outArgs.assign(n, Value());
+        outExprs.assign(n, nullptr);
+        for (size_t slot : sourceOrderSlots) {
+            auto* ex = slotExprs[slot];
+            outExprs[slot] = ex;
+            const bool pushExpect =
+                slot < paramTypes.size() && paramTypes[slot] != nullptr;
+            if (pushExpect) expectedTypes_.push_back(paramTypes[slot]);
+            Value av = genExpr(ex);
+            if (pushExpect) expectedTypes_.pop_back();
+            if (!av.valid()) return false;
+            rootGcOperand(av);
+            outArgs[slot] = av;
+        }
+        return true;
+    }
+
+    // ---- RFC-0006 可变参数 ----
+    const size_t n = paramNames.size();
+    if (n == 0 || paramTypes.size() != n) {
+        error(ctx, "可变参数函数签名无效");
+        return false;
+    }
+    const size_t fixed = n - 1;
+    TypePtr arrTy = paramTypes.back();
+    TypePtr elemTy = (arrTy && arrTy->kind == TypeKind::Array && arrTy->elem)
+                         ? arrTy->elem : nullptr;
+    if (!elemTy) {
+        error(ctx, "可变参数元素类型无效");
+        return false;
+    }
+
+    const size_t nargs = al ? al->arg().size() : 0;
+    for (size_t i = 0; i < nargs; ++i) {
+        auto* a = al->arg(i);
+        if (a->IDENT()) {
+            const std::string name = a->IDENT()->getText();
+            if (name == paramNames.back()) {
+                error(a, "可变参数不能使用具名实参");
+                return false;
+            }
+            if (i >= fixed) {
+                error(a, "可变参数段不支持具名实参");
+                return false;
+            }
+        }
+    }
+
+    if (nargs < fixed) {
+        error(ctx, "需要至少 " + std::to_string(fixed) + " 个固定参数，实际 " +
+                       std::to_string(nargs) + " 个");
+        return false;
+    }
+
+    // 固定前缀：仅位置/具名绑定到 fixed 个形参
+    std::vector<std::string> fixedNames(paramNames.begin(),
+                                        paramNames.begin() + static_cast<std::ptrdiff_t>(fixed));
+    std::vector<TypePtr> fixedTypes(paramTypes.begin(),
+                                    paramTypes.begin() + static_cast<std::ptrdiff_t>(fixed));
+
+    // 构造「仅含固定实参」的绑定：把前缀 args 当作完整列表
+    // 简化：固定段只允许位置实参（具名固定前缀仍走手工）
+    outArgs.assign(n, Value());
+    outExprs.assign(n, nullptr);
+
+    // 绑定固定参数
+    if (fixed > 0) {
+        // 复用 bind：需要恰好 fixed 个「逻辑」实参来自 al 的前缀+具名
+        // 手工：位置填充 + 具名到 fixedNames
+        std::vector<HaoLangParser::ExprContext*> slotExprs(fixed, nullptr);
+        std::vector<bool> filled(fixed, false);
+        bool seenNamed = false;
+        size_t nextPos = 0;
+        size_t consumed = 0;
+        for (size_t i = 0; i < nargs; ++i) {
+            auto* a = al->arg(i);
+            if (a->IDENT()) {
+                seenNamed = true;
+                const std::string name = a->IDENT()->getText();
+                size_t slot = fixed;
+                for (size_t s = 0; s < fixed; ++s)
+                    if (fixedNames[s] == name) { slot = s; break; }
+                if (slot == fixed) {
+                    error(a, "未知的实参名 '" + name + "'");
+                    return false;
+                }
+                if (filled[slot]) {
+                    error(a, "实参 '" + name + "' 重复指定");
+                    return false;
+                }
+                slotExprs[slot] = a->expr();
+                filled[slot] = true;
+                consumed = i + 1;
+            } else {
+                if (seenNamed) {
+                    error(a, "具名实参之后不能再写位置实参");
+                    return false;
+                }
+                if (nextPos >= fixed) break; // 进入可变段
+                slotExprs[nextPos] = a->expr();
+                filled[nextPos] = true;
+                ++nextPos;
+                consumed = i + 1;
+            }
+        }
+        for (size_t s = 0; s < fixed; ++s) {
+            if (!filled[s]) {
+                error(ctx, "缺少实参 '" + fixedNames[s] + "'");
+                return false;
+            }
+            expectedTypes_.push_back(fixedTypes[s]);
+            Value av = genExpr(slotExprs[s]);
+            expectedTypes_.pop_back();
+            if (!av.valid()) return false;
+            rootGcOperand(av);
+            outArgs[s] = av;
+            outExprs[s] = slotExprs[s];
+        }
+        // 可变段从 consumed 开始；若固定全由具名填完，位置可能还没消费完
+        // 重新扫描：未用于固定的位置实参属于可变段
+    }
+
+    // 收集可变段表达式（所有未绑定到固定槽的位置实参，按源序）
+    std::vector<HaoLangParser::ExprContext*> varExprs;
+    {
+        std::vector<bool> used(nargs, false);
+        // 标记已用于固定的：通过再次匹配——简化为：前 fixed 个纯位置，或全部具名固定后剩余全是可变
+        size_t posSeen = 0;
+        bool anyNamedFixed = false;
+        for (size_t i = 0; i < nargs; ++i) {
+            if (al->arg(i)->IDENT()) {
+                anyNamedFixed = true;
+                used[i] = true; // 具名只可能是固定
+            } else {
+                if (!anyNamedFixed && posSeen < fixed) {
+                    used[i] = true;
+                    ++posSeen;
+                }
+            }
+        }
+        for (size_t i = 0; i < nargs; ++i)
+            if (!used[i]) {
+                if (al->arg(i)->IDENT()) {
+                    error(al->arg(i), "可变参数段不支持具名实参");
+                    return false;
+                }
+                varExprs.push_back(al->arg(i)->expr());
+            }
+    }
+
+    // 直传：恰好一个实参且已是 [T]
+    if (varExprs.size() == 1) {
+        expectedTypes_.push_back(arrTy);
+        Value av = genExpr(varExprs[0]);
+        expectedTypes_.pop_back();
+        if (!av.valid()) return false;
+        if (av.type->kind == TypeKind::Array && isAssignable(av.type, arrTy)) {
+            rootGcOperand(av);
+            outArgs[fixed] = coerce(av, arrTy, 0, 0);
+            outExprs[fixed] = varExprs[0];
+            return true;
+        }
+        // 单元素打包
+        if (!isAssignable(av.type, elemTy)) {
+            error(varExprs[0], "可变参数元素类型不匹配：期望 " + elemTy->toString() +
+                                   "，实际 " + av.type->toString());
+            return false;
+        }
+        rootGcOperand(av);
+        Value packed = genEmptyArray(elemTy);
+        // 用临时：hao_array_new(1) + store — 简化走 genArrayInit 不可用无 list
+        // 直接分配 length=1
+        {
+            int64_t esz = elemTy->arrayElemSize();
+            std::string isPtrLit = isGcPointerType(elemTy) ? "1" : "0";
+            std::string arrRaw = emitCall("ptr", "@hao_array_new",
+                "i64 1, i64 " + std::to_string(esz) + ", i64 " + isPtrLit);
+            std::string arrSlot = emitSpillGcRoot("vararg.arr", arrRaw);
+            std::string arr = emitLoad("ptr", arrSlot);
+            Value cv = coerce(av, elemTy, 0, 0);
+            std::string ptr = emitGep(elemTy->arrayGepType(), arr, "i64", "0");
+            emitHeapStore(ptr, cv.ir, elemTy, arr);
+            arr = emitLoad("ptr", arrSlot);
+            outArgs[fixed] = Value(arr, Type::makeArray(elemTy));
+            outExprs[fixed] = varExprs[0];
+            return true;
+        }
+    }
+
+    if (varExprs.empty()) {
+        Value empty = genEmptyArray(elemTy);
+        outArgs[fixed] = empty;
+        outExprs[fixed] = nullptr;
+        return true;
+    }
+
+    // 多实参打包
+    std::vector<Value> elems;
+    for (auto* ex : varExprs) {
+        expectedTypes_.push_back(elemTy);
+        Value av = genExpr(ex);
+        expectedTypes_.pop_back();
+        if (!av.valid()) return false;
+        if (!isAssignable(av.type, elemTy)) {
+            error(ex, "可变参数元素类型不匹配：期望 " + elemTy->toString() +
+                          "，实际 " + av.type->toString());
+            return false;
+        }
+        rootGcOperand(av);
+        elems.push_back(coerce(av, elemTy, 0, 0));
+    }
+    {
+        int64_t esz = elemTy->arrayElemSize();
+        std::string isPtrLit = isGcPointerType(elemTy) ? "1" : "0";
+        std::string total = std::to_string(elems.size());
+        std::string arrRaw = emitCall("ptr", "@hao_array_new",
+            "i64 " + total + ", i64 " + std::to_string(esz) + ", i64 " + isPtrLit);
+        std::string arrSlot = emitSpillGcRoot("vararg.arr", arrRaw);
+        std::string arr = emitLoad("ptr", arrSlot);
+        for (size_t i = 0; i < elems.size(); ++i) {
+            arr = emitLoad("ptr", arrSlot);
+            std::string ptr = emitGep(elemTy->arrayGepType(), arr, "i64",
+                                      std::to_string(i));
+            emitHeapStore(ptr, elems[i].ir, elemTy, arr);
+        }
+        arr = emitLoad("ptr", arrSlot);
+        outArgs[fixed] = Value(arr, Type::makeArray(elemTy));
+        outExprs[fixed] = varExprs.empty() ? nullptr : varExprs[0];
+        return true;
+    }
+}
+
+const MethodInfo* IRGen::collectCallArgsForMethodOverload(
+    HaoLangParser::ArgListContext* al,
+    const std::vector<const MethodInfo*>& cands,
+    std::vector<Value>& outArgs,
+    std::vector<antlr4::tree::ParseTree*>& outExprs,
+    antlr4::ParserRuleContext* ctx,
+    const std::string& displayName) {
+    const size_t nargs = al ? al->arg().size() : 0;
+    if (!argListHasNamed(al)) {
+        outArgs.clear();
+        outExprs.clear();
+        for (size_t k = 0; k < nargs; ++k) {
+            auto* aex = al->arg(k)->expr();
+            Value av = genExpr(aex);
+            if (!av.valid()) return nullptr;
+            rootGcOperand(av);
+            outArgs.push_back(av);
+            outExprs.push_back(aex);
+        }
+        return selectStaticOverload(cands, outArgs, ctx, displayName);
+    }
+
+    std::vector<const MethodInfo*> bindable;
+    for (const auto* c : cands) {
+        if (!c) continue;
+        std::vector<HaoLangParser::ExprContext*> slots;
+        std::vector<size_t> order;
+        if (bindCallArgExprs(al, c->paramNames, slots, order, ctx, true, false))
+            bindable.push_back(c);
+    }
+    if (bindable.empty()) {
+        error(ctx, displayName + "：具名实参无法匹配任何重载");
+        return nullptr;
+    }
+    if (bindable.size() == 1) {
+        if (!collectCallArgsForFormals(al, bindable[0]->paramNames,
+                                       bindable[0]->paramTypes, outArgs, outExprs,
+                                       ctx, true))
+            return nullptr;
+        return bindable[0];
+    }
+
+    // 多候选：源码序求值一次，再按各候选形参名入槽
+    std::vector<Value> srcVals;
+    std::vector<antlr4::tree::ParseTree*> srcExprs;
+    srcVals.reserve(nargs);
+    srcExprs.reserve(nargs);
+    for (size_t i = 0; i < nargs; ++i) {
+        auto* aex = al->arg(i)->expr();
+        Value av = genExpr(aex);
+        if (!av.valid()) return nullptr;
+        rootGcOperand(av);
+        srcVals.push_back(av);
+        srcExprs.push_back(aex);
+    }
+
+    int bestScore = 1000000;
+    std::vector<const MethodInfo*> best;
+    std::vector<Value> bestArgs;
+    std::vector<antlr4::tree::ParseTree*> bestExprs;
+    for (const auto* c : bindable) {
+        std::vector<HaoLangParser::ExprContext*> slots;
+        std::vector<size_t> order;
+        if (!bindCallArgExprs(al, c->paramNames, slots, order, ctx, true, false))
+            continue;
+        std::vector<Value> slotArgs(c->paramNames.size());
+        std::vector<antlr4::tree::ParseTree*> slotExprs(c->paramNames.size());
+        for (size_t i = 0; i < order.size(); ++i) {
+            size_t slot = order[i];
+            slotArgs[slot] = srcVals[i];
+            slotExprs[slot] = srcExprs[i];
+        }
+        int score = 0;
+        bool ok = true;
+        for (size_t k = 0; k < slotArgs.size(); ++k) {
+            if (!c->paramTypes[k]) {
+                ok = false;
+                break;
+            }
+            if (slotArgs[k].type->equals(*c->paramTypes[k])) continue;
+            if (!isAssignable(slotArgs[k].type, c->paramTypes[k])) {
+                ok = false;
+                break;
+            }
+            TypeKind from = slotArgs[k].type->kind;
+            TypeKind to = c->paramTypes[k]->kind;
+            int fr = Type::numericRank(from), tr = Type::numericRank(to);
+            if (fr > 0 && tr > 0) {
+                if (fr < tr) score += (tr - fr);
+                else if (fr > tr) score += (fr - tr) + 10;
+                else score += 1;
+            } else {
+                score += 1;
+            }
+        }
+        if (!ok) continue;
+        if (score < bestScore) {
+            bestScore = score;
+            best.assign(1, c);
+            bestArgs = std::move(slotArgs);
+            bestExprs = std::move(slotExprs);
+        } else if (score == bestScore) {
+            best.push_back(c);
+        }
+    }
+    if (best.empty()) {
+        error(ctx, displayName + "：没有与实参类型匹配的重载");
+        return nullptr;
+    }
+    if (best.size() > 1) {
+        error(ctx, displayName + "：实参同时匹配多个重载，存在歧义");
+        return nullptr;
+    }
+    outArgs = std::move(bestArgs);
+    outExprs = std::move(bestExprs);
+    return best.front();
+}
+
+SymbolPtr IRGen::collectCallArgsForSymbolOverload(
+    HaoLangParser::ArgListContext* al,
+    const std::vector<SymbolPtr>& cands,
+    std::vector<Value>& outArgs,
+    std::vector<antlr4::tree::ParseTree*>& outExprs,
+    antlr4::ParserRuleContext* ctx,
+    const std::string& displayName) {
+    const size_t nargs = al ? al->arg().size() : 0;
+    if (!argListHasNamed(al)) {
+        outArgs.clear();
+        outExprs.clear();
+        for (size_t k = 0; k < nargs; ++k) {
+            auto* aex = al->arg(k)->expr();
+            Value av = genExpr(aex);
+            if (!av.valid()) return nullptr;
+            rootGcOperand(av);
+            outArgs.push_back(av);
+            outExprs.push_back(aex);
+        }
+        return selectOverload(cands, outArgs, ctx, displayName);
+    }
+
+    std::vector<SymbolPtr> bindable;
+    for (const auto& c : cands) {
+        if (!c) continue;
+        std::vector<HaoLangParser::ExprContext*> slots;
+        std::vector<size_t> order;
+        if (bindCallArgExprs(al, c->paramNames, slots, order, ctx, true, false))
+            bindable.push_back(c);
+    }
+    if (bindable.empty()) {
+        error(ctx, displayName + "：具名实参无法匹配任何重载");
+        return nullptr;
+    }
+    if (bindable.size() == 1) {
+        if (!collectCallArgsForFormals(al, bindable[0]->paramNames,
+                                       bindable[0]->paramTypes, outArgs, outExprs,
+                                       ctx, true))
+            return nullptr;
+        return bindable[0];
+    }
+
+    std::vector<Value> srcVals;
+    std::vector<antlr4::tree::ParseTree*> srcExprs;
+    for (size_t i = 0; i < nargs; ++i) {
+        auto* aex = al->arg(i)->expr();
+        Value av = genExpr(aex);
+        if (!av.valid()) return nullptr;
+        rootGcOperand(av);
+        srcVals.push_back(av);
+        srcExprs.push_back(aex);
+    }
+
+    int bestScore = 1000000;
+    std::vector<SymbolPtr> best;
+    std::vector<Value> bestArgs;
+    std::vector<antlr4::tree::ParseTree*> bestExprs;
+    for (const auto& c : bindable) {
+        std::vector<HaoLangParser::ExprContext*> slots;
+        std::vector<size_t> order;
+        if (!bindCallArgExprs(al, c->paramNames, slots, order, ctx, true, false))
+            continue;
+        std::vector<Value> slotArgs(c->paramNames.size());
+        std::vector<antlr4::tree::ParseTree*> slotExprsPt(c->paramNames.size());
+        for (size_t i = 0; i < order.size(); ++i) {
+            size_t slot = order[i];
+            slotArgs[slot] = srcVals[i];
+            slotExprsPt[slot] = srcExprs[i];
+        }
+        int score = 0;
+        bool ok = true;
+        for (size_t k = 0; k < slotArgs.size(); ++k) {
+            if (!c->paramTypes[k]) {
+                ok = false;
+                break;
+            }
+            if (slotArgs[k].type->equals(*c->paramTypes[k])) continue;
+            if (!isAssignable(slotArgs[k].type, c->paramTypes[k])) {
+                ok = false;
+                break;
+            }
+            TypeKind from = slotArgs[k].type->kind;
+            TypeKind to = c->paramTypes[k]->kind;
+            int fr = Type::numericRank(from), tr = Type::numericRank(to);
+            if (fr > 0 && tr > 0) {
+                if (fr < tr) score += (tr - fr);
+                else if (fr > tr) score += (fr - tr) + 10;
+                else score += 1;
+            } else {
+                score += 1;
+            }
+        }
+        if (!ok) continue;
+        if (score < bestScore) {
+            bestScore = score;
+            best.assign(1, c);
+            bestArgs = std::move(slotArgs);
+            bestExprs = std::move(slotExprsPt);
+        } else if (score == bestScore) {
+            best.push_back(c);
+        }
+    }
+    if (best.empty()) {
+        error(ctx, displayName + "：没有与实参类型匹配的重载");
+        return nullptr;
+    }
+    if (best.size() > 1) {
+        error(ctx, displayName + "：实参同时匹配多个重载，存在歧义");
+        return nullptr;
+    }
+    outArgs = std::move(bestArgs);
+    outExprs = std::move(bestExprs);
+    return best.front();
+}
+
 std::string IRGen::staticMethodIRName(const std::string& classIRName,
                                       const std::string& methodName,
                                       const std::vector<TypePtr>& params,
@@ -965,6 +1552,12 @@ bool IRGen::isAssignable(const TypePtr& from, const TypePtr& to) {
         return true;
     }
 
+    // RFC-0005：[T] → Array；Array → Array
+    if (isArrayBaseClass(to) && from->kind == TypeKind::Array && !from->isNull())
+        return true;
+    if (isArrayBaseClass(to) && isArrayBaseClass(from) && !from->isNull())
+        return true;
+
     // 子类 -> 父类：对象布局保证父类字段在前、虚表槽位一致，
     // 因此无需任何指针调整。泛型类型需先转为单态化实例名。
     if (from->kind == TypeKind::Class && to->kind == TypeKind::Class &&
@@ -1222,10 +1815,8 @@ void IRGen::collectFunctionSignatures(const SourceUnit& u) {
             : Type::makeUnit();
 
         if (auto* pl = fn->paramList()) {
-            for (auto* p : pl->param()) {
-                sym->paramNames.push_back(p->IDENT()->getText());
-                sym->paramTypes.push_back(resolveType(p->type()));
-            }
+            if (!fillParamList(pl, sym->paramNames, sym->paramTypes, sym->isVarArg))
+                continue;
         }
 
         sym->type = Type::makeFunc(sym->paramTypes, sym->returnType);
@@ -1623,19 +2214,28 @@ Value IRGen::callGenericFunction(const std::string& tplName,
 
     // 模板形参类型（含 TypeParam）
     std::vector<TypePtr> tplParams;
+    std::vector<std::string> paramNames;
     auto* fn = tmpl.decl;
     if (auto* pl = fn->paramList())
-        for (auto* p : pl->param())
+        for (auto* p : pl->param()) {
+            paramNames.push_back(p->IDENT()->getText());
             tplParams.push_back(resolveType(p->type()));
+        }
 
-    size_t nargs = al ? al->arg().size() : 0;
+    std::vector<HaoLangParser::ExprContext*> slotExprs;
+    std::vector<size_t> sourceOrderSlots;
+    if (!bindCallArgExprs(al, paramNames, slotExprs, sourceOrderSlots, ctx, true,
+                          true)) {
+        currentTypeParams_ = savedParams0;
+        currentPkgPrefix_ = savedPrefix0;
+        currentSubst_ = savedSubst0;
+        return Value();
+    }
+    size_t nargs = paramNames.size();
 
     // 判断某个实参表达式是否为 lambda（需要期望类型才能推断参数/返回）。
-    // 对裸 lambda 实参（map(arr, { it*2 })）沿优先级链下降到 primary。
-    auto isLambdaArg = [&](size_t k) -> HaoLangParser::LambdaContext* {
-        antlr4::tree::ParseTree* node = al->arg(k)->expr();
-        // 沿单孩子链下降到 postfixExpr（裸 lambda 没有运算符/后缀，每
-        // 一层只有一个孩子即下一优先级的子表达式）
+    auto isLambdaExpr = [&](antlr4::tree::ParseTree* node)
+        -> HaoLangParser::LambdaContext* {
         for (;;) {
             if (auto* pe = dynamic_cast<HaoLangParser::PostfixExprContext*>(node)) {
                 if (pe->postfixOp().empty()) {
@@ -1650,50 +2250,52 @@ Value IRGen::callGenericFunction(const std::string& tplName,
         }
     };
 
-    // ---- 第一遍：求值非 lambda 实参，建立初步替换表（如 [T] 得到 T）----
+    // ---- 第一遍：求值非 lambda 实参（源码序），建立初步替换表 ----
     std::vector<Value> args(nargs);
     TypeSubst subst;
-    for (size_t k = 0; k < nargs; ++k) {
-        if (isLambdaArg(k)) continue;
-        Value av = genExpr(al->arg(k)->expr());
-        if (!av.valid()) { currentTypeParams_=savedParams0; currentPkgPrefix_=savedPrefix0; currentSubst_=savedSubst0; return Value(); }
+    for (size_t slot : sourceOrderSlots) {
+        if (isLambdaExpr(slotExprs[slot])) continue;
+        Value av = genExpr(slotExprs[slot]);
+        if (!av.valid()) {
+            currentTypeParams_ = savedParams0;
+            currentPkgPrefix_ = savedPrefix0;
+            currentSubst_ = savedSubst0;
+            return Value();
+        }
         rootGcOperand(av);
-        args[k] = av;
-        if (k < tplParams.size())
-            unifyWithArg(tplParams[k], av.type, subst, ctx);
+        args[slot] = av;
+        if (slot < tplParams.size())
+            unifyWithArg(tplParams[slot], av.type, subst, ctx);
     }
 
-    // ---- 第二遍：求值 lambda 实参 ----
-    //  用已知替换把形参函数类型具体化（T 已有值，R 仍是 TypeParam），
-    //  作为期望类型压栈，lambda 据此确定参数类型、并从函数体推断返回类型，
-    //  随后再合一，从而得到 R。
-    for (size_t k = 0; k < nargs; ++k) {
-        if (!isLambdaArg(k)) continue;
+    // ---- 第二遍：求值 lambda 实参（源码序）----
+    for (size_t slot : sourceOrderSlots) {
+        if (!isLambdaExpr(slotExprs[slot])) continue;
         TypePtr expected;
-        if (k < tplParams.size()) {
-            expected = substType(tplParams[k], subst);
-            // 仍未解析的类型参数（如 map 的 R）不能作为 lambda 的期望类型：
-            // 它要求 lambda 返回 TypeParam，会与实际返回的具体类型冲突。
-            // 把这些位置换成 Unknown，让 lambda 自己从函数体推断，随后合一得到它们。
+        if (slot < tplParams.size()) {
+            expected = substType(tplParams[slot], subst);
             if (expected->kind == TypeKind::Func) {
                 auto conv = std::make_shared<Type>(*expected);
                 for (auto& p : conv->params)
                     if (p->hasTypeParam()) p = Type::makeUnknown();
-                // 仍未解析的返回类型（如 map 的 R）置空，让 lambda 从函数体推断，
-                // 再由 unifyWithArg 把实际返回类型绑定到 R
                 if (conv->elem && conv->elem->hasTypeParam())
                     conv->elem = nullptr;
                 expected = conv;
             }
             expectedTypes_.push_back(expected);
         }
-        Value av = genExpr(al->arg(k)->expr());
-        if (k < tplParams.size()) expectedTypes_.pop_back();
-        if (!av.valid()) { currentTypeParams_=savedParams0; currentPkgPrefix_=savedPrefix0; currentSubst_=savedSubst0; return Value(); }
+        Value av = genExpr(slotExprs[slot]);
+        if (slot < tplParams.size()) expectedTypes_.pop_back();
+        if (!av.valid()) {
+            currentTypeParams_ = savedParams0;
+            currentPkgPrefix_ = savedPrefix0;
+            currentSubst_ = savedSubst0;
+            return Value();
+        }
         rootGcOperand(av);
-        args[k] = av;
-        if (k < tplParams.size())
-            unifyWithArg(tplParams[k], av.type, subst, ctx);
+        args[slot] = av;
+        if (slot < tplParams.size())
+            unifyWithArg(tplParams[slot], av.type, subst, ctx);
     }
 
     currentTypeParams_ = savedParams0;
@@ -1721,7 +2323,7 @@ Value IRGen::callGenericFunction(const std::string& tplName,
         }
         args[k] = coerce(args[k], sym->paramTypes[k], 0, 0);
         if (k) argStr += ", ";
-        argStr += formatCallArg(sym->paramTypes[k], al->arg(k)->expr(), args[k]);
+        argStr += formatCallArg(sym->paramTypes[k], slotExprs[k], args[k]);
     }
     if (sym->returnType->isUnit()) {
         emitCallVoid(sym->irName, argStr);
@@ -1736,11 +2338,16 @@ void IRGen::genPendingFunctionInstances() {
         auto batch = pendingFnInstances_;
         pendingFnInstances_.clear();
         for (auto& pi : batch) {
-            auto savedSubst  = currentSubst_;
-            auto savedParams = currentTypeParams_;
-            auto savedPrefix = currentPkgPrefix_;
+            auto savedSubst   = currentSubst_;
+            auto savedParams  = currentTypeParams_;
+            auto savedPrefix  = currentPkgPrefix_;
+            auto savedImports = currentImports_;
+            auto savedImpPath = currentImportPath_;
             currentSubst_ = pi.subst;
             currentPkgPrefix_ = pi.pkgPrefix;
+            // 与泛型方法一致：恢复模板所属包的 import，否则体里
+            // exception.Exception 等限定名在实例化点（如 main）解析失败。
+            restoreImportsForPkgPrefix(currentPkgPrefix_);
             currentTypeParams_.clear();
             for (auto& [k, v] : pi.subst) currentTypeParams_.insert(k);
             auto sym = syms_.global()->lookup(pi.instName);
@@ -1748,6 +2355,8 @@ void IRGen::genPendingFunctionInstances() {
             currentSubst_      = savedSubst;
             currentTypeParams_ = savedParams;
             currentPkgPrefix_  = savedPrefix;
+            currentImports_    = savedImports;
+            currentImportPath_ = savedImpPath;
         }
     }
 }

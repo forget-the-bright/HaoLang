@@ -679,7 +679,7 @@ if ($okFld) {
 # --- D9: -g array index assign has dbg.value ---
 @'
 func main() {
-    var a: [Int] = [0, 0]
+    var a: [Int] = new [Int]{ 0, 0 }
     a[0] = 9
     fmt.println(a[0] == 9)
 }
@@ -804,7 +804,7 @@ if ($okLeaf) {
 # --- D11: -g for-iter has dbg.value ---
 @'
 func main() {
-    for (x in [1, 2]) {
+    for (x in new [Int]{ 1, 2 }) {
         fmt.println(x > 0)
     }
 }

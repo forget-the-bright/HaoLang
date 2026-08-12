@@ -9,7 +9,7 @@ func main() {
         return;
     }
     val f = fs!!;
-    var buf: [Byte] = [0, 1, 255, 128];
+    var buf: [Byte] = new [Byte]{ 0, 1, 255, 128 };
     fmt.println(f.writeBytes(buf));
     f.close();
 

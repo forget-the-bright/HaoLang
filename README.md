@@ -5,11 +5,11 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.59.1**（crash 可观测 + 本地时区 + CRT 残留 snprintf；承接 v0.59.0 Java 对标；套件基线 1032）
-- 测试基线：`test/suite` **1032** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` 34/34；`hao version` = 0.59.1
+- 当前版本：**v0.60.3**（强制 `new` 数组 + `Array` 基类 + `T...` + 自动属性增强；RFC-0005～0007）
+- 测试基线：`test/suite` **1049** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` 38 拒绝；`hao version` = 0.60.3
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
-- **下一批（默认）**：IR concat epic / miss tid / 功能轨——见 [`记忆文档.md`](记忆文档.md) 第 10 章
-- **P5/P6 独立冒烟 + IR/FFI 门禁**：`powershell -File script/win/p5_smoke.ps1` → `P5_SMOKE+IR_SYNC OK`
+- **下一批（默认）**：发现残面 / 软 STW 债 / 功能轨续——见 [`记忆文档.md`](记忆文档.md) 第 10 章
+- **P5～P13 独立冒烟**：`powershell -File script/win/p5_smoke.ps1` → `…+P12+P13 OK`
 
 ---
 
@@ -145,7 +145,7 @@ func main() {
 |----|--------|
 | `lang` / `lang.Bit` | 装箱包装与位工具（隐式预导入 lang） |
 | `fmt` / `object` / `hash` | 打印、Object 根、散列 |
-| `collections` | `Map` 接口 + HashMap/LHM/TreeMap/CHM；List/Set/Queue/Stack 与树等 |
+| `collections` | `Map`/`List` 接口；HashMap/LHM/TreeMap/CHM；`ArrayList`/`LinkedList`；**`Arrays`** 算法工具；Set/Queue/Stack 与树等 |
 | `exception` / `assert` / `text` / `math` / `random` | 异常、断言、文本、数学、随机 |
 | `os` | 文件 / Path / 环境 / FileStream |
 | `sync` / `thread` / `channel` | 互斥与原子、线程池、channel + `haoroutine` / `select` |
@@ -309,7 +309,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 ## 十、版本时间线
 
-各版本专节见 [`docs/项目时间线/索引.md`](docs/项目时间线/索引.md)。当前合订：[`v0.50-0.59.md`](docs/项目时间线/v0.50-0.59.md)。
+各版本专节见 [`docs/项目时间线/索引.md`](docs/项目时间线/索引.md)。当前合订：[`v0.60-0.69.md`](docs/项目时间线/v0.60-0.69.md)。
 
 ---
 
@@ -317,7 +317,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 
 - GC：可达性主路径已交付；concurrent sweep 为停顿排期。能力面见抬头版本；详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)。
-- **已交付指针**：OOP/where/自动属性/接口默认（v0.58）；装箱+`? extends`/`? super` PECS（v0.59）；crash `time=`/`where=`/`hao_stack` + 本地时区（v0.59.1）——详 [`docs/项目时间线/v0.50-0.59.md`](docs/项目时间线/v0.50-0.59.md) / [`docs/hao语法.md`](docs/hao语法.md)。不做 C# 声明处 `in`/`out`。
+- **已交付指针**：OOP/where/自动属性/接口默认（v0.58）；装箱+`? extends`/`? super` PECS（v0.59）；crash `time=`/`where=`/`hao_stack` + 本地时区（v0.59.1）；数组业务上移 `Arrays`+List API（v0.60）——详 [`docs/项目时间线/`](docs/项目时间线/索引.md) / [`docs/hao语法.md`](docs/hao语法.md)。不做 C# 声明处 `in`/`out`。
 - 多文件/包是**整盘编译**（无 `.a`/增量编译）。
 - `new Int`/`new String` 会当成内建类型失败；禁 `Int→lang.Long` 拓宽+装箱链式。
 - 位运算整数族 + 一元 `~`；`lang.Bit` 位模式为 **Long**；**json/regex/FileStream/Http** 已在 v0.28（无流式 JSON Reader/Writer、无 `@JSONField` 全量）。
@@ -352,7 +352,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 | 状态 | 内容 |
 |------|------|
 | ✅ 已完成 | **v0.55.56** 文档全局治理；**v0.55.55** monitor 50RPS CRT；**v0.55.54** monitor AV 栈对齐；**v0.55.53** 定位十九期；**v0.55.52** 定位十八期；**v0.55.51** 定位十七期；**v0.55.50** 定位十六期 |
-| 🔥 **下一批（默认开干）** | 据 miss tid 收握手税 / 扩 IROps（cast/gep/select）清 Expr 残留（记忆文档 §I） |
+| 🔥 **下一批（默认开干）** | 功能轨（具名实参）/ 发现残面 / 软 STW 债（记忆文档第 10 章） |
 | 其后 | I0/I3/I4 dbg（挂 IROps）→ Sema/作用域机（后置）→ select / sweep → 自举 |
 
 实现步骤见 [`记忆文档.md` 第 10 章](记忆文档.md)；历史见 [`docs/项目时间线/`](docs/项目时间线/索引.md)。

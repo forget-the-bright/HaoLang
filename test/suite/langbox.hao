@@ -97,7 +97,7 @@ func langBoxTest() {
     fmt.println(bu.uintValue());
 
     // ---- v0.26.1：Bool=i8 / [Bool] esz=1 / Boolean.compare / MIN_VALUE / 无符号 toStr ----
-    var ba: [Bool] = [true, false, true];
+    var ba: [Bool] = new [Bool]{ true, false, true };
     fmt.println(ba[0]);
     fmt.println(ba[1]);
     ba += false;

@@ -2,7 +2,7 @@ package main;
 
 // map：把 [T] 通过 (T)->R 转换成 [R]。T 从数组推断，R 从 lambda 返回推断
 func map<T, R>(arr: [T], f: (T) -> R): [R] {
-    var out: [R] = [];
+    var out: [R] = new [R]{};
     var i = 0;
     while (i < arr.length) {
         out += f(arr[i]);
@@ -13,7 +13,7 @@ func map<T, R>(arr: [T], f: (T) -> R): [R] {
 
 // filter：保留谓词为 true 的元素
 func filter<T>(arr: [T], pred: (T) -> Bool): [T] {
-    var out: [T] = [];
+    var out: [T] = new [T]{};
     var i = 0;
     while (i < arr.length) {
         if (pred(arr[i])) {
@@ -47,7 +47,7 @@ func reduce<T, R>(arr: [T], init: R, f: (R, T) -> R): R {
 func add(a: Int, b: Int): Int { return a + b; }
 
 func main() {
-    var nums = [1, 2, 3, 4, 5];
+    var nums = new [Int]{ 1, 2, 3, 4, 5 };
 
     // map T=Int, R=Int（显式参数类型）
     var doubled = map(nums, { x: Int -> x * 2 });

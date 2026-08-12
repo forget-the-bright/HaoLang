@@ -12,7 +12,7 @@ class Gcv3Static {
 
 class Gcv3Holder {
     var kid: String = "";
-    var arr: [String] = [];
+    var arr: [String] = new [String]{};
     constructor() {}
 }
 

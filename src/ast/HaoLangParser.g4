@@ -91,8 +91,9 @@ paramList
     : param (COMMA param)*
     ;
 
+// ELLIPSIS = 可变参数 T...（须位于 paramList 末位，语义层校验）
 param
-    : IDENT COLON type (ASSIGN expr)?
+    : IDENT COLON type ELLIPSIS? (ASSIGN expr)?
     ;
 
 typeParams
@@ -163,9 +164,11 @@ constructorDecl
     : modifier* CONSTRUCTOR LPAREN paramList? RPAREN block
     ;
 
-// C# 风格自动属性： public var name: String { get; set; }
+// C# 风格自动属性（v0.60.3）：默认值、accessor 可见性、OnChange(fn)
+// OnChange 为属性后缀上下文关键字（IDENT 须为 OnChange，语义层校验）
 propertyDecl
     : modifier* (VAL | VAR) IDENT COLON type LBRACE accessor+ RBRACE
+      (ASSIGN expr)? (IDENT LPAREN IDENT RPAREN)? SEMI?
     ;
 
 // get / set 作为"上下文关键字"：仅在属性块内有特殊含义。
@@ -173,7 +176,7 @@ propertyDecl
 // 这与 C# 的处理一致。此处语法上接受任意标识符，
 // 是否为合法访问器名由语义分析阶段校验。
 accessor
-    : IDENT (block | SEMI)
+    : modifier* IDENT (block | SEMI)
     ;
 
 fieldDecl
@@ -443,7 +446,7 @@ primary
     | whenStmt                                     # whenPrimary
     | LPAREN expr RPAREN                           # parenPrimary
     | NEW type LPAREN argList? RPAREN              # newPrimary
-    | arrayLiteral                                 # arrayPrimary
+    | NEW type LBRACE arrayElementList? RBRACE     # newArrayInitPrimary
     | lambda                                       # lambdaPrimary
     ;
 
@@ -456,11 +459,7 @@ lambdaParams
     : IDENT (COLON type)? (COMMA IDENT (COLON type)?)*
     ;
 
-// 数组字面量：带初值 [1,2,3]；展开 [...a, 9, ...b]（v0.32）
-arrayLiteral
-    : LBRACK arrayElementList? RBRACK
-    ;
-
+// 数组元素列表：仅用于 new [T]{ ... }（v0.60.3 废止裸 [1,2,3] 构造）
 arrayElementList
     : arrayElement (COMMA arrayElement)*
     ;

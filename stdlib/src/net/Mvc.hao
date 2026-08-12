@@ -61,7 +61,7 @@ public class FilterChain {
     var terminal: RouteTerminal;
 
     constructor() {
-        this.filters = [];
+        this.filters = new [HttpFilter]{};
         this.index = 0;
         this.terminal = new RouteTerminal();
     }
@@ -126,10 +126,10 @@ public class HttpApp {
         this.server = new ServerSocket();
         this.port = 0;
         this.routes = new collections.HashMap<String, RouteBinding>();
-        this.filters = [];
-        this.interceptors = [];
+        this.filters = new [HttpFilter]{};
+        this.interceptors = new [HandlerInterceptor]{};
         this.running = false;
-        this.staticMounts = [];
+        this.staticMounts = new [StaticMount]{};
     }
 
     // v0.49：挂载静态目录；GET urlPrefix/... → root/...
@@ -452,7 +452,7 @@ public class HttpApp {
         }
         val ctrl = bind.ctrl!!;
         val t = reflect.typeOf(ctrl);
-        var args: [Long] = [];
+        var args: [Long] = new [Long]{};
         args += reflect.ptrOf(req);
         val retType = t.methodReturnType(bind.methodName);
         if (retType == "Unit" || retType == "void") {

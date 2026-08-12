@@ -38,7 +38,7 @@ func main() {
     fmt.println(Color.RED == Color.GREEN); // false
 
     // 泛型集合装枚举
-    val colors = [Color.RED, Color.GREEN, Color.BLUE];
+    val colors = new [Color]{ Color.RED, Color.GREEN, Color.BLUE };
     fmt.println(colors.length);          // 3
     for (c in colors) {
         fmt.println(c.ordinal());        // 0 1 2

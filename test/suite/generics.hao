@@ -74,12 +74,12 @@ func genericsTest() {
     fmt.println(swapped.getValue()); // 年龄
 
     // ---- 泛型 + 数组 ----
-    val h = new GHolder<Int>([10, 20, 30]);
+    val h = new GHolder<Int>(new [Int]{ 10, 20, 30 });
     fmt.println(h.first());          // 10
     fmt.println(h.last());           // 30
     fmt.println(h.size());           // 3
 
-    val hs = new GHolder<String>(["甲", "乙", "丙"]);
+    val hs = new GHolder<String>(new [String]{ "甲", "乙", "丙" });
     fmt.println(hs.last());          // 丙
 
     // ---- 链式调用 ----
@@ -98,7 +98,7 @@ func genericsTest() {
     fmt.println(bb.get());             // true
 
     // ---- 泛型函数（T 由实参推断）----
-    fmt.println(gFirstOf([7, 8, 9]));     // 7
-    fmt.println(gFirstOf(["a", "b"]));     // a
-    fmt.println(gCountIf([1, 2, 1, 3, 1], 1));  // 3
+    fmt.println(gFirstOf(new [Int]{ 7, 8, 9 }));     // 7
+    fmt.println(gFirstOf(new [String]{ "a", "b" }));     // a
+    fmt.println(gCountIf(new [Int]{ 1, 2, 1, 3, 1 }, 1));  // 3
 }

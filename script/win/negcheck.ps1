@@ -12,14 +12,14 @@ $cases = @(
     @{ name = "Int?+="; code = "package main;`nfunc main() { var x: Int? = 1; x += 1; }" },
     @{ name = "Bool?&&"; code = "package main;`nfunc main() { var b: Bool? = true; if (b && true) {} }" },
     @{ name = "if Bool?"; code = "package main;`nfunc main() { var b: Bool? = true; if (b) {} }" },
-    @{ name = "idx Int?"; code = "package main;`nfunc main() { var a: [Int] = [1]; var i: Int? = 0; fmt.println(a[i]); }" },
+    @{ name = "idx Int?"; code = "package main;`nfunc main() { var a: [Int] = new [Int]{ 1 }; var i: Int? = 0; fmt.println(a[i]); }" },
     @{ name = "Int? ?? String"; code = "package main;`nfunc main() { var x: Int? = null; fmt.println(x ?? `"x`"); }" },
     @{ name = "tmpl Int?"; code = "package main;`nfunc main() { var x: Int? = 1; val s = `$`"n=`$`{x}`"; fmt.println(s); }" },
     @{ name = "str+="; code = "package main;`nfunc main() { var s = `"a`"; var x: Int? = 1; s += x; }" },
     @{ name = "Int? to Long?"; code = "package main;`nfunc main() { var a: Int? = 1; var b: Long? = a; fmt.println(b!!); }" },
-    @{ name = "spread non-array"; code = "package main;`nfunc main() { val x = 1; val a = [...x]; fmt.println(a.length); }" },
+    @{ name = "spread non-array"; code = "package main;`nfunc main() { val x = 1; val a = new [Int]{ ...x }; fmt.println(a.length); }" },
     @{ name = "new array arity"; code = "package main;`nfunc main() { val a = new [Int](); fmt.println(a.length); }" },
-    @{ name = "spread Array?"; code = "package main;`nfunc main() { var a: [Int]? = [1]; val b = [...a]; fmt.println(b.length); }" },
+    @{ name = "spread Array?"; code = "package main;`nfunc main() { var a: [Int]? = new [Int]{ 1 }; val b = new [Int]{ ...a }; fmt.println(b.length); }" },
     @{ name = "when expr no else"; code = "package main;`nfunc main() { val x = when (1) { 2 -> 3 }; fmt.println(x); }" },
     @{ name = "Func?"; code = "package main;`nfunc main() { var f: Func<Int,Int>? = null; fmt.println(f != null); }" },
     @{ name = "Int? == Long?"; code = "package main;`nfunc main() { var a: Int? = 1; var b: Long? = 1; fmt.println(a == b); }" },
@@ -38,7 +38,11 @@ $cases = @(
     @{ name = "Int to Long wrap"; code = "package main;`nfunc main() { var a: Int = 1; var bad: lang.Long = a; }" },
     @{ name = "Integer to Long"; code = "package main;`nfunc main() { var a: Integer = Integer.valueOf(1); var bad: Long = a; }" },
     @{ name = "wild extends add"; code = "package main;`nimport collections.*;`nclass Animal { constructor() {} }`nclass Dog : Animal { constructor() { super() } }`nfunc main() { val dogs: List<Dog> = new ArrayList<Dog>(); val view: List<? extends Animal> = dogs; view.add(new Dog()); }" },
-    @{ name = "wild super bad add"; code = "package main;`nimport collections.*;`nclass Animal { constructor() {} }`nclass Dog : Animal { constructor() { super() } }`nclass Cat : Animal { constructor() { super() } }`nfunc main() { val xs: List<? super Dog> = new ArrayList<Animal>(); xs.add(new Cat()); }" }
+    @{ name = "wild super bad add"; code = "package main;`nimport collections.*;`nclass Animal { constructor() {} }`nclass Dog : Animal { constructor() { super() } }`nclass Cat : Animal { constructor() { super() } }`nfunc main() { val xs: List<? super Dog> = new ArrayList<Animal>(); xs.add(new Cat()); }" },
+    @{ name = "bare array lit"; code = "package main;`nfunc main() { val a = [1, 2, 3]; }" },
+    @{ name = "Array index"; code = "package main;`nfunc main() { val a: Array = new [Int]{ 1 }; fmt.println(a[0]); }" },
+    @{ name = "vararg mid"; code = "package main;`nfunc Bad(a: Int..., b: Int) { }`nfunc main() {}" },
+    @{ name = "new Array"; code = "package main;`nfunc main() { val a = new Array(); }" }
 )
 
 $dir = "target\test\negcheck"

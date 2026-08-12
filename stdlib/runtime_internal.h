@@ -273,6 +273,8 @@ int64_t hao_array_check(void* arr, int64_t idx);
 void*   hao_array_get_obj(void* arr, int64_t idx); /* 指针宽元素 → 托管引用；禁 i64 藏针 */
 void*   hao_array_push(void* arr, int64_t value);
 int64_t hao_array_pop(void* arr);
+/* 浅拷贝：新数组独立实例，元素位型复制（指针元素共享对象） */
+void*   hao_array_clone(void* arr);
 
 /* ============================================================
  *  字符串（runtime_string.c）—— 语言 String = HaoString*

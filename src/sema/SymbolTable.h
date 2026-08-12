@@ -92,8 +92,14 @@ struct MethodInfo {
     bool isSyntheticProp = false;
     std::string propFieldName;   //  backing 字段名
 
+    // RFC-0006：末位可变参数
+    bool isVarArg = false;
+
     // 是否静态方法（无隐式 this，ClassName.f() 直接静态调用）
     bool isStatic = false;
+
+    // RFC-0007：OnChange(fn) 单参回调名（合成 set 末尾调用）
+    std::string onChangeCallee;
 
     // 声明该方法的类名。用于继承：子类继承父类方法时，
     // 虚表项仍指向父类的实现（@Animal.info），不重复生成代码。
@@ -241,6 +247,7 @@ struct ClassInfo {
     std::string ctorIRName;                    // 构造函数 IR 名，空表示无
     std::vector<TypePtr> ctorParamTypes;
     std::vector<std::string> ctorParamNames;
+    bool ctorIsVarArg = false;
 
     // ---- 接口实现与虚表 ----
     //  虚表槽位采用「全局编号」：接口方法由接口注册顺序统一分配，
@@ -409,6 +416,8 @@ struct Symbol {
     std::vector<TypePtr> paramTypes;
     std::vector<std::string> paramNames;
     TypePtr returnType;
+    // RFC-0006：末位 T... → 函数内类型为 [T]
+    bool isVarArg = false;
 
     // ---- 类：字段与方法信息 ----
     ClassInfoPtr classInfo;

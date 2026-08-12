@@ -509,7 +509,7 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
         // 带类型标注的空数组字面量 []：按标注的元素类型生成，
         // 避免无标注时退化为 [Int]，导致后续 push 其它类型报类型错。
         if (declared && declared->kind == TypeKind::Array &&
-            isEmptyArrayLiteral(vd->expr())) {
+            isEmptyArrayInit(vd->expr())) {
             TypePtr elem = declared->elem ? declared->elem : Type::makeInt();
             init = genEmptyArray(elem);
         } else {

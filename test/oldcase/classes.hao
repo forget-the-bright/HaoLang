@@ -116,7 +116,7 @@ func main() {
     fmt.println(kid.isAdult());      // false
 
     // ---------- 对象数组 ----------
-    val pts = [new Point(1, 1), new Point(2, 2), new Point(3, 3)];
+    val pts = new [Point]{ new Point(1, 1), new Point(2, 2), new Point(3, 3) };
     fmt.println(pts.length);         // 3
     for (pt in pts) {
         fmt.println(pt.sum());       // 2, 4, 6

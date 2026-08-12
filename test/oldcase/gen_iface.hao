@@ -16,7 +16,7 @@ interface MyIterator<T> {
 // 自定义泛型类实现泛型接口
 class MyList<T> : MyIterable<T> {
     var items: [T];
-    constructor() { this.items = []; }
+    constructor() { this.items = new [T]{}; }
     func add(x: T) { this.items += x; }
     func iterator(): MyIterator<T> {
         return new MyListIter<T>(this.items);

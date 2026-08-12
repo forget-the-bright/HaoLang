@@ -11,7 +11,7 @@ class Box {
 
 func main() {
     var outer = new Box("outer");
-    var xs = [new Box("a"), new Box("b")];
+    var xs = new [Box]{ new Box("a"), new Box("b") };
     try {
         throw new Exception("boom");
     } catch (e: Exception) {

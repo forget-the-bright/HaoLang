@@ -1,0 +1,157 @@
+// HaoLang 标准库 —— collections.Arrays
+// ----------------------------------------------
+//  数组算法层工具（对标 Java java.util.Arrays 的常用面）。
+//  组合语言内建 [T]：length / 下标 / += / new [T](n)。
+//  布局与带屏障的 push/pop 仍在 runtime_array.c（永久 C 底座）。
+//  相等比较使用语言 `==`（值类型按值；引用按身份）。
+//  不是：动态扩容实现；也不是 List（请用 ArrayList / LinkedList）。
+package collections;
+
+import exception;
+
+// @param a 数组
+// @return 是否长度为 0
+// 复杂度：O(1)
+func isEmpty<T>(a: [T]): Bool {
+    return a.length == 0;
+}
+
+// 线性查找元素是否存在。
+// @param a    数组
+// @param item 目标元素
+// @return 是否存在
+// 复杂度：O(n)
+func contains<T>(a: [T], item: T): Bool {
+    var i = 0;
+    while (i < a.length) {
+        if (a[i] == item) {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// 返回首次出现下标；未找到返回 -1。
+// @param a    数组
+// @param item 目标元素
+// @return 0-based 下标或 -1
+// 复杂度：O(n)
+func indexOf<T>(a: [T], item: T): Int {
+    var i = 0;
+    while (i < a.length) {
+        if (a[i] == item) {
+            return i;
+        }
+        i += 1;
+    }
+    return -1;
+}
+
+// 返回末次出现下标；未找到返回 -1。
+// @param a    数组
+// @param item 目标元素
+// @return 0-based 下标或 -1
+// 复杂度：O(n)
+func lastIndexOf<T>(a: [T], item: T): Int {
+    var i = a.length - 1;
+    while (i >= 0) {
+        if (a[i] == item) {
+            return i;
+        }
+        i -= 1;
+    }
+    return -1;
+}
+
+// 长度相同且逐元 == 则相等。
+// @param a 左数组
+// @param b 右数组
+// @return 是否相等
+// 复杂度：O(n)
+func equals<T>(a: [T], b: [T]): Bool {
+    if (a.length != b.length) {
+        return false;
+    }
+    var i = 0;
+    while (i < a.length) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// 浅拷贝整个数组（新分配，元素按值/引用拷贝）。
+// @param a 源数组
+// @return 新数组，长度与 a 相同
+// 复杂度：O(n)
+func copyOf<T>(a: [T]): [T] {
+    val n = a.length;
+    val out = new [T](n);
+    var i = 0;
+    while (i < n) {
+        out[i] = a[i];
+        i += 1;
+    }
+    return out;
+}
+
+// 拷贝并调整长度：newLength > len 时尾部为元素零值；更短则截断。
+// @param a         源数组
+// @param newLength 新长度（须 >= 0）
+// @return 新数组
+// 异常：newLength < 0 → Exception
+// 复杂度：O(min(len, newLength))
+// 注：不与一元 copyOf 做泛型重载（单态化模板按名缓存），故独立符号名。
+func copyOfLength<T>(a: [T], newLength: Int): [T] {
+    if (newLength < 0) {
+        throw new exception.Exception("Arrays.copyOfLength：newLength 非法");
+    }
+    val out = new [T](newLength);
+    val n = a.length;
+    var lim = n;
+    if (lim > newLength) {
+        lim = newLength;
+    }
+    var i = 0;
+    while (i < lim) {
+        out[i] = a[i];
+        i += 1;
+    }
+    return out;
+}
+
+// 浅拷贝半开区间 [from, to)。
+// @param a    源数组
+// @param from 起始下标（含）
+// @param to   结束下标（不含）
+// @return 新数组，长度为 to-from
+// 异常：from/to 非法 → Exception
+// 复杂度：O(to-from)
+func copyOfRange<T>(a: [T], from: Int, to: Int): [T] {
+    if (from < 0 || to < from || to > a.length) {
+        throw new exception.Exception("Arrays.copyOfRange：区间非法");
+    }
+    val n = to - from;
+    val out = new [T](n);
+    var i = 0;
+    while (i < n) {
+        out[i] = a[from + i];
+        i += 1;
+    }
+    return out;
+}
+
+// 用 value 就地填满数组。
+// @param a     目标数组
+// @param value 填充值
+// 复杂度：O(n)
+func fill<T>(a: [T], value: T) {
+    var i = 0;
+    while (i < a.length) {
+        a[i] = value;
+        i += 1;
+    }
+}

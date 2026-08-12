@@ -26,7 +26,7 @@ func byteTest() {
     fmt.println(b << 1);         // 84
 
     // ---------- 紧凑 [Byte] 字面量 / 下标 / 赋值 ----------
-    var buf: [Byte] = [0, 1, 255, 128];
+    var buf: [Byte] = new [Byte]{ 0, 1, 255, 128 };
     fmt.println(buf.length);     // 4
     fmt.println(buf[0]);         // 0
     fmt.println(buf[2]);         // 255
@@ -52,7 +52,7 @@ func byteTest() {
     fmt.println(sum);            // 593
 
     // ---------- 与 [Int] 并存 ----------
-    val ints = [1, 2, 3];
+    val ints = new [Int]{ 1, 2, 3 };
     fmt.println(ints.length);    // 3
     fmt.println(ints[1]);        // 2
 

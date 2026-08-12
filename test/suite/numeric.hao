@@ -41,27 +41,27 @@ func numericTest() {
     fmt.println(L << 1);               // 30
 
     // ---- 紧凑数组 esz ----
-    var shorts: [Short] = [1, 2, 3];
+    var shorts: [Short] = new [Short]{ 1, 2, 3 };
     fmt.println(shorts.length);        // 3
     fmt.println(shorts[1]);            // 2
     shorts += 4;
     fmt.println(shorts.pop());         // 4
 
-    var floats: [Float] = [1.0, 2.0];
+    var floats: [Float] = new [Float]{ 1.0, 2.0 };
     fmt.println(floats.length);        // 2
     floats[0] = 3.5;
     fmt.println(floats[0]);            // 3.5
     floats += 4.5;
     fmt.println(floats.pop());         // 4.5
 
-    var doubles: [Double] = [];
+    var doubles: [Double] = new [Double]{};
     doubles += 9.25;
     fmt.println(doubles.pop());        // 9.25
 
-    var longs: [Long] = [100, 200];
+    var longs: [Long] = new [Long]{ 100, 200 };
     fmt.println(longs[1]);             // 200
 
-    var ints: [Int] = [10, 20, 30];
+    var ints: [Int] = new [Int]{ 10, 20, 30 };
     fmt.println(ints[2]);              // 30
 
     // ---- 包装类 ----

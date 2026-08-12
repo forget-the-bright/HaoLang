@@ -1059,23 +1059,9 @@ TypePtr IRGen::inferNodeType(antlr4::tree::ParseTree* start) {
             return Type::makeUnknown();
         }
 
-        // ---- 数组字面量（含 ... 展开）----
-        if (auto* ap = dynamic_cast<HaoLangParser::ArrayPrimaryContext*>(node)) {
-            auto* list = ap->arrayLiteral()->arrayElementList();
-            if (!list || list->arrayElement().empty())
-                return Type::makeArray(Type::makeInt());
-            for (auto* ae : list->arrayElement()) {
-                TypePtr t = inferExprType(ae->expr());
-                if (!t) continue;
-                if (ae->ELLIPSIS()) {
-                    if (t->kind == TypeKind::Array && t->elem)
-                        return Type::makeArray(t->elem);
-                    continue;
-                }
-                return Type::makeArray(t);
-            }
-            return Type::makeArray(Type::makeInt());
-        }
+        // ---- 数组初始化 new [T]{...} ----
+        if (auto* nip = dynamic_cast<HaoLangParser::NewArrayInitPrimaryContext*>(node))
+            return resolveType(nip->type());
 
         // ---- new 表达式（含 new [T](n[, fill])）----
         if (auto* np = dynamic_cast<HaoLangParser::NewPrimaryContext*>(node))
@@ -1200,7 +1186,7 @@ TypePtr IRGen::inferNodeType(antlr4::tree::ParseTree* start) {
                 }
                 if (auto* mem = dynamic_cast<HaoLangParser::MemberAccessContext*>(ops[0])) {
                     std::string fname = mem->IDENT()->getText();
-                    if (fname == "length") return Type::makeInt();
+                    if (fname == "length" || fname == "capacity") return Type::makeInt();
                     // 单字段：obj.field → 字段类型（供 when 推断）
                     TypePtr recvTy = inferNodeType(pf->primary());
                     if (recvTy && recvTy->kind == TypeKind::Class) {

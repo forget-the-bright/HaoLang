@@ -395,7 +395,7 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any visitArrayPrimary(HaoLangParser::ArrayPrimaryContext *ctx) override {
+  virtual std::any visitNewArrayInitPrimary(HaoLangParser::NewArrayInitPrimaryContext *ctx) override {
     return visitChildren(ctx);
   }
 
@@ -408,10 +408,6 @@ public:
   }
 
   virtual std::any visitLambdaParams(HaoLangParser::LambdaParamsContext *ctx) override {
-    return visitChildren(ctx);
-  }
-
-  virtual std::any visitArrayLiteral(HaoLangParser::ArrayLiteralContext *ctx) override {
     return visitChildren(ctx);
   }
 

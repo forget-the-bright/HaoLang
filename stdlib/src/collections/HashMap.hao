@@ -35,7 +35,7 @@ class HashMap<K, V> : Map<K, V> {
         this.capacity = 16;
         this.count = 0;
         this.growthEnabled = true;
-        this.table = [];
+        this.table = new [HashMapBucket<K,V>?]{};
         var i = 0;
         while (i < 16) {
             this.table += null;
@@ -52,7 +52,7 @@ class HashMap<K, V> : Map<K, V> {
         if (this.capacity <= 0 || this.capacity > 1073741823) { return; }
         val old = this.table;
         this.capacity = this.capacity * 2;
-        this.table = [];
+        this.table = new [HashMapBucket<K,V>?]{};
         this.count = 0;
         var i = 0;
         while (i < this.capacity) {
@@ -176,7 +176,7 @@ class HashMap<K, V> : Map<K, V> {
     func clear() {
         this.capacity = 16;
         this.count = 0;
-        this.table = [];
+        this.table = new [HashMapBucket<K,V>?]{};
         var i = 0;
         while (i < 16) {
             this.table += null;
@@ -211,7 +211,7 @@ class HashMap<K, V> : Map<K, V> {
 
     // 便利：键数组快照（非 Map 接口；套件/内部用）
     func keys(): [K] {
-        var out: [K] = [];
+        var out: [K] = new [K]{};
         var i = 0;
         while (i < this.table.length) {
             val e = this.table[i];
@@ -224,7 +224,7 @@ class HashMap<K, V> : Map<K, V> {
     }
 
     func valueArray(): [V] {
-        var out: [V] = [];
+        var out: [V] = new [V]{};
         var i = 0;
         while (i < this.table.length) {
             val e = this.table[i];
@@ -245,7 +245,7 @@ class HashMap<K, V> : Map<K, V> {
     }
 
     func entrySet(): Iterable<MapEntry<K, V>> {
-        var out: [MapEntry<K, V>] = [];
+        var out: [MapEntry<K, V>] = new [MapEntry<K, V>]{};
         var i = 0;
         while (i < this.table.length) {
             val e = this.table[i];

@@ -152,7 +152,7 @@ func main() {
     fmt.println(a.name);              // 影子
 
     // ---------- 多态数组 ----------
-    val zoo = [new Dog("A", 1), new Cat("B", 2), new Puppy("C")];
+    val zoo = new [Animal]{ new Dog("A", 1), new Cat("B", 2), new Puppy("C") };
     for (x in zoo) {
         fmt.println(x.speak());       // 汪汪 / 喵喵 / 奶声汪汪
     }

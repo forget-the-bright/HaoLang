@@ -402,7 +402,7 @@ class RedBlackTree<K, V> {
     // 复杂度：O(n)
     // 数组形参按引用传递：walk 内 out += 扩容会写回调用方。
     func inorderKeys(): [K] {
-        var out: [K] = [];
+        var out: [K] = new [K]{};
         this.walk(this.root, out);
         return out;
     }

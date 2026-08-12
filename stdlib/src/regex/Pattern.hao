@@ -79,7 +79,7 @@ class Pattern {
     }
 
     func split(input: String): [String] {
-        var out: [String] = [];
+        var out: [String] = new [String]{};
         val m = this.matcher(input);
         var last = 0;
         while (m.find()) {

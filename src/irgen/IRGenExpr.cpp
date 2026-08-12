@@ -237,7 +237,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
 
                     Value rhs;
                     if (op == "=" && sfi->type->kind == TypeKind::Array &&
-                        isEmptyArrayLiteral(e->assignExpr())) {
+                        isEmptyArrayInit(e->assignExpr())) {
                         rhs = genEmptyArray(sfi->type->elem
                                             ? sfi->type->elem : Type::makeInt());
                     } else {
@@ -398,7 +398,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                 // [String] 字段会类型不匹配，这里按目标元素类型生成）
                 Value rhs;
                 if (op == "=" && fi->type->kind == TypeKind::Array &&
-                    isEmptyArrayLiteral(e->assignExpr())) {
+                    isEmptyArrayInit(e->assignExpr())) {
                     rhs = genEmptyArray(fi->type->elem
                                         ? fi->type->elem : Type::makeInt());
                 } else {
@@ -415,6 +415,20 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                         return Value();
                     }
                     rhs = coerce(rhs, fi->type, 0, 0);
+                    // RFC-0007：自动属性赋值走 setX（OnChange / 自定义 set 体）
+                    if (fi->isAutoProperty) {
+                        std::string sname = propSetterName(fname);
+                        const MethodInfo* sm = ci->findMethod(sname);
+                        if (sm && sm->isSyntheticProp &&
+                            sm->propFieldName == fname) {
+                            std::string argStr =
+                                "ptr " + recv.ir + ", " +
+                                formatCallArg(fi->type, nullptr, rhs);
+                            emitCallVoid(sm->irName, argStr);
+                            emitDbgValueIf(fi->type->llvmType(), rhs.ir, fname, 0, 0);
+                            return rhs;
+                        }
+                    }
                     emitHeapStore(fp, rhs.ir, fi->type, recv.ir);
                     /* D8：实例字段赋值薄 dbg.value */
                     emitDbgValueIf(fi->type->llvmType(), rhs.ir, fname, 0, 0);
@@ -731,7 +745,7 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
 
     // 空数组字面量 [] 按变量标注类型生成（与 var 声明一致）
     if (op == "=" && sym->type->kind == TypeKind::Array &&
-        isEmptyArrayLiteral(e->assignExpr())) {
+        isEmptyArrayInit(e->assignExpr())) {
         rhs = genEmptyArray(sym->type->elem ? sym->type->elem : Type::makeInt());
     }
 
@@ -1323,6 +1337,28 @@ Value IRGen::genRelational(HaoLangParser::RelationalExprContext* e) {
                           e->getStart()->getCharPositionInLine());
         }
 
+        // RFC-0005：数组 ↔ Array 基类
+        if (obj.type->kind == TypeKind::Array && isArrayBaseClass(target)) {
+            if (isIs) return Value("1", Type::makeBool());
+            return Value(obj.ir, Type::makeClass("object$Array"));
+        }
+        if (isArrayBaseClass(obj.type) && isArrayBaseClass(target)) {
+            if (isIs) return Value("1", Type::makeBool());
+            return Value(obj.ir, Type::makeClass("object$Array"));
+        }
+        if (isArrayBaseClass(obj.type) &&
+            target->kind == TypeKind::Class &&
+            (target->className == "object$Object" || target->className == "Object")) {
+            if (isIs) return Value("1", Type::makeBool());
+            return Value(obj.ir, target);
+        }
+        // Array as [T]：编译期仅当静态已知为同布局时允许——基类擦除后拒绝静默 as [T]
+        if (isArrayBaseClass(obj.type) && target->kind == TypeKind::Array) {
+            error(e, "不能将 Array 直接 as 为 " + target->toString() +
+                     "（元素类型已擦除；请保持 [T] 静态类型）");
+            return Value();
+        }
+
         if (obj.type->kind != TypeKind::Class &&
             obj.type->kind != TypeKind::Interface) {
             error(e, std::string(isIs ? "is" : "as") +
@@ -1740,7 +1776,7 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
                    " 直接访问成员 '" + field + "'，请使用 '?.' 或 '!!'");
         return Value();
     }
-    // String / 数组的 length（C 仍返回 i64，截断为 Int）
+    // String / 数组的 length、capacity（C 仍返回 i64，截断为 Int）
     if (field == "length") {
         if (base.type->kind == TypeKind::String) {
             Value b = base;
@@ -1749,13 +1785,20 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
             std::string reg = emitCast("trunc", "i64", wide, "i32");
             return Value(reg, Type::makeInt());
         }
-        if (base.type->kind == TypeKind::Array) {
+        if (isArrayReceiver(base.type)) {
             Value b = base;
             rootGcOperand(b);
             std::string wide = emitCall("i64", "@hao_array_len", "ptr " + b.ir);
             std::string reg = emitCast("trunc", "i64", wide, "i32");
             return Value(reg, Type::makeInt());
         }
+    }
+    if (field == "capacity" && isArrayReceiver(base.type)) {
+        Value b = base;
+        rootGcOperand(b);
+        std::string wide = emitCall("i64", "@hao_array_cap", "ptr " + b.ir);
+        std::string reg = emitCast("trunc", "i64", wide, "i32");
+        return Value(reg, Type::makeInt());
     }
 
     // 对象字段读取
@@ -1890,6 +1933,10 @@ Value IRGen::applyIndex(const Value& base, HaoLangParser::IndexOpContext* io,
         return Value(reg, Type::makeChar());
     }
 
+    if (isArrayBaseClass(baseR.type)) {
+        error(ctx, "Array 基类不支持下标访问，请使用具体 [T]");
+        return Value();
+    }
     if (baseR.type->kind != TypeKind::Array) {
         error(ctx, "只能对数组或字符串使用索引访问，实际为 " + baseR.type->toString());
         return Value();
@@ -1924,8 +1971,12 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
     rootGcOperand(recvR);
 
     // ===== 数组内建方法 =====
-    if (recvR.type->kind == TypeKind::Array) {
+    if (isArrayReceiver(recvR.type)) {
         if (method == "pop") {
+            if (isArrayBaseClass(recvR.type)) {
+                error(ctx, "Array 基类不支持 pop()，请使用具体 [T]");
+                return Value();
+            }
             if (call->argList()) {
                 error(ctx, "数组的 pop() 方法不接受参数");
                 return Value();
@@ -1935,7 +1986,17 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
             std::string reg = em_.unboxFromI64(raw, elemType);
             return Value(reg, elemType);
         }
-        error(ctx, "数组没有方法 '" + method + "'（当前仅支持 pop()）");
+        if (method == "clone") {
+            if (call->argList()) {
+                error(ctx, "数组的 clone() 方法不接受参数");
+                return Value();
+            }
+            std::string raw = emitCall("ptr", "@hao_array_clone", "ptr " + recvR.ir);
+            if (recvR.type->kind == TypeKind::Array)
+                return Value(raw, Type::makeArray(recvR.type->elem));
+            return Value(raw, Type::makeClass("object$Array"));
+        }
+        error(ctx, "数组没有方法 '" + method + "'（支持 pop()/clone()）");
         return Value();
     }
 
@@ -2003,18 +2064,9 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
 
         std::vector<Value> args;
         std::vector<antlr4::tree::ParseTree*> argExprs;
-        if (auto* al = call->argList())
-            for (size_t k = 0; k < al->arg().size(); ++k) {
-                if (k < expectParams.size())
-                    expectedTypes_.push_back(expectParams[k]);
-                auto* aex = al->arg(k)->expr();
-                Value av = genExpr(aex);
-                if (k < expectParams.size()) expectedTypes_.pop_back();
-                if (!av.valid()) return Value();
-                rootGcOperand(av);
-                args.push_back(av);
-                argExprs.push_back(aex);
-            }
+        if (!collectCallArgsForFormals(call->argList(), im->paramNames, expectParams,
+                                       args, argExprs, ctx, true, im->isVarArg))
+            return Value();
         if (args.size() != expectParams.size()) {
             error(ctx, "接口方法 '" + ii->name + "." + method + "' 需要 " +
                        std::to_string(expectParams.size()) + " 个参数，实际提供 " +
@@ -2093,16 +2145,9 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
             emitStaticEnsureInit(ci);
             std::vector<Value> args;
             std::vector<antlr4::tree::ParseTree*> argExprs;
-            if (auto* al = call->argList())
-                for (auto* a : al->arg()) {
-                    Value av = genExpr(a->expr());
-                    if (!av.valid()) return Value();
-                    rootGcOperand(av);
-                    args.push_back(av);
-                    argExprs.push_back(a->expr());
-                }
-            const MethodInfo* smi = selectStaticOverload(
-                staticCands, args, ctx, ci->name + "." + method);
+            const MethodInfo* smi = collectCallArgsForMethodOverload(
+                call->argList(), staticCands, args, argExprs, ctx,
+                ci->name + "." + method);
             if (!smi) return Value();
             if (!canAccessMember(smi->visibility, smi->ownerClass)) {
                 error(ctx, std::string("不能访问 ") + visName(smi->visibility) +
@@ -2148,6 +2193,10 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
             const auto& fnParams = sff->type->params;
             std::vector<Value> args;
             std::vector<antlr4::tree::ParseTree*> argExprs;
+            if (argListHasNamed(call->argList())) {
+                error(ctx, "函数值调用不支持具名实参");
+                return Value();
+            }
             if (auto* al = call->argList())
                 for (auto* a : al->arg()) {
                     Value av = genExpr(a->expr());
@@ -2218,6 +2267,10 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                 const auto& fnParams = ffi->type->params;
                 std::vector<Value> args;
                 std::vector<antlr4::tree::ParseTree*> argExprs;
+                if (argListHasNamed(call->argList())) {
+                    error(ctx, "函数值调用不支持具名实参");
+                    return Value();
+                }
                 if (auto* al = call->argList())
                     for (auto* a : al->arg()) {
                         Value av = genExpr(a->expr());
@@ -2265,31 +2318,14 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
     std::vector<Value> args;
     std::vector<antlr4::tree::ParseTree*> argExprs;
     if (instCands.size() == 1) {
-        // Single candidate: push expectedTypes so lambdas infer (e.g. ()->Unit)
         mi = instCands[0];
-        if (auto* al = call->argList())
-            for (size_t k = 0; k < al->arg().size(); ++k) {
-                if (k < mi->paramTypes.size())
-                    expectedTypes_.push_back(mi->paramTypes[k]);
-                auto* aex = al->arg(k)->expr();
-                Value av = genExpr(aex);
-                if (k < mi->paramTypes.size()) expectedTypes_.pop_back();
-                if (!av.valid()) return Value();
-                rootGcOperand(av);
-                args.push_back(av);
-                argExprs.push_back(aex);
-            }
+        if (!collectCallArgsForFormals(call->argList(), mi->paramNames, mi->paramTypes,
+                                       args, argExprs, ctx, true, mi->isVarArg))
+            return Value();
     } else {
-        // Overload: evaluate without expected, then select
-        if (auto* al = call->argList())
-            for (auto* a : al->arg()) {
-                Value av = genExpr(a->expr());
-                if (!av.valid()) return Value();
-                rootGcOperand(av);
-                args.push_back(av);
-                argExprs.push_back(a->expr());
-            }
-        mi = selectStaticOverload(instCands, args, ctx, ci->name + "." + method);
+        mi = collectCallArgsForMethodOverload(call->argList(), instCands, args,
+                                              argExprs, ctx,
+                                              ci->name + "." + method);
         if (!mi) return Value();
     }
 
@@ -2603,26 +2639,19 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                             return Value();
                         }
                         auto* al = call->argList();
-                        size_t nargs = al ? al->arg().size() : 0;
-
                         auto& oc = overloads_[sym->name];
                         if (oc.size() > 1) {
                             std::vector<Value> args;
-                            args.reserve(nargs);
-                            for (size_t k = 0; k < nargs; ++k) {
-                                Value av = genExpr(al->arg(k)->expr());
-                                if (!av.valid()) return Value();
-                                rootGcOperand(av);
-                                args.push_back(av);
-                            }
-                            auto chosen = selectOverload(oc, args, e, alias + "." + member);
+                            std::vector<antlr4::tree::ParseTree*> argExprs;
+                            auto chosen = collectCallArgsForSymbolOverload(
+                                al, oc, args, argExprs, e, alias + "." + member);
                             if (!chosen) return Value();
                             std::string argStr;
                             for (size_t k = 0; k < args.size(); ++k) {
                                 args[k] = coerce(args[k], chosen->paramTypes[k], 0, 0);
                                 if (k) argStr += ", ";
                                 argStr += formatCallArg(chosen->paramTypes[k],
-                                                        al->arg(k)->expr(), args[k],
+                                                        argExprs[k], args[k],
                                                         !chosen->isExtern);
                             }
                             if (chosen->returnType->isUnit()) {
@@ -2634,55 +2663,16 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                         }
 
                         if (genericFns_.count(sym->name)) {
-                            std::vector<Value> args;
-                            args.reserve(nargs);
-                            for (size_t k = 0; k < nargs; ++k) {
-                                Value av = genExpr(al->arg(k)->expr());
-                                if (!av.valid()) return Value();
-                                rootGcOperand(av);
-                                args.push_back(av);
-                            }
-                            auto inst = instantiateFunction(sym->name, args, e);
-                            if (!inst || diags_.hasErrors()) return Value();
-                            std::string argStr;
-                            for (size_t k = 0; k < args.size(); ++k) {
-                                if (!isAssignable(args[k].type, inst->paramTypes[k])) {
-                                    error(e, alias + "." + member + " 第 " +
-                                             std::to_string(k+1) + " 个参数类型不匹配：期望 " +
-                                             inst->paramTypes[k]->toString() + "，实际 " +
-                                             args[k].type->toString());
-                                    return Value();
-                                }
-                                args[k] = coerce(args[k], inst->paramTypes[k], 0, 0);
-                                if (k) argStr += ", ";
-                                argStr += formatCallArg(inst->paramTypes[k],
-                                                        al->arg(k)->expr(), args[k]);
-                            }
-                            if (inst->returnType->isUnit()) {
-                                emitCallVoid(inst->irName, argStr);
-                                return Value("", Type::makeUnit());
-                            }
-                            std::string reg = emitCall(inst->returnType->llvmType(), inst->irName, argStr);
-                            return Value(reg, inst->returnType);
+                            Value r = callGenericFunction(sym->name, al, e);
+                            if (diags_.hasErrors() || !r.valid()) return Value();
+                            return r;
                         }
 
                         std::vector<Value> args;
-                        args.reserve(nargs);
-                        for (size_t k = 0; k < nargs; ++k) {
-                            if (k < sym->paramTypes.size())
-                                expectedTypes_.push_back(sym->paramTypes[k]);
-                            Value av = genExpr(al->arg(k)->expr());
-                            if (k < sym->paramTypes.size()) expectedTypes_.pop_back();
-                            if (!av.valid()) return Value();
-                            rootGcOperand(av);
-                            args.push_back(av);
-                        }
-                        if (args.size() != sym->paramTypes.size()) {
-                            error(e, alias + "." + member + " 需要 " +
-                                     std::to_string(sym->paramTypes.size()) +
-                                     " 个参数，实际 " + std::to_string(args.size()));
+                        std::vector<antlr4::tree::ParseTree*> argExprs;
+                        if (!collectCallArgsForFormals(al, sym->paramNames, sym->paramTypes,
+                                                       args, argExprs, e, true, sym->isVarArg))
                             return Value();
-                        }
                         std::string argStr;
                         for (size_t k = 0; k < args.size(); ++k) {
                             if (!isAssignable(args[k].type, sym->paramTypes[k])) {
@@ -2695,7 +2685,7 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                             args[k] = coerce(args[k], sym->paramTypes[k], 0, 0);
                             if (k) argStr += ", ";
                             argStr += formatCallArg(sym->paramTypes[k],
-                                                    al->arg(k)->expr(), args[k],
+                                                    argExprs[k], args[k],
                                                     !sym->isExtern);
                         }
                         pinRuntimeCallSite(e);
@@ -2743,20 +2733,10 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
             auto* sCall = static_cast<HaoLangParser::CallOpContext*>(ops[0]);
             std::vector<Value> args;
             std::vector<antlr4::tree::ParseTree*> argExprs;
-            if (auto* al = sCall->argList())
-                for (auto* a : al->arg()) {
-                    Value av = genExpr(a->expr());
-                    if (!av.valid()) return Value();
-                    rootGcOperand(av);
-                    args.push_back(av);
-                    argExprs.push_back(a->expr());
-                }
-            if (args.size() != bc->ctorParamTypes.size()) {
-                error(e, "基类构造 '" + bc->name + "' 需要 " +
-                           std::to_string(bc->ctorParamTypes.size()) +
-                           " 个参数，实际提供 " + std::to_string(args.size()) + " 个");
+            if (!collectCallArgsForFormals(sCall->argList(), bc->ctorParamNames,
+                                           bc->ctorParamTypes, args, argExprs, e,
+                                           true, bc->ctorIsVarArg))
                 return Value();
-            }
             std::string thisReg = emitLoad("ptr", thisAddr_);
             std::string argStr = "ptr " + thisReg;
             for (size_t i = 0; i < args.size(); ++i) {
@@ -2814,20 +2794,9 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
 
         std::vector<Value> args;
         std::vector<antlr4::tree::ParseTree*> argExprs;
-        if (auto* al = call->argList())
-            for (auto* a : al->arg()) {
-                Value av = genExpr(a->expr());
-                if (!av.valid()) return Value();
-                rootGcOperand(av);
-                args.push_back(av);
-                argExprs.push_back(a->expr());
-            }
-        if (args.size() != bm->paramTypes.size()) {
-            error(e, "基类方法 '" + method + "' 需要 " +
-                     std::to_string(bm->paramTypes.size()) + " 个参数，实际提供 " +
-                     std::to_string(args.size()) + " 个");
+        if (!collectCallArgsForFormals(call->argList(), bm->paramNames, bm->paramTypes,
+                                       args, argExprs, e, true, bm->isVarArg))
             return Value();
-        }
 
         std::string thisReg = emitLoad("ptr", thisAddr_);
         std::string argStr = "ptr " + thisReg;
@@ -2943,23 +2912,9 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                 continue;
             }
 
-            // 求值实参（每个实参压入对应形参类型作为期望类型）
             /* Func 值跨实参求值须先挂根 */
             if (cur.valid() && cur.type && cur.type->kind == TypeKind::Func)
                 rootGcOperand(cur);
-            std::vector<Value> args;
-            std::vector<antlr4::tree::ParseTree*> argExprs;
-            args.reserve(nargs);
-            for (size_t k = 0; k < nargs; ++k) {
-                if (k < paramHints.size()) expectedTypes_.push_back(paramHints[k]);
-                auto* aex = al->arg(k)->expr();
-                Value av = genExpr(aex);
-                if (k < paramHints.size()) expectedTypes_.pop_back();
-                if (!av.valid()) return Value();
-                rootGcOperand(av);
-                args.push_back(av);
-                argExprs.push_back(aex);
-            }
 
             // ---- A. 具名非泛型函数直接调用（零开销，绕过闭包）----
             if (i == startOp) {
@@ -2968,18 +2923,17 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
                     std::string fname = idp->IDENT()->getText();
                     auto sym = directSym;
                     if (sym && sym->kind == SymbolKind::Function) {
-                        // ---- 函数重载：同名有多个候选时按实参选最佳（v0.9.0）----
+                        std::vector<Value> args;
+                        std::vector<antlr4::tree::ParseTree*> argExprs;
                         auto& oc = overloads_[sym->name];
                         if (oc.size() > 1) {
-                            sym = selectOverload(oc, args, e, fname);
+                            sym = collectCallArgsForSymbolOverload(al, oc, args, argExprs, e,
+                                                                   fname);
                             if (!sym) return Value();
-                        }
-                        if (args.size() != sym->paramTypes.size()) {
-                            error(e, "函数 '" + fname + "' 需要 " +
-                                     std::to_string(sym->paramTypes.size()) +
-                                     " 个参数，实际提供 " +
-                                     std::to_string(args.size()) + " 个");
-                            return Value();
+                        } else {
+                            if (!collectCallArgsForFormals(al, sym->paramNames, sym->paramTypes,
+                                                           args, argExprs, e, true, sym->isVarArg))
+                                return Value();
                         }
                         std::string argStr;
                         for (size_t k = 0; k < args.size(); ++k) {
@@ -3013,7 +2967,24 @@ Value IRGen::genPostfix(HaoLangParser::PostfixExprContext* e) {
             }
 
             // ---- B. 间接调用函数值（lambda / 函数变量 / 返回函数的表达式）----
-            //  函数值是 env 指针，槽 0 存实现函数指针，签名 ret(env, args...)
+            if (argListHasNamed(al)) {
+                error(e, "函数值调用不支持具名实参");
+                return Value();
+            }
+            std::vector<Value> args;
+            std::vector<antlr4::tree::ParseTree*> argExprs;
+            args.reserve(nargs);
+            for (size_t k = 0; k < nargs; ++k) {
+                if (k < paramHints.size()) expectedTypes_.push_back(paramHints[k]);
+                auto* aex = al->arg(k)->expr();
+                Value av = genExpr(aex);
+                if (k < paramHints.size()) expectedTypes_.pop_back();
+                if (!av.valid()) return Value();
+                rootGcOperand(av);
+                args.push_back(av);
+                argExprs.push_back(aex);
+            }
+
             if (!cur.type || cur.type->kind != TypeKind::Func) {
                 error(e, "该值不是函数，不能调用");
                 return Value();
@@ -3132,8 +3103,22 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
     if (auto* pp = dynamic_cast<HaoLangParser::ParenPrimaryContext*>(e))
         return genExpr(pp->expr());
 
-    if (auto* ap = dynamic_cast<HaoLangParser::ArrayPrimaryContext*>(e))
-        return genArrayLiteral(ap->arrayLiteral());
+    if (auto* nip = dynamic_cast<HaoLangParser::NewArrayInitPrimaryContext*>(e)) {
+        TypePtr t = resolveType(nip->type());
+        if (isArrayBaseClass(t)) {
+            error(e, "不能实例化数组基类 Array，请写 new [T]{...} 或 new [T](n)");
+            return Value();
+        }
+        if (t->kind != TypeKind::Array) {
+            error(e, "new [T]{...} 要求数组类型，实际为 " + t->toString());
+            return Value();
+        }
+        if (!t->elem) {
+            error(e, "数组初始化缺少元素类型");
+            return Value();
+        }
+        return genArrayInit(nip->arrayElementList(), t->elem, e);
+    }
 
     if (auto* wp = dynamic_cast<HaoLangParser::WhenPrimaryContext*>(e))
         return genWhenExpr(wp->whenStmt());
@@ -3167,7 +3152,8 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
                 }
             }
             if (args.empty() || args.size() > 2) {
-                error(e, "定长数组语法为 new [T](长度) 或 new [T](长度, 填充值)");
+                error(e, "定长数组语法为 new [T](长度) 或 new [T](长度, 填充值)；"
+                         "带元素初值请写 new [T]{...}");
                 return Value();
             }
             if (!t->elem) {
@@ -3176,6 +3162,10 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
             }
             const Value* fill = args.size() == 2 ? &args[1] : nullptr;
             return genSizedArray(t->elem, args[0], fill, e);
+        }
+        if (isArrayBaseClass(t)) {
+            error(e, "不能实例化数组基类 Array");
+            return Value();
         }
         if (t->kind != TypeKind::Class) {
             error(e, "new 只能用于类或数组类型，实际为 " + t->toString());
@@ -3225,17 +3215,14 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
         // 求值实参；GC 实参立刻 spill，避免后续实参/分配 safepoint 假死
         std::vector<Value> args;
         std::vector<antlr4::tree::ParseTree*> argExprs;
-        if (auto* al = np->argList()) {
-            for (auto* a : al->arg()) {
-                Value av = genExpr(a->expr());
-                if (!av.valid()) return Value();
-                if (isGcPointerType(av.type)) {
-                    std::string slot = emitSpillGcRoot("new.arg", av.ir);
-                    std::string p = emitLoad("ptr", slot);
-                    av.ir = p;
-                }
-                args.push_back(av);
-                argExprs.push_back(a->expr());
+        if (!collectCallArgsForFormals(np->argList(), ci->ctorParamNames,
+                                       ci->ctorParamTypes, args, argExprs, e,
+                                       true, ci->ctorIsVarArg))
+            return Value();
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (isGcPointerType(args[i].type)) {
+                std::string slot = emitSpillGcRoot("new.arg", args[i].ir);
+                args[i].ir = emitLoad("ptr", slot);
             }
         }
 

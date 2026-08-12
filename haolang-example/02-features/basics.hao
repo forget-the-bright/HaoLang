@@ -22,7 +22,7 @@ func main() {
         count -= 1;
     }
 
-    for (i in [1, 2, 3]) {
+    for (i in new [Int]{ 1, 2, 3 }) {
         fmt.println($"i={i}");
     }
 

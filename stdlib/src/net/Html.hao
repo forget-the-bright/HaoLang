@@ -161,12 +161,12 @@ public class Html {
         if (t.methodParamCount("size") == 0 && t.methodParamCount("get") == 1
                 && t.methodParamCount("keys") != 0) {
             // List 迭代
-            var empty: [Long] = [];
+            var empty: [Long] = new [Long]{};
             val sz = t.invoke(obj, "size", empty);
             var out = "";
             var i = 0;
             while (i < sz) {
-                var args: [Long] = [];
+                var args: [Long] = new [Long]{};
                 args += i;
                 val item = t.invokeObj(obj, "get", args);
                 if (item != null) {
@@ -189,7 +189,7 @@ public class Html {
         }
         val t = reflect.typeOf(o);
         if (t.methodParamCount("size") == 0) {
-            var empty: [Long] = [];
+            var empty: [Long] = new [Long]{};
             val sz = t.invoke(o, "size", empty);
             return sz > 0;
         }
@@ -258,7 +258,7 @@ public class Html {
         // Map：get(key)
         val t = reflect.typeOf(ctx);
         if (t.methodParamCount("keys") == 0 && t.methodParamCount("get") == 1) {
-            var args: [Long] = [];
+            var args: [Long] = new [Long]{};
             args += reflect.ptrOfStr(key);
             return t.invokeObj(ctx, "get", args);
         }

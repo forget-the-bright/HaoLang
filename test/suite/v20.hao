@@ -74,33 +74,33 @@ class V20Derived extends V20Calc {
 func v20InvokeTest() {
     val c = new V20Calc();
     val t = reflect.typeOf(c);
-    fmt.println("v20 inv add=" + t.invoke(c, "add", [3, 4]));       // v20 inv add=7
-    fmt.println("v20 inv greet=" + (t.invokeStr(c, "greet", [reflect.ptrOfStr("hi")]) ?? "null")); // v20 inv greet=hi,10
-    fmt.println("v20 inv inc=" + t.invoke(c, "inc", []));           // v20 inv inc=11
-    t.invokeUnit(c, "noRet", []);                                   // v20 noRet
-    fmt.println("v20 inv static=" + t.invoke(c, "twice", [21]));    // v20 inv static=42
+    fmt.println("v20 inv add=" + t.invoke(c, "add", new [Long]{ 3, 4 }));       // v20 inv add=7
+    fmt.println("v20 inv greet=" + (t.invokeStr(c, "greet", new [Long]{ reflect.ptrOfStr("hi") }) ?? "null")); // v20 inv greet=hi,10
+    fmt.println("v20 inv inc=" + t.invoke(c, "inc", new [Long]{}));           // v20 inv inc=11
+    t.invokeUnit(c, "noRet", new [Long]{});                                   // v20 noRet
+    fmt.println("v20 inv static=" + t.invoke(c, "twice", new [Long]{ 21 }));    // v20 inv static=42
 
     // 多态：虚方法经虚表分派；继承方法走父类链
     val d = new V20Derived();
     val td = reflect.typeOf(d);
-    fmt.println("v20 inv poly=" + (td.invokeStr(d, "describe", []) ?? "null")); // v20 inv poly=derived:7
-    fmt.println("v20 inv inherit=" + (td.invokeStr(d, "greet", [reflect.ptrOfStr("yo")]) ?? "null")); // v20 inv inherit=yo,10
+    fmt.println("v20 inv poly=" + (td.invokeStr(d, "describe", new [Long]{}) ?? "null")); // v20 inv poly=derived:7
+    fmt.println("v20 inv inherit=" + (td.invokeStr(d, "greet", new [Long]{ reflect.ptrOfStr("yo") }) ?? "null")); // v20 inv inherit=yo,10
     // 错 arity / 方法不存在 → throw（与合法返回 0 可区分）
     try {
-        t.invoke(c, "add", [3]);
+        t.invoke(c, "add", new [Long]{ 3 });
         fmt.println("v20 inv bad=no");
     } catch (e: exception.Exception) {
         fmt.println("v20 inv bad=arity");                       // v20 inv bad=arity
     }
     try {
-        t.invoke(c, "noSuchMethod", []);
+        t.invoke(c, "noSuchMethod", new [Long]{});
         fmt.println("v20 inv miss=no");
     } catch (e: exception.Exception) {
         fmt.println("v20 inv miss=ok");                         // v20 inv miss=ok
     }
     // 0 参方法传多余槽亦拒绝
     try {
-        t.invoke(c, "inc", [1]);
+        t.invoke(c, "inc", new [Long]{ 1 });
         fmt.println("v20 inv zero=no");
     } catch (e: exception.Exception) {
         fmt.println("v20 inv zero=ok");                         // v20 inv zero=ok
@@ -124,7 +124,7 @@ func v20Build(n: Int): Int {
 func v20GCTest() {
     // v0.37：worker 存活期间须能触发阈值自动 STW（非仅显式 collect）
     val c0 = gc.GC.collectCount();
-    var results: [Int] = [0, 0, 0, 0];
+    var results: [Int] = new [Int]{ 0, 0, 0, 0 };
     val a = new thread.Thread(); a.start({ results[0] = v20Build(2000); });
     val b = new thread.Thread(); b.start({ results[1] = v20Build(4000); });
     val c = new thread.Thread(); c.start({ results[2] = v20Build(6000); });

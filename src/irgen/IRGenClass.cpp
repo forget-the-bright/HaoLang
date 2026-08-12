@@ -130,10 +130,8 @@ void IRGen::collectInterfaceMembers(const SourceUnit& u) {
             }
 
             if (auto* pl = mem->paramList()) {
-                for (auto* p : pl->param()) {
-                    mi.paramNames.push_back(p->IDENT()->getText());
-                    mi.paramTypes.push_back(resolveType(p->type()));
-                }
+                if (!fillParamList(pl, mi.paramNames, mi.paramTypes, mi.isVarArg))
+                    continue;
             }
 
             if (ii->findMethod(mi.name)) {
@@ -488,10 +486,8 @@ ClassInfoPtr IRGen::instantiateClass(const std::string& templateName,
                 else if (mod->INTERNAL())  mi.visibility = MethodInfo::Vis::Internal;
             }
             if (auto* pl = fn->paramList()) {
-                for (auto* p : pl->param()) {
-                    mi.paramNames.push_back(p->IDENT()->getText());
-                    mi.paramTypes.push_back(resolveType(p->type()));
-                }
+                if (!fillParamList(pl, mi.paramNames, mi.paramTypes, mi.isVarArg))
+                    continue;
             }
             if (mi.isStatic) {
                 bool needsSuffix = !inst->findStaticMethods(mi.name).empty();
@@ -510,10 +506,9 @@ ClassInfoPtr IRGen::instantiateClass(const std::string& templateName,
         if (auto* ctor = mem->constructorDecl()) {
             inst->ctorIRName = "@" + instName + ".ctor";
             if (auto* pl = ctor->paramList()) {
-                for (auto* p : pl->param()) {
-                    inst->ctorParamNames.push_back(p->IDENT()->getText());
-                    inst->ctorParamTypes.push_back(resolveType(p->type()));
-                }
+                if (!fillParamList(pl, inst->ctorParamNames, inst->ctorParamTypes,
+                                   inst->ctorIsVarArg))
+                    continue;
             }
             continue;
         }
@@ -1951,24 +1946,29 @@ void IRGen::checkTypeConstraints(const std::vector<TypeParamConstraint>& cs,
 bool IRGen::collectClassAutoProperty(HaoLangParser::PropertyDeclContext* pd,
                                      const ClassInfoPtr& ci, int& slot) {
     if (!pd || !ci) return false;
-    std::string pname = pd->IDENT()->getText();
+    std::string pname = pd->IDENT(0)->getText();
     TypePtr pty = resolveType(pd->type());
     bool isVar = pd->VAR() != nullptr;
     bool hasGet = false, hasSet = false;
+    HaoLangParser::BlockContext* getBody = nullptr;
+    HaoLangParser::BlockContext* setBody = nullptr;
+    MethodInfo::Vis setVis = MethodInfo::Vis::Public;
     for (auto* acc : pd->accessor()) {
         std::string an = acc->IDENT()->getText();
+        MethodInfo::Vis accVis = MethodInfo::Vis::Public;
+        for (auto* mod : acc->modifier()) {
+            if (mod->PRIVATE()) accVis = MethodInfo::Vis::Private;
+            else if (mod->PROTECTED()) accVis = MethodInfo::Vis::Protected;
+            else if (mod->INTERNAL()) accVis = MethodInfo::Vis::Internal;
+            else if (mod->PUBLIC()) accVis = MethodInfo::Vis::Public;
+        }
         if (an == "get") {
-            if (acc->block()) {
-                error(acc, "自动属性暂不支持自定义 get 体，请写 get;");
-                return false;
-            }
             hasGet = true;
+            getBody = acc->block();
         } else if (an == "set") {
-            if (acc->block()) {
-                error(acc, "自动属性暂不支持自定义 set 体，请写 set;");
-                return false;
-            }
             hasSet = true;
+            setBody = acc->block();
+            setVis = accVis;
         } else {
             error(acc, "属性访问器只能是 get 或 set，实际为 '" + an + "'");
             return false;
@@ -1986,6 +1986,24 @@ bool IRGen::collectClassAutoProperty(HaoLangParser::PropertyDeclContext* pd,
         error(pd, "var 自动属性必须声明 set");
         return false;
     }
+
+    std::string onChange;
+    if (pd->IDENT().size() >= 3) {
+        std::string kw = pd->IDENT(1)->getText();
+        if (kw != "OnChange") {
+            error(pd, "属性后缀只支持 OnChange(fn)，实际为 '" + kw + "'");
+            return false;
+        }
+        onChange = pd->IDENT(2)->getText();
+        if (getBody || setBody) {
+            error(pd, "OnChange 不能与自定义 get/set 体同时使用");
+            return false;
+        }
+    } else if (pd->IDENT().size() == 2) {
+        error(pd, "属性 OnChange 语法为 OnChange(回调名)");
+        return false;
+    }
+
     bool isStatic = false;
     FieldInfo::Vis vis = FieldInfo::Vis::Public;
     for (auto* mod : pd->modifier()) {
@@ -2013,9 +2031,9 @@ bool IRGen::collectClassAutoProperty(HaoLangParser::PropertyDeclContext* pd,
     fi.line = pd->getStart()->getLine();
     fi.column = pd->getStart()->getCharPositionInLine();
     fi.slot = slot++;
+    if (pd->expr()) fi.defaultExpr = pd->expr();
     ci->fields.push_back(fi);
 
-    // 合成 getX / setX，供接口属性实现与虚表
     std::string gname = propGetterName(pname);
     if (!ci->findMethod(gname)) {
         MethodInfo mg;
@@ -2024,6 +2042,7 @@ bool IRGen::collectClassAutoProperty(HaoLangParser::PropertyDeclContext* pd,
         mg.returnType = pty;
         mg.isSyntheticProp = true;
         mg.propFieldName = pname;
+        mg.defaultBody = getBody;
         mg.irName = "@" + ci->name + "." + gname;
         mg.line = fi.line;
         mg.column = fi.column;
@@ -2040,6 +2059,9 @@ bool IRGen::collectClassAutoProperty(HaoLangParser::PropertyDeclContext* pd,
             ms.paramTypes = { pty };
             ms.isSyntheticProp = true;
             ms.propFieldName = pname;
+            ms.defaultBody = setBody;
+            ms.onChangeCallee = onChange;
+            ms.visibility = setVis;
             ms.irName = "@" + ci->name + "." + sname;
             ms.line = fi.line;
             ms.column = fi.column;
@@ -2052,7 +2074,11 @@ bool IRGen::collectClassAutoProperty(HaoLangParser::PropertyDeclContext* pd,
 bool IRGen::collectInterfaceAutoProperty(HaoLangParser::PropertyDeclContext* pd,
                                          const InterfaceInfoPtr& ii) {
     if (!pd || !ii) return false;
-    std::string pname = pd->IDENT()->getText();
+    std::string pname = pd->IDENT(0)->getText();
+    if (pd->expr() || pd->IDENT().size() > 1) {
+        error(pd, "接口属性不能有默认值或 OnChange");
+        return false;
+    }
     TypePtr pty = resolveType(pd->type());
     bool isVar = pd->VAR() != nullptr;
     bool hasGet = false, hasSet = false;
@@ -2130,7 +2156,6 @@ void IRGen::genSyntheticPropMethods(const ClassInfoPtr& ci) {
     if (!ci || ci->isGenericTemplate()) return;
     for (const auto& m : ci->methods) {
         if (!m.isSyntheticProp || m.propFieldName.empty()) continue;
-        // 仅本类声明的合成访问器；继承来的由父类已生成
         if (m.ownerClass != ci->name) continue;
         const FieldInfo* fi = ci->findField(m.propFieldName);
         if (!fi) continue;
@@ -2154,13 +2179,56 @@ void IRGen::genSyntheticPropMethods(const ClassInfoPtr& ci) {
         em_.emitRaw(sig);
         em_.emitLabel("entry");
 
-        if (isGetter) {
+        auto* body = static_cast<HaoLangParser::BlockContext*>(m.defaultBody);
+        if (body) {
+            if (isGetter) {
+                genFunctionBody(body, {}, {}, m.returnType, false, true, ci->name,
+                                nullptr, "属性 get '" + m.propFieldName + "'");
+            } else {
+                genFunctionBody(body, m.paramNames, m.paramTypes, m.returnType,
+                                false, true, ci->name, nullptr,
+                                "属性 set '" + m.propFieldName + "'");
+            }
+        } else if (isGetter) {
             std::string fp = fieldPtr("%this.arg", fi->slot);
             std::string reg = emitLoad(fi->type->llvmType(), fp);
             emitRet(fi->type->llvmType(), reg);
         } else {
             std::string fp = fieldPtr("%this.arg", fi->slot);
             emitHeapStore(fp, "%value.arg", fi->type, "%this.arg");
+            if (!m.onChangeCallee.empty()) {
+                // OnChange(fn)：调用同作用域函数/方法 fn(value)
+                auto sym = syms_.lookup(m.onChangeCallee);
+                if (sym && sym->kind == SymbolKind::Function &&
+                    sym->paramTypes.size() == 1) {
+                    Value arg("%value.arg", fi->type);
+                    arg = coerce(arg, sym->paramTypes[0], 0, 0);
+                    std::string a =
+                        formatCallArg(sym->paramTypes[0], nullptr, arg);
+                    if (sym->returnType && !sym->returnType->isUnit())
+                        (void)emitCall(sym->returnType->llvmType(), sym->irName, a);
+                    else
+                        emitCallVoid(sym->irName, a);
+                } else {
+                    // 尝试实例方法 this.fn(value)
+                    const MethodInfo* om = ci->findMethod(m.onChangeCallee);
+                    if (om && om->paramTypes.size() == 1 && !om->isStatic) {
+                        Value arg("%value.arg", fi->type);
+                        arg = coerce(arg, om->paramTypes[0], 0, 0);
+                        std::string a =
+                            "ptr %this.arg, " +
+                            formatCallArg(om->paramTypes[0], nullptr, arg);
+                        if (om->returnType && !om->returnType->isUnit())
+                            (void)emitCall(om->returnType->llvmType(), om->irName, a);
+                        else
+                            emitCallVoid(om->irName, a);
+                    } else {
+                        diags_.error(fi->line, fi->column,
+                            "OnChange 回调 '" + m.onChangeCallee +
+                            "' 未找到（须为单参函数或实例方法）");
+                    }
+                }
+            }
             emitRetVoid();
         }
         em_.flushEntryAllocas();
@@ -2477,10 +2545,8 @@ void IRGen::collectClassMembers(const SourceUnit& u) {
                 }
 
                 if (auto* pl = fn->paramList()) {
-                    for (auto* p : pl->param()) {
-                        mi.paramNames.push_back(p->IDENT()->getText());
-                        mi.paramTypes.push_back(resolveType(p->type()));
-                    }
+                    if (!fillParamList(pl, mi.paramNames, mi.paramTypes, mi.isVarArg))
+                        continue;
                 }
 
                 // 静态方法：按参数签名重载（IR 名带 overloadSuffix）
@@ -2516,10 +2582,9 @@ void IRGen::collectClassMembers(const SourceUnit& u) {
                 }
                 ci->ctorIRName = "@" + cname + ".ctor";
                 if (auto* pl = ctor->paramList()) {
-                    for (auto* p : pl->param()) {
-                        ci->ctorParamNames.push_back(p->IDENT()->getText());
-                        ci->ctorParamTypes.push_back(resolveType(p->type()));
-                    }
+                    if (!fillParamList(pl, ci->ctorParamNames, ci->ctorParamTypes,
+                                       ci->ctorIsVarArg))
+                        continue;
                 }
                 continue;
             }
@@ -2865,16 +2930,29 @@ Value IRGen::callGenericMethod(const Value& recv, const ClassInfoPtr& ci,
 
     // ---- 2. 解析方法形参类型（T 已替换，R 仍是 TypeParam）----
     std::vector<TypePtr> tplParams;
+    std::vector<std::string> paramNames;
     auto* fn = gm.decl;
     if (auto* pl = fn->paramList())
-        for (auto* p : pl->param())
+        for (auto* p : pl->param()) {
+            paramNames.push_back(p->IDENT()->getText());
             tplParams.push_back(resolveType(p->type()));
+        }
 
-    size_t nargs = call && call->argList() ? call->argList()->arg().size() : 0;
+    auto* al = call ? call->argList() : nullptr;
+    std::vector<HaoLangParser::ExprContext*> slotExprs;
+    std::vector<size_t> sourceOrderSlots;
+    if (!bindCallArgExprs(al, paramNames, slotExprs, sourceOrderSlots, ctx, true,
+                          true)) {
+        currentTypeParams_ = savedParams0;
+        currentPkgPrefix_ = savedPrefix0;
+        currentSubst_ = savedSubst0;
+        return Value();
+    }
+    size_t nargs = paramNames.size();
 
     // 判断某实参是否为 lambda（需期望类型才能推断参数/返回类型）
-    auto isLambdaArg = [&](size_t k) -> HaoLangParser::LambdaContext* {
-        antlr4::tree::ParseTree* node = call->argList()->arg(k)->expr();
+    auto isLambdaExpr = [&](antlr4::tree::ParseTree* node)
+        -> HaoLangParser::LambdaContext* {
         for (;;) {
             if (auto* pe = dynamic_cast<HaoLangParser::PostfixExprContext*>(node)) {
                 if (pe->postfixOp().empty()) {
@@ -2892,20 +2970,25 @@ Value IRGen::callGenericMethod(const Value& recv, const ClassInfoPtr& ci,
     // ---- 3. 两遍求值实参，推断方法级类型参数（同 callGenericFunction）----
     std::vector<Value> args(nargs);
     TypeSubst methodSubst;
-    for (size_t k = 0; k < nargs; ++k) {
-        if (isLambdaArg(k)) continue;
-        Value av = genExpr(call->argList()->arg(k)->expr());
-        if (!av.valid()) { currentTypeParams_=savedParams0; currentPkgPrefix_=savedPrefix0; currentSubst_=savedSubst0; return Value(); }
+    for (size_t slot : sourceOrderSlots) {
+        if (isLambdaExpr(slotExprs[slot])) continue;
+        Value av = genExpr(slotExprs[slot]);
+        if (!av.valid()) {
+            currentTypeParams_ = savedParams0;
+            currentPkgPrefix_ = savedPrefix0;
+            currentSubst_ = savedSubst0;
+            return Value();
+        }
         rootGcOperand(av);
-        args[k] = av;
-        if (k < tplParams.size())
-            unifyWithArg(tplParams[k], av.type, methodSubst, ctx);
+        args[slot] = av;
+        if (slot < tplParams.size())
+            unifyWithArg(tplParams[slot], av.type, methodSubst, ctx);
     }
-    for (size_t k = 0; k < nargs; ++k) {
-        if (!isLambdaArg(k)) continue;
+    for (size_t slot : sourceOrderSlots) {
+        if (!isLambdaExpr(slotExprs[slot])) continue;
         TypePtr expected;
-        if (k < tplParams.size()) {
-            expected = substType(tplParams[k], methodSubst);
+        if (slot < tplParams.size()) {
+            expected = substType(tplParams[slot], methodSubst);
             if (expected->kind == TypeKind::Func) {
                 auto conv = std::make_shared<Type>(*expected);
                 for (auto& p : conv->params)
@@ -2916,13 +2999,18 @@ Value IRGen::callGenericMethod(const Value& recv, const ClassInfoPtr& ci,
             }
             expectedTypes_.push_back(expected);
         }
-        Value av = genExpr(call->argList()->arg(k)->expr());
-        if (k < tplParams.size()) expectedTypes_.pop_back();
-        if (!av.valid()) { currentTypeParams_=savedParams0; currentPkgPrefix_=savedPrefix0; currentSubst_=savedSubst0; return Value(); }
+        Value av = genExpr(slotExprs[slot]);
+        if (slot < tplParams.size()) expectedTypes_.pop_back();
+        if (!av.valid()) {
+            currentTypeParams_ = savedParams0;
+            currentPkgPrefix_ = savedPrefix0;
+            currentSubst_ = savedSubst0;
+            return Value();
+        }
         rootGcOperand(av);
-        args[k] = av;
-        if (k < tplParams.size())
-            unifyWithArg(tplParams[k], av.type, methodSubst, ctx);
+        args[slot] = av;
+        if (slot < tplParams.size())
+            unifyWithArg(tplParams[slot], av.type, methodSubst, ctx);
     }
 
     currentTypeParams_ = savedParams0;
@@ -2968,11 +3056,13 @@ Value IRGen::callGenericMethod(const Value& recv, const ClassInfoPtr& ci,
         nmi.ownerClass = ci->name;
         nmi.returnType = fn->returnType() ? resolveType(fn->returnType()->type())
                                           : Type::makeUnit();
-        if (auto* pl = fn->paramList())
-            for (auto* p : pl->param()) {
-                nmi.paramNames.push_back(p->IDENT()->getText());
-                nmi.paramTypes.push_back(resolveType(p->type()));
+        if (auto* pl = fn->paramList()) {
+            if (!fillParamList(pl, nmi.paramNames, nmi.paramTypes, nmi.isVarArg)) {
+                currentSubst_ = savedSubst2;
+                currentPkgPrefix_ = savedPrefix2;
+                return Value();
             }
+        }
         currentSubst_ = savedSubst2;
         currentPkgPrefix_ = savedPrefix2;
 
@@ -3005,8 +3095,7 @@ Value IRGen::callGenericMethod(const Value& recv, const ClassInfoPtr& ci,
             return Value();
         }
         args[k] = coerce(args[k], mi->paramTypes[k], 0, 0);
-        auto* aex = call->argList() ? call->argList()->arg(k)->expr() : nullptr;
-        argStr += ", " + formatCallArg(mi->paramTypes[k], aex, args[k]);
+        argStr += ", " + formatCallArg(mi->paramTypes[k], slotExprs[k], args[k]);
     }
     if (mi->returnType->isUnit()) {
         emitCallVoid(mi->irName, argStr);

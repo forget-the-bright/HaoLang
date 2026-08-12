@@ -35,7 +35,7 @@ class Character {
         var cp: Int = v;
         if (cp < 0) { cp = 0xFFFD; }
         if (cp > 0x10FFFF) { cp = 0xFFFD; }
-        var arr: [Byte] = [];
+        var arr: [Byte] = new [Byte]{};
         if (cp <= 0x7F) {
             val b: Byte = cp;
             arr += b;

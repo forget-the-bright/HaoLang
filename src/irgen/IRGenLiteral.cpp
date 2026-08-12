@@ -19,15 +19,17 @@
 
 namespace hao {
 
-// ---------- 数组字面量 [a, b, ...xs] ----------
-Value IRGen::genArrayLiteral(HaoLangParser::ArrayLiteralContext* al) {
+// ---------- 数组初始化 new [T]{ a, b, ...xs }（及 T... 隐式打包）----------
+Value IRGen::genArrayInit(HaoLangParser::ArrayElementListContext* list,
+                          const TypePtr& forcedElem,
+                          antlr4::ParserRuleContext* where) {
     struct Elem {
         bool spread = false;
         Value v;
     };
     std::vector<Elem> elems;
 
-    if (auto* list = al->arrayElementList()) {
+    if (list) {
         for (auto* ae : list->arrayElement()) {
             Value v = genExpr(ae->expr());
             if (!v.valid()) return Value();
@@ -54,62 +56,70 @@ Value IRGen::genArrayLiteral(HaoLangParser::ArrayLiteralContext* al) {
         }
     }
 
-    // 元素类型推断：期望类型 > 首个非展开值 > 首个展开数组元素类型 > Int
-    TypePtr elemType;
-    if (!expectedTypes_.empty() && expectedTypes_.back() &&
-        expectedTypes_.back()->kind == TypeKind::Array &&
-        expectedTypes_.back()->elem) {
-        elemType = expectedTypes_.back()->elem;
-    } else if (elems.empty()) {
-        elemType = Type::makeInt();
-    } else {
-        for (const auto& e : elems) {
-            if (!e.spread) { elemType = e.v.type; break; }
-        }
-        if (!elemType) {
+    // 元素类型：强制类型（new [T]{…}）优先；否则推断
+    TypePtr elemType = forcedElem;
+    if (!elemType) {
+        if (!expectedTypes_.empty() && expectedTypes_.back() &&
+            expectedTypes_.back()->kind == TypeKind::Array &&
+            expectedTypes_.back()->elem) {
+            elemType = expectedTypes_.back()->elem;
+        } else if (elems.empty()) {
+            error(where, "空数组初始化须写 new [T]{}（不能省略元素类型）");
+            return Value();
+        } else {
             for (const auto& e : elems) {
-                if (e.spread && e.v.type->elem) {
-                    elemType = e.v.type->elem;
-                    break;
+                if (!e.spread) { elemType = e.v.type; break; }
+            }
+            if (!elemType) {
+                for (const auto& e : elems) {
+                    if (e.spread && e.v.type->elem) {
+                        elemType = e.v.type->elem;
+                        break;
+                    }
                 }
             }
-        }
-        if (!elemType) elemType = Type::makeInt();
+            if (!elemType) elemType = Type::makeInt();
 
-        for (const auto& e : elems) {
-            TypePtr et = e.spread ? e.v.type->elem : e.v.type;
-            if (et && et->isNumeric() && elemType->isNumeric()) {
-                if (Type::isMixedSignedUnsigned64(elemType->kind, et->kind)) {
-                    error(al, "64 位有符号与无符号不能隐式混合，请显式转换");
-                    return Value();
+            for (const auto& e : elems) {
+                TypePtr et = e.spread ? e.v.type->elem : e.v.type;
+                if (et && et->isNumeric() && elemType->isNumeric()) {
+                    if (Type::isMixedSignedUnsigned64(elemType->kind, et->kind)) {
+                        error(where, "64 位有符号与无符号不能隐式混合，请显式转换");
+                        return Value();
+                    }
+                    TypePtr p = Type::binaryNumericPromote(elemType->kind, et->kind);
+                    if (p) elemType = p;
                 }
-                TypePtr p = Type::binaryNumericPromote(elemType->kind, et->kind);
-                if (p) elemType = p;
             }
-        }
 
-        // 收集非展开值做共同接口推断
-        std::vector<Value> plain;
-        for (const auto& e : elems)
-            if (!e.spread) plain.push_back(e.v);
-        bool allMatch = true;
-        for (const auto& v : plain)
-            if (!isAssignable(v.type, elemType)) { allMatch = false; break; }
-        if (!allMatch && !plain.empty()) {
-            std::string common = findCommonSupertype(plain);
-            if (!common.empty()) {
-                elemType = classes_.count(common)
-                    ? Type::makeClass(common)
-                    : Type::makeInterface(common);
+            std::vector<Value> plain;
+            for (const auto& e : elems)
+                if (!e.spread) plain.push_back(e.v);
+            bool allMatch = true;
+            for (const auto& v : plain)
+                if (!isAssignable(v.type, elemType)) { allMatch = false; break; }
+            if (!allMatch && !plain.empty()) {
+                std::string common = findCommonSupertype(plain);
+                if (!common.empty()) {
+                    elemType = classes_.count(common)
+                        ? Type::makeClass(common)
+                        : Type::makeInterface(common);
+                }
             }
         }
     }
+
+    antlr4::ParserRuleContext* errAt = where;
+    if (!errAt && list) errAt = list;
 
     // 校验
     for (size_t i = 0; i < elems.size(); ++i) {
         TypePtr et = elems[i].spread ? elems[i].v.type->elem : elems[i].v.type;
         if (!et || !isAssignable(et, elemType)) {
-            error(al, "数组元素类型不一致：第 " + std::to_string(i + 1) +
+            antlr4::ParserRuleContext* at = errAt;
+            if (list && i < list->arrayElement().size())
+                at = list->arrayElement()[i];
+            error(at, "数组元素类型不一致：第 " + std::to_string(i + 1) +
                       " 个" + (elems[i].spread ? "展开源" : "元素") + "为 " +
                       (et ? et->toString() : "?") +
                       "，期望 " + elemType->toString());
@@ -312,24 +322,32 @@ Value IRGen::genSizedArray(const TypePtr& elemType, const Value& len,
     return Value(arr, Type::makeArray(elemType));
 }
 
-// 表达式是否为空数组字面量 []
-bool IRGen::isEmptyArrayLiteral(antlr4::tree::ParseTree* e) {
+// 表达式是否为空数组初始化 new [T]{}
+bool IRGen::isEmptyArrayInit(antlr4::tree::ParseTree* e) {
     if (!e) return false;
-    // 沿单子节点链下降到 primary，再在子树里找空的 arrayLiteral
     antlr4::tree::ParseTree* node = e;
     while (node && node->children.size() == 1) node = node->children[0];
-    // DFS 找第一个 arrayLiteral
-    std::function<HaoLangParser::ArrayLiteralContext*(antlr4::tree::ParseTree*)> find;
-    find = [&](antlr4::tree::ParseTree* n) -> HaoLangParser::ArrayLiteralContext* {
+    std::function<HaoLangParser::NewArrayInitPrimaryContext*(antlr4::tree::ParseTree*)> find;
+    find = [&](antlr4::tree::ParseTree* n)
+        -> HaoLangParser::NewArrayInitPrimaryContext* {
         if (!n) return nullptr;
-        if (auto* al = dynamic_cast<HaoLangParser::ArrayLiteralContext*>(n))
-            return al;
+        if (auto* nip = dynamic_cast<HaoLangParser::NewArrayInitPrimaryContext*>(n))
+            return nip;
         for (auto* c : n->children)
-            if (auto* al = find(c)) return al;
+            if (auto* x = find(c)) return x;
         return nullptr;
     };
-    auto* al = find(node);
-    return al && al->arrayElementList() == nullptr;
+    auto* nip = find(node);
+    return nip && nip->arrayElementList() == nullptr;
+}
+
+bool IRGen::isArrayBaseClass(const TypePtr& t) {
+    if (!t || t->kind != TypeKind::Class) return false;
+    return t->className == "object$Array" || t->className == "Array";
+}
+
+bool IRGen::isArrayReceiver(const TypePtr& t) {
+    return t && (t->kind == TypeKind::Array || isArrayBaseClass(t));
 }
 
 // ---------- when 表达式 ----------

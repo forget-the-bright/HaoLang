@@ -43,7 +43,7 @@ class LinkedHashMap<K, V> : Map<K, V> {
         this.count = 0;
         this.head = null;
         this.tail = null;
-        this.table = [];
+        this.table = new [LinkedHashMapEntry<K,V>?]{};
         var i = 0;
         while (i < 16) {
             this.table += null;
@@ -100,8 +100,8 @@ class LinkedHashMap<K, V> : Map<K, V> {
     func resize() {
         if (this.capacity <= 0 || this.capacity > 1073741823) { return; }
         // 先按插入序抽出
-        var keys: [K] = [];
-        var vals: [V] = [];
+        var keys: [K] = new [K]{};
+        var vals: [V] = new [V]{};
         var cur = this.head;
         while (cur != null) {
             if (cur!!.occupied) {
@@ -111,7 +111,7 @@ class LinkedHashMap<K, V> : Map<K, V> {
             cur = cur!!.after;
         }
         this.capacity = this.capacity * 2;
-        this.table = [];
+        this.table = new [LinkedHashMapEntry<K,V>?]{};
         this.count = 0;
         this.head = null;
         this.tail = null;
@@ -258,7 +258,7 @@ class LinkedHashMap<K, V> : Map<K, V> {
         this.count = 0;
         this.head = null;
         this.tail = null;
-        this.table = [];
+        this.table = new [LinkedHashMapEntry<K,V>?]{};
         var i = 0;
         while (i < 16) {
             this.table += null;
@@ -270,7 +270,7 @@ class LinkedHashMap<K, V> : Map<K, V> {
     // @return 新数组
     // 复杂度：O(n)
     func keys(): [K] {
-        var out: [K] = [];
+        var out: [K] = new [K]{};
         var cur = this.head;
         while (cur != null) {
             out += cur!!.key;
@@ -280,7 +280,7 @@ class LinkedHashMap<K, V> : Map<K, V> {
     }
 
     func valueArray(): [V] {
-        var out: [V] = [];
+        var out: [V] = new [V]{};
         var cur = this.head;
         while (cur != null) {
             out += cur!!.value;
@@ -298,7 +298,7 @@ class LinkedHashMap<K, V> : Map<K, V> {
     }
 
     func entrySet(): Iterable<MapEntry<K, V>> {
-        var out: [MapEntry<K, V>] = [];
+        var out: [MapEntry<K, V>] = new [MapEntry<K, V>]{};
         var cur = this.head;
         while (cur != null) {
             val ent: MapEntry<K, V> = new SimpleMapEntry<K, V>(cur!!.key, cur!!.value);

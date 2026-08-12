@@ -65,7 +65,7 @@ func padEnd(s: String, width: Int, pad: String): String {
 
 // 按分隔符切分（保留空段）；sep 为空则返回 [s]
 func split(s: String, sep: String): [String] {
-    var out: [String] = [];
+    var out: [String] = new [String]{};
     if (sep.length == 0) {
         out += s;
         return out;

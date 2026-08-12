@@ -189,7 +189,7 @@ func oopTest() {
     val p: OPrintable = new OSquare(2.0);
     p.show();
 
-    val shapes = [new OCircle(1.0), new ORect(1.0, 1.0), new OSquare(2.0)];
+    val shapes = new [OShape]{ new OCircle(1.0), new ORect(1.0, 1.0), new OSquare(2.0) };
     for (sh in shapes) {
         oDescribeShape(sh);
     }
@@ -216,7 +216,7 @@ func oopTest() {
     // ---------- 父类型变量 / 多态数组 ----------
     val a: OAnimal = new OCat("影子", 5);
     fmt.println(a.speak());           // 喵喵
-    val zoo = [new ODog("A", 1), new OCat("B", 2), new OPuppy("C")];
+    val zoo = new [OAnimal]{ new ODog("A", 1), new OCat("B", 2), new OPuppy("C") };
     for (x in zoo) {
         fmt.println(x.speak());       // 汪汪 / 喵喵 / 奶声汪汪
     }

@@ -1,4 +1,4 @@
-# P5 stdlib + IR 同步独立冒烟（不跑 suite）
+﻿# P5 stdlib + IR 同步独立冒烟（不跑 suite）
 # 用法：仓库根目录 powershell -File script/win/p5_smoke.ps1
 $ErrorActionPreference = "Stop"
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
@@ -318,7 +318,7 @@ $trapEc = $LASTEXITCODE
 $ErrorActionPreference = $prevEap
 if ($trapEc -eq 0) { Fail "p10 box_trap should panic" }
 Write-Host "OK   p10 box_trap panics"
-# 编译拒绝：Int→Long 包装链式；? extends/? super 非法写
+# compile-reject: Int->Long box chain; wild extends/super write
 foreach ($neg in @('box_no_chain','wild_extends_neg','wild_super_neg')) {
     $src = Join-Path $p10dir "$neg.hao"
     $ll = Join-Path $p10dir "$neg.ll"
@@ -332,7 +332,77 @@ foreach ($neg in @('box_no_chain','wild_extends_neg','wild_super_neg')) {
     Write-Host "OK   p10 $neg rejects"
 }
 
-# ---- 17) P7b～P7e 功能冒烟 ----
+# ---- 17) P11 数组业务上移（Arrays + List contains/indexOf/clear）----
+$p11dir = Join-Path $root "target\p11-smoke"
+$p11files = @(
+    'arrays_int',
+    'arrays_string',
+    'arrays_object',
+    'list_arraylist',
+    'list_linkedlist'
+)
+foreach ($name in $p11files) {
+    $src = Join-Path $p11dir "$name.hao"
+    if (-not (Test-Path $src)) { Fail "missing $src" }
+    & $hao run $src
+    if ($LASTEXITCODE -ne 0) { Fail "p11 $name failed" }
+    Write-Host "OK   p11 $name"
+}
+# copyOfRange 非法区间：运行时抛 Exception（非零退出）
+$rangeNegSrc = Join-Path $p11dir "arrays_range_neg.hao"
+$rangeNegExe = Join-Path $p11dir "arrays_range_neg.exe"
+if (-not (Test-Path $rangeNegSrc)) { Fail "missing $rangeNegSrc" }
+& $hao build $rangeNegSrc -o $rangeNegExe
+if ($LASTEXITCODE -ne 0) { Fail "p11 arrays_range_neg build failed" }
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+& $rangeNegExe 2>$null | Out-Null
+$rangeNegEc = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($rangeNegEc -eq 0) { Fail "p11 arrays_range_neg should throw" }
+Write-Host "OK   p11 arrays_range_neg throws"
+
+# ---- 18) P12 具名实参 ----
+$p12dir = Join-Path $root "target\p12-smoke"
+$p12files = @(
+    'named_all',
+    'named_mix',
+    'named_method',
+    'named_static',
+    'named_generic',
+    'named_overload'
+)
+foreach ($name in $p12files) {
+    $src = Join-Path $p12dir "$name.hao"
+    if (-not (Test-Path $src)) { Fail "missing $src" }
+    & $hao run $src
+    if ($LASTEXITCODE -ne 0) { Fail "p12 $name failed" }
+    Write-Host "OK   p12 $name"
+}
+foreach ($neg in @('named_unknown','named_dup','named_after_pos','named_missing','named_funcval')) {
+    $src = Join-Path $p12dir "$neg.hao"
+    $ll = Join-Path $p12dir "$neg.ll"
+    if (-not (Test-Path $src)) { Fail "missing $src" }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & $hao emit $src -o $ll 2>$null | Out-Null
+    $ec = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($ec -eq 0) { Fail "p12 $neg should reject" }
+    Write-Host "OK   p12 $neg rejects"
+}
+
+# ---- 19) P13 List/Arrays API 补面 ----
+$p13dir = Join-Path $root "target\p13-smoke"
+foreach ($name in @('list_api','list_linked','arrays_copyOf_len')) {
+    $src = Join-Path $p13dir "$name.hao"
+    if (-not (Test-Path $src)) { Fail "missing $src" }
+    & $hao run $src
+    if ($LASTEXITCODE -ne 0) { Fail "p13 $name failed" }
+    Write-Host "OK   p13 $name"
+}
+
+# ---- 20) P7b～P7e 功能冒烟 ----
 foreach ($name in @('p7b_smoke','p7c_smoke','p7d_smoke','p7e_smoke')) {
     $src = Join-Path $root "target\p7-smoke\$name.hao"
     $exe = Join-Path $root "target\p7-smoke\$name.exe"
@@ -343,5 +413,5 @@ foreach ($name in @('p7b_smoke','p7c_smoke','p7d_smoke','p7e_smoke')) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-Write-Host "P5_SMOKE+IR_SYNC+P7+P8+P9+P10 OK"
+Write-Host "P5_SMOKE+IR_SYNC+P7+P8+P9+P10+P11+P12+P13 OK"
 exit 0

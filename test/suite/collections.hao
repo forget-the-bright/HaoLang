@@ -36,6 +36,35 @@ func collectionsTest() {
     fmt.println(list.removeAt(0)); // 10
     fmt.println(list.size());      // 2
     fmt.println(list.get(0));      // 99
+    fmt.println(list.contains(99)); // true
+    fmt.println(list.indexOf(30));  // 1
+    list.clear();
+    fmt.println(list.isEmpty());    // true
+    fmt.println(list.size());       // 0
+
+    // ---------- Arrays 算法层（v0.60）----------
+    val arr = new [Int]{ 1, 2, 1 };
+    fmt.println(collections.contains(arr, 2));          // true
+    fmt.println(collections.indexOf(arr, 1));           // 0
+    fmt.println(collections.lastIndexOf(arr, 1));       // 2
+    fmt.println(collections.equals(arr, new [Int]{ 1, 2, 1 }));    // true
+    val ac = collections.copyOf(arr);
+    fmt.println(ac.length);                             // 3
+    val ar = collections.copyOfRange(arr, 1, 3);
+    fmt.println(ar[0]);                                 // 2
+    fmt.println(collections.isEmpty(new [Int]{}));               // true
+    // List lastIndexOf / remove / addAll（v0.60.2）
+    val list2 = new collections.ArrayList<Int>();
+    list2.add(1); list2.add(2); list2.add(1);
+    fmt.println(list2.lastIndexOf(1)); // 2
+    fmt.println(list2.remove(2));      // true
+    list2.addAll(new [Int]{ 9 });
+    fmt.println(list2.size());         // 3
+    fmt.println(list2.get(2));         // 9
+    val cplen = collections.copyOfLength(new [Int]{ 1, 2 }, 3);
+    fmt.println(cplen.length);         // 3
+    val cpshort = collections.copyOfLength(new [Int]{ 1, 2 }, 1);
+    fmt.println(cpshort[0]);           // 1
 
     // ---------- List 泛型方法 map/filter/forEach（R 从 lambda 推断）----------
     val nums = new collections.ArrayList<Int>();

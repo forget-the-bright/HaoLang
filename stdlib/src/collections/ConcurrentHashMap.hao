@@ -42,7 +42,7 @@ class ConcurrentHashMap<K, V> : Map<K, V> {
     // 构造空表（16 段）。
     // 复杂度：O(1)
     constructor() {
-        this.segments = [];
+        this.segments = new [ChmSegment<K, V>]{};
         var i = 0;
         while (i < 16) {
             this.segments += new ChmSegment<K, V>();
@@ -199,7 +199,7 @@ class ConcurrentHashMap<K, V> : Map<K, V> {
     func keys(): [K] {
         this.lockAll();
         try {
-            var out: [K] = [];
+            var out: [K] = new [K]{};
             var i = 0;
             while (i < 16) {
                 val ks = this.segments[i].map.keys();
@@ -219,7 +219,7 @@ class ConcurrentHashMap<K, V> : Map<K, V> {
     func valueArray(): [V] {
         this.lockAll();
         try {
-            var out: [V] = [];
+            var out: [V] = new [V]{};
             var i = 0;
             while (i < 16) {
                 val vs = this.segments[i].map.valueArray();
@@ -247,7 +247,7 @@ class ConcurrentHashMap<K, V> : Map<K, V> {
     func entrySet(): Iterable<MapEntry<K, V>> {
         this.lockAll();
         try {
-            var out: [MapEntry<K, V>] = [];
+            var out: [MapEntry<K, V>] = new [MapEntry<K, V>]{};
             var i = 0;
             while (i < 16) {
                 val entIt = this.segments[i].map.entrySet().iterator();

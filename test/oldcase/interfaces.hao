@@ -131,7 +131,7 @@ func main() {
     p.show();
 
     // ---------- 接口数组：多态遍历 ----------
-    val shapes = [new Circle(1.0), new Rect(1.0, 1.0), new Square(2.0)];
+    val shapes = new [Shape]{ new Circle(1.0), new Rect(1.0, 1.0), new Square(2.0) };
     for (sh in shapes) {
         describe(sh);
     }

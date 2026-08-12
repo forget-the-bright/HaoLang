@@ -154,3 +154,23 @@ int64_t hao_array_pop(void* arr) {
     *(int64_t*)((char*)arr - HAO_ARR_LEN_OFF) = len - 1;
     return val;
 }
+
+void* hao_array_clone(void* arr) {
+    if (!arr) return NULL;
+    int64_t len = hao_array_len(arr);
+    int64_t esz = hao_array_esz(arr);
+    int64_t pad = *(int64_t*)((char*)arr - HAO_ARR_HEADER);
+    int is_ptr = (pad & 2) ? 1 : 0;
+    void* dst = hao_array_new(len, esz, is_ptr);
+    if (len <= 0) return dst;
+    char* oldbase = (char*)arr - HAO_ARR_HEADER;
+    char* newbase = (char*)dst - HAO_ARR_HEADER;
+    size_t nbytes = (size_t)HAO_ARR_HEADER + (size_t)len * (size_t)esz;
+    hao_gc_array_copy_and_shade(newbase, oldbase, nbytes, len, is_ptr);
+    int64_t newcap = len > 0 ? len : 1;
+    *(int64_t*)(newbase + 0) = is_ptr ? 2 : 0;
+    *(int64_t*)(newbase + HAO_ARR_CAP_OFF_BASE) = newcap;
+    *(int64_t*)(newbase + HAO_ARR_LEN_OFF_BASE) = len;
+    *(int64_t*)(newbase + HAO_ARR_ESZ_OFF_BASE) = esz;
+    return dst;
+}

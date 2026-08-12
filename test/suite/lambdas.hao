@@ -16,7 +16,7 @@ func lMakeAdder(n: Int): (Int) -> Int {
 
 // ---- 泛型高阶函数（map/filter/forEach/reduce 手写）----
 func lMap<T, R>(arr: [T], f: (T) -> R): [R] {
-    var out: [R] = [];
+    var out: [R] = new [R]{};
     var i = 0;
     while (i < arr.length) {
         out += f(arr[i]);
@@ -26,7 +26,7 @@ func lMap<T, R>(arr: [T], f: (T) -> R): [R] {
 }
 
 func lFilter<T>(arr: [T], pred: (T) -> Bool): [T] {
-    var out: [T] = [];
+    var out: [T] = new [T]{};
     var i = 0;
     while (i < arr.length) {
         if (pred(arr[i])) {
@@ -90,7 +90,7 @@ func lambdasTest() {
     fmt.println(greet());                         // 你好，闭包
 
     // 8. 手写泛型高阶函数
-    var nums = [1, 2, 3, 4, 5];
+    var nums = new [Int]{ 1, 2, 3, 4, 5 };
     var doubled = lMap(nums, { x: Int -> x * 2 });
     fmt.println(doubled.length);       // 5
     fmt.println(doubled[0]);           // 2

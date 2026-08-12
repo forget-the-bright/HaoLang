@@ -8,7 +8,7 @@ class Item {
 
 func main() {
     // 1. 带类型标注的空数组 + push
-    var xs: [Int] = [];
+    var xs: [Int] = new [Int]{};
     xs += 10;
     xs += 20;
     xs += 30;
@@ -27,7 +27,7 @@ func main() {
     fmt.println(xs[3]);          // 0 (第一个 i=0)
 
     // 3. 字符串数组 push
-    var names: [String] = [];
+    var names: [String] = new [String]{};
     names += "alpha";
     names += "beta";
     names += "gamma";
@@ -35,13 +35,13 @@ func main() {
     fmt.println(names[1]);       // beta
 
     // 4. 字面量数组也可增长（cap 初始 == len）
-    var ds = [1.5, 2.5];
+    var ds = new [Double]{ 1.5, 2.5 };
     ds += 3.5;
     fmt.println(ds.length);      // 3
     fmt.println(ds[2]);          // 3.5
 
     // 5. push 对象引用
-    var items: [Item] = [];
+    var items: [Item] = new [Item]{};
     var k = 0;
     while (k < 5) {
         items += new Item(k);

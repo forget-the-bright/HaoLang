@@ -97,7 +97,8 @@ func main(args: [String]): Int { return 0; }
 - **值类型 `T?`（如 `Int?`）**：语义是可空值，实现装箱进堆（GcManaged），**语言分类上仍不是引用类型**。  
 - **FFI**：C 字符串须拷贝为 Hao `String`；C 资源指针须 **`NativeHandle`**（已落地：fs/net/regex）——见 [`方法论/FFI与运行时分层隔离.md`](方法论/FFI与运行时分层隔离.md)。
 
-完整对照 `TypeKind`、隐式判定 vs 一等属性、去 C 化路线：**仅** [`类型属性.md`](类型属性.md)。
+完整对照 `TypeKind`、隐式判定 vs 一等属性、去 C 化路线：**仅** [`类型属性.md`](类型属性.md)。  
+装箱 / 转型 / 通配正式语义：**仅** [`RFC/`](RFC/)（0001～0003）。
 
 ### 4.1 内建数值与逻辑
 
@@ -243,22 +244,26 @@ val s = when (k) { 1 -> "一"; else -> "多" };
 ## 7. 数组
 
 ```hao
-val a = [1, 2, 3];
-var xs: [Int] = [];
-xs += 10;                 // 动态 push，容量不足约 2× 扩容
+val a = new [Int]{ 1, 2, 3 };   // 必须 new（v0.60.3）
+var xs: [Int] = new [Int]{};
+xs += 10;                       // 动态 push
 fmt.println(xs.pop());
-var bytes: [Byte] = [0, 255];  // 紧凑 esz=1
-val b = new [Int](n);          // 定长；n 按有无符号扩展到 i64
+val b = new [Int](n);           // 定长
 val c = new [Int](n, fill);
-val d = [...a, ...b];          // 展开；禁 [T]?
+val d = new [Int]{ ...a, ...b }; // 展开须在 new [T]{…} 内
+Array arr = a;                  // [T] <: Array <: Object
+fmt.println(arr.length);
+fmt.println(arr.capacity);
+val e = a.clone();
 ```
 
-**ABI 要点（影响正确性）**
+**规则（RFC-0005）**
 
-- 数组头 **32 字节**（含 pad，保证元素区 16 对齐，服务 GC）。
-- `esz`：Bool/8 位=1，16 位=2，32 位与 Char=4，64 位=8。
-- 非空数组形参：传槽 by-ref；**`[T]?` 形参按值**。
-- 越界 → panic；满表类结构另见 collections。
+- 裸 `[1,2,3]` / `[]` **非法**；实例必须经 `new`。
+- `[T] → Array → Object`；`Array` 无下标/`pop`；索引仅 `[T]`。
+- 算法工具：`collections.*`（泛型 `[T]`）；布局与扩容仍为运行时 C。
+
+可变参数见 [RFC-0006](RFC/0006-可变参数.md)：`func Sum(values: Int...)`。
 
 ---
 
@@ -294,7 +299,7 @@ func area(w: Int, h: Int): Int { return w * h; }  // 重载
 | 提升匹配 | ✅ 如 Int→Double 计分 |
 | 函数值 / 高阶 | ✅ |
 | 泛型函数 | ✅ 实参推断；单态化 |
-| 具名实参 | ⬜ 未实现 |
+| 具名实参 | ✅ `name: expr`；位置前缀+具名后缀；见 [RFC-0004](RFC/0004-具名实参.md) |
 | 默认参数 | 以文法/实现为准；勿假设完整 |
 
 **可见性（顶层）**：默认 public；`private` 包内。
@@ -576,10 +581,13 @@ extern func ntohs(x: Int): Int = "ntohs" @link("ws2_32");
 
 | 特性 | 状态 |
 |------|------|
-| 具名实参 | ⬜ |
+| 具名实参 | ✅ |
+| 强制 `new` 数组 / `Array` 基类 | ✅ v0.60.3 · [RFC-0005](RFC/0005-数组统一基类.md) |
+| 可变参数 `T...` | ✅ v0.60.3 · [RFC-0006](RFC/0006-可变参数.md) |
+| 自动属性默认值 / 自定义体 / OnChange | ✅ v0.60.3 · [RFC-0007](RFC/0007-自动属性增强.md) |
 | 声明处变型 `in`/`out`（C#） | ❌ 明确不做（选 Java `? extends`/`? super`） |
 
-**近期已交付（勿当缺口）**：v0.58 OOP（where / 自动属性 / 接口默认 / is·as 三形态 / List·ArrayList）；v0.59 装箱+PECS；v0.59.1 crash 可观测+本地时区——详记忆文档第 3 章 / 时间线合订。
+**近期已交付（勿当缺口）**：v0.58 OOP；v0.59 装箱+PECS；v0.60 Arrays；v0.60.1 具名实参；v0.60.2 List API；**v0.60.3 Array/`T...`/自动属性**——详记忆文档第 3 章 / 时间线合订。
 
 以记忆文档第 3 章特性表为准；上表未交付项实现前当作不存在。
 

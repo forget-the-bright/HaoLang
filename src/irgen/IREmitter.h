@@ -368,6 +368,7 @@ public:
             "declare i64  @hao_array_check(ptr, i64)",
             "declare ptr  @hao_array_push(ptr, i64)",
             "declare i64  @hao_array_pop(ptr)",
+            "declare ptr  @hao_array_clone(ptr)",
             "declare ptr  @hao_object_new(i64, i64)",
             "declare ptr  @hao_handle_wrap(ptr)",  // 永生/外部 raw → NativeHandle（drop=NULL）
             "declare void @hao_gc_barrier(ptr, ptr)",

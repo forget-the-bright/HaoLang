@@ -74,7 +74,7 @@ func nullsafeTest() {
     fmt.println(nsTryRet()!!);   // 7
 
     // 10. [Int?] 装箱数组：esz=8、push/pop/下标
-    var na: [Int?] = [1, null];
+    var na: [Int?] = new [Int?]{ 1, null };
     na += 3;
     fmt.println(na[0]!!);        // 1
     fmt.println(na[1] == null);  // true
@@ -94,7 +94,7 @@ func nullsafeTest() {
 
     // 14. 下标须非空整数
     var ni: Int? = 0;
-    var narr: [Int] = [9];
+    var narr: [Int] = new [Int]{ 9 };
     fmt.println(narr[ni!!]);     // 9
 
     // 15. 装箱可空值相等（载荷，非指针身份）
@@ -112,7 +112,7 @@ func nullsafeTest() {
     fmt.println(es1 == es2);     // true
 
     // 17. 可空数组须 !! 后再 for-in / 下标赋值（直接 for(a)/a[i]= 编译拒绝）
-    var narr2: [Int]? = [1, 2];
+    var narr2: [Int]? = new [Int]{ 1, 2 };
     for (x in narr2!!) { fmt.println(x); }  // 1 / 2
     val narr2u = narr2!!;
     narr2u[0] = 7;
@@ -147,8 +147,8 @@ func nullsafeTest() {
     fmt.println(xi ?? 8);        // 8
 
     // 23. 可空数组展开须 !!（直接 [...a?] / 无 else 的 when 表达式见 negcheck）
-    var nsArr: [Int]? = [1, 2];
-    val nsSpread = [...nsArr!!];
+    var nsArr: [Int]? = new [Int]{ 1, 2 };
+    val nsSpread = new [Int]{ ...nsArr!! };
     fmt.println(nsSpread.length); // 2
 
     // 24. smart cast：if (x != null) 分支内免 !!

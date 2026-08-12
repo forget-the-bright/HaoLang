@@ -30,7 +30,7 @@ func langFixTest() {
     fmt.println(n!!.next!!.value);             // 9
 
     // 数组形参 += 扩容后调用方可见
-    var a: [Int] = [];
+    var a: [Int] = new [Int]{};
     var i = 0;
     while (i < 20) {
         langFixPush(a, i);
@@ -41,7 +41,7 @@ func langFixTest() {
     fmt.println(a[19]);                        // 19
 
     // 可空数组形参：非空与 null 均安全
-    fmt.println(langFixOptLen([10, 20, 30]));  // 3
+    fmt.println(langFixOptLen(new [Int]{ 10, 20, 30 }));  // 3
     fmt.println(langFixOptLen(null));          // -1
 
     // when 表达式：方法调用 / 字段须正确推断（勿误判 Unit）

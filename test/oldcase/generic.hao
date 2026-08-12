@@ -86,12 +86,12 @@ func main() {
     fmt.println(swapped.getValue()); // 年龄
 
     // ---- 泛型 + 数组 ----
-    val h = new Holder<Int>([10, 20, 30]);
+    val h = new Holder<Int>(new [Int]{ 10, 20, 30 });
     fmt.println(h.first());          // 10
     fmt.println(h.last());           // 30
     fmt.println(h.size());           // 3
 
-    val hs = new Holder<String>(["甲", "乙", "丙"]);
+    val hs = new Holder<String>(new [String]{ "甲", "乙", "丙" });
     fmt.println(hs.last());          // 丙
 
     // ---- 链式调用 ----
@@ -110,9 +110,9 @@ func main() {
     fmt.println(bb.get());             // true
 
     // ---- 泛型函数（T 由实参推断）----
-    fmt.println(firstOf([7, 8, 9]));     // 7
-    fmt.println(firstOf(["a", "b"]));     // a
-    fmt.println(countIf([1, 2, 1, 3, 1], 1));  // 3
+    fmt.println(firstOf(new [Int]{ 7, 8, 9 }));     // 7
+    fmt.println(firstOf(new [String]{ "a", "b" }));     // a
+    fmt.println(countIf(new [Int]{ 1, 2, 1, 3, 1 }, 1));  // 3
 
     // ---- 泛型 + 接口（动态分派）----
     val person = new Person("爱丽丝");

@@ -443,15 +443,22 @@ private:
     Value genPrimary(HaoLangParser::PrimaryContext* e);
     Value genLiteral(HaoLangParser::LiteralContext* lit);
     Value genTemplateString(HaoLangParser::TemplateStringContext* ts);
-    Value genArrayLiteral(HaoLangParser::ArrayLiteralContext* al);
-    // 生成指定元素类型的空数组（用于 var xs: [T] = [] 这类带标注的空字面量）
+    // v0.60.3：仅 new [T]{…} / 隐式 T... 打包走此路径（废止裸字面量）
+    Value genArrayInit(HaoLangParser::ArrayElementListContext* list,
+                       const TypePtr& forcedElem,
+                       antlr4::ParserRuleContext* where);
+    // 生成指定元素类型的空数组
     Value genEmptyArray(const TypePtr& elemType);
     // v0.32：定长数组 new [T](n) / new [T](n, fill)；len 为整数类型
     Value genSizedArray(const TypePtr& elemType, const Value& len,
                         const Value* fill, antlr4::ParserRuleContext* where);
-    // 判断表达式是否为空数组字面量 []（接受任意语法节点）
-    static bool isEmptyArrayLiteral(antlr4::tree::ParseTree* e);
+    // 是否为空数组初始化 new [T]{}（接受任意语法节点）
+    static bool isEmptyArrayInit(antlr4::tree::ParseTree* e);
     Value genWhenExpr(HaoLangParser::WhenStmtContext* w);
+
+    // RFC-0005：统一数组基类 object$Array
+    static bool isArrayBaseClass(const TypePtr& t);
+    static bool isArrayReceiver(const TypePtr& t);
 
     // ---------- 辅助 ----------
     // 加载变量当前值
@@ -474,6 +481,54 @@ private:
                               antlr4::tree::ParseTree* expr,
                               Value arg,
                               bool arrayByRef = true);
+
+    // v0.60.1 具名实参：argList 是否含 name: expr
+    static bool argListHasNamed(HaoLangParser::ArgListContext* al);
+
+    // 将实参绑定到形参槽（位置前缀 + 具名后缀；精确元数）。
+    // sourceOrderSlots：源码顺序下每个实参对应的槽下标（用于求值序）。
+    // reportErrors=false 时仅返回成败（重载试绑）。
+    bool bindCallArgExprs(HaoLangParser::ArgListContext* al,
+                          const std::vector<std::string>& paramNames,
+                          std::vector<HaoLangParser::ExprContext*>& slotExprs,
+                          std::vector<size_t>& sourceOrderSlots,
+                          antlr4::ParserRuleContext* ctx,
+                          bool allowNamed,
+                          bool reportErrors = true);
+
+    // 已知形参名/类型：按源码序求值写入槽序 outArgs/outExprs。
+    bool collectCallArgsForFormals(
+        HaoLangParser::ArgListContext* al,
+        const std::vector<std::string>& paramNames,
+        const std::vector<TypePtr>& paramTypes,
+        std::vector<Value>& outArgs,
+        std::vector<antlr4::tree::ParseTree*>& outExprs,
+        antlr4::ParserRuleContext* ctx,
+        bool allowNamed = true,
+        bool isVarArg = false);
+
+    // 解析 paramList，处理 T... → [T] 与 isVarArg
+    bool fillParamList(HaoLangParser::ParamListContext* pl,
+                       std::vector<std::string>& names,
+                       std::vector<TypePtr>& types,
+                       bool& isVarArg);
+
+    // 方法重载：支持具名试绑；多候选时先源码序求值再按名入槽打分。
+    const MethodInfo* collectCallArgsForMethodOverload(
+        HaoLangParser::ArgListContext* al,
+        const std::vector<const MethodInfo*>& cands,
+        std::vector<Value>& outArgs,
+        std::vector<antlr4::tree::ParseTree*>& outExprs,
+        antlr4::ParserRuleContext* ctx,
+        const std::string& displayName);
+
+    SymbolPtr collectCallArgsForSymbolOverload(
+        HaoLangParser::ArgListContext* al,
+        const std::vector<SymbolPtr>& cands,
+        std::vector<Value>& outArgs,
+        std::vector<antlr4::tree::ParseTree*>& outExprs,
+        antlr4::ParserRuleContext* ctx,
+        const std::string& displayName);
 
     // 赋值左值：求值 postfix 前缀（不含 endExclusive 及之后），支持 .field / !!。
     bool evalAssignRecv(HaoLangParser::PostfixExprContext* pf,

@@ -61,7 +61,7 @@ func main() {
     fmt.println(sumList(big));      // 0+1+...+99999 = 4999950000
 
     // 4. 数组反复扩容：产生大量旧数组垃圾
-    var arr: [Int] = [];
+    var arr: [Int] = new [Int]{};
     i = 0;
     while (i < 20000) {
         arr += i;

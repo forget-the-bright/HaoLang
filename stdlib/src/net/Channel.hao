@@ -44,7 +44,7 @@ public class ChannelPipeline {
     var channel: Channel?;
 
     constructor() {
-        this.handlers = [];
+        this.handlers = new [ChannelHandler]{};
         this.channel = null;
     }
 

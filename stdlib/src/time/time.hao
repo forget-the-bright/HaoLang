@@ -51,17 +51,17 @@ class Time {
     }
 
     func getYear(): Int {
-        var a: [Int] = [0, 0, 0];
+        var a: [Int] = new [Int]{ 0, 0, 0 };
         this.fillCivil(a);
         return a[0];
     }
     func getMonth(): Int {
-        var a: [Int] = [0, 0, 0];
+        var a: [Int] = new [Int]{ 0, 0, 0 };
         this.fillCivil(a);
         return a[1];
     }
     func getDay(): Int {
-        var a: [Int] = [0, 0, 0];
+        var a: [Int] = new [Int]{ 0, 0, 0 };
         this.fillCivil(a);
         return a[2];
     }
@@ -85,7 +85,7 @@ class Time {
         return wi;
     }
     func getDayOfYear(): Int {
-        var a: [Int] = [0, 0, 0];
+        var a: [Int] = new [Int]{ 0, 0, 0 };
         this.fillCivil(a);
         val y = a[0];
         val m = a[1];
@@ -122,7 +122,7 @@ class Time {
     }
 
     func format(pattern: String): String {
-        var a: [Int] = [0, 0, 0];
+        var a: [Int] = new [Int]{ 0, 0, 0 };
         this.fillCivil(a);
         val y = a[0];
         val mo = a[1];

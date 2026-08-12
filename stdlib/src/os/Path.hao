@@ -92,7 +92,7 @@ class Path {
             i += 1;
         }
         val parts = pathSplitSlash(unified);
-        var stack: [String] = [];
+        var stack: [String] = new [String]{};
         var j = 0;
         while (j < parts.length) {
             val seg = parts[j];
@@ -102,7 +102,7 @@ class Path {
                 if (stack.length > 0) {
                     val top = stack[stack.length - 1];
                     if (top != "..") {
-                        var ns: [String] = [];
+                        var ns: [String] = new [String]{};
                         var k = 0;
                         while (k < stack.length - 1) {
                             ns += stack[k];
@@ -144,7 +144,7 @@ private func pathIsSep(c: Int): Bool {
 }
 
 private func pathSplitSlash(p: String): [String] {
-    var r: [String] = [];
+    var r: [String] = new [String]{};
     if (p.length == 0) { return r; }
     val s = String.valueOf(p);
     var start = 0;

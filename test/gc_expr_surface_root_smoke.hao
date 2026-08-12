@@ -17,7 +17,7 @@ func main() {
         // 字段赋值：recv 跨右值
         keep.next = new Box("n-" + Integer.toStr(round));
         // 数组字面量：先算的元素跨 array_new
-        var arr = [new Box("a"), new Box("b"), new Box("c"), keep];
+        var arr = new [Box]{ new Box("a"), new Box("b"), new Box("c"), keep };
         // List + push 扩容（runtime 皮带）
         var lst = new ArrayList<Object>();
         lst.add(arr[0]);
