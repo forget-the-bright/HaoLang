@@ -2,7 +2,7 @@
   "name": "haolang",
   "displayName": "HaoLang",
   "description": "HaoLang 语言支持：语法高亮、snippets、hao CLI 集成（Phase 0+1）",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "publisher": "haolang",
   "engines": {
     "vscode": "^1.85.0"
@@ -40,13 +40,6 @@
           "light": "./icons/hao-light.svg",
           "dark": "./icons/hao-dark.svg"
         }
-      }
-    ],
-    "iconThemes": [
-      {
-        "id": "haolang-icons",
-        "label": "HaoLang Icons",
-        "path": "./fileicons/haolang-icon-theme.json"
       }
     ],
     "configurationDefaults": {
@@ -190,3 +183,5 @@
     "typescript": "^5.3.3"
   }
 }
+
+

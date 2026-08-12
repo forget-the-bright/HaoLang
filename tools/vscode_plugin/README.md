@@ -35,6 +35,10 @@ npm run compile
 | ProblemMatcher `$hao` | `路径:行:列: 错误:` / `警告:` |
 | 格式化 | Document Formatting → `hao fmt`（stdout）；可选保存时 `hao fmt -w` |
 | 状态栏 | 显示 `hao version` |
+| `.hao` 文件图标 | 无底板；拟人「比好」拇指手势（渐变玻璃质感 + 蒸汽/爪环/水滴/星芒点缀）；仅语言 icon |
+
+> 若资源管理器里 `.hao` 仍是普通文档图标：命令面板 → `Preferences: File Icon Theme`，选用支持语言图标的主题（如 **Seti (Visual Studio Code)** / **Minimal**）。切勿再装整套「只含 Hao」的主题，否则会盖掉其它语言图标。
+
 
 ## 语法权威
 
