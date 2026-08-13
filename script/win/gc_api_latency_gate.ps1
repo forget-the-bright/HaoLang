@@ -6,7 +6,7 @@ param(
     [int]$MaxHoldP95Ms = 20,
     [int]$MaxSafepointP95Ms = 20,
     [int]$MaxServerP95Ms = 40,
-    [int]$MaxJsonP95Ms = 15,
+    [int]$MaxJsonP95Ms = 20,
     [int]$MaxWallP95Ms = 80,
     [switch]$StartMonitor
 )

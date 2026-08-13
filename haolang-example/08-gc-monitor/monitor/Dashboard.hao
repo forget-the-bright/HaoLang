@@ -265,86 +265,6 @@ class GcSnapshot {
         this.handlerMs = GcSnapshot.nsToMs(monoNs() - tAll);
     }
 
-    // 手写全量 JSON（禁反射字段税；与面板字段同集合）
-    func toJson(): String {
-        val b = new json.JsonBuf();
-        b.append("{");
-        b.append("\"workingSetBytes\":"); b.append(Long.toStr(this.workingSetBytes));
-        b.append(",\"privateBytes\":"); b.append(Long.toStr(this.privateBytes));
-        b.append(",\"liveBytes\":"); b.append(Long.toStr(this.liveBytes));
-        b.append(",\"heapBytes\":"); b.append(Long.toStr(this.heapBytes));
-        b.append(",\"nurseryBytes\":"); b.append(Long.toStr(this.nurseryBytes));
-        b.append(",\"threshold\":"); b.append(Long.toStr(this.threshold));
-        b.append(",\"allocatedSinceGc\":"); b.append(Long.toStr(this.allocatedSinceGc));
-        b.append(",\"blockCount\":"); b.append(Long.toStr(this.blockCount));
-        b.append(",\"minorCount\":"); b.append(Long.toStr(this.minorCount));
-        b.append(",\"majorCount\":"); b.append(Long.toStr(this.majorCount));
-        b.append(",\"collectCount\":"); b.append(Long.toStr(this.collectCount));
-        b.append(",\"finalizerRuns\":"); b.append(Long.toStr(this.finalizerRuns));
-        b.append(",\"finalizerSets\":"); b.append(Long.toStr(this.finalizerSets));
-        b.append(",\"stwIncomplete\":"); b.append(Long.toStr(this.stwIncomplete));
-        b.append(",\"stwMarkAllFallbacks\":"); b.append(Long.toStr(this.stwMarkAllFallbacks));
-        b.append(",\"concurrentMarkCycles\":"); b.append(Long.toStr(this.concurrentMarkCycles));
-        b.append(",\"markAssistSteps\":"); b.append(Long.toStr(this.markAssistSteps));
-        b.append(",\"markAbortCycles\":"); b.append(Long.toStr(this.markAbortCycles));
-        b.append(",\"markWorkerSteps\":"); b.append(Long.toStr(this.markWorkerSteps));
-        b.append(",\"remsetCount\":"); b.append(Long.toStr(this.remsetCount));
-        b.append(",\"parkWatchdogTrips\":"); b.append(Long.toStr(this.parkWatchdogTrips));
-        b.append(",\"stwIncompleteRoot\":"); b.append(Long.toStr(this.stwIncompleteRoot));
-        b.append(",\"stwIncompleteTerm\":"); b.append(Long.toStr(this.stwIncompleteTerm));
-        b.append(",\"markAbortRoot\":"); b.append(Long.toStr(this.markAbortRoot));
-        b.append(",\"markAbortTerm\":"); b.append(Long.toStr(this.markAbortTerm));
-        b.append(",\"markAbortParkWd\":"); b.append(Long.toStr(this.markAbortParkWd));
-        b.append(",\"lastStwPhase\":"); b.append(Long.toStr(this.lastStwPhase));
-        b.append(",\"lastStwAttempt\":"); b.append(Long.toStr(this.lastStwAttempt));
-        b.append(",\"lastStwTargets\":"); b.append(Long.toStr(this.lastStwTargets));
-        b.append(",\"lastStwParked\":"); b.append(Long.toStr(this.lastStwParked));
-        b.append(",\"lastStwMissing\":"); b.append(Long.toStr(this.lastStwMissing));
-        b.append(",\"lastStwOsBlockMissing\":"); b.append(Long.toStr(this.lastStwOsBlockMissing));
-        b.append(",\"lastMissTidCount\":"); b.append(Long.toStr(this.lastMissTidCount));
-        b.append(",\"lastMissTid0\":"); b.append(Long.toStr(this.lastMissTid0));
-        b.append(",\"lastMissTid1\":"); b.append(Long.toStr(this.lastMissTid1));
-        b.append(",\"lastMissMaxAgeMs\":"); b.append(Long.toStr(this.lastMissMaxAgeMs));
-        b.append(",\"finalizerSkipAbort\":"); b.append(Long.toStr(this.finalizerSkipAbort));
-        b.append(",\"finalizerLiveAtSweep\":"); b.append(Long.toStr(this.finalizerLiveAtSweep));
-        b.append(",\"lastFinalizerDiag\":"); b.append(Long.toStr(this.lastFinalizerDiag));
-        b.append(",\"concurrentSweepCycles\":"); b.append(Long.toStr(this.concurrentSweepCycles));
-        b.append(",\"spanSweepChunks\":"); b.append(Long.toStr(this.spanSweepChunks));
-        b.append(",\"freelistHits\":"); b.append(Long.toStr(this.freelistHits));
-        b.append(",\"stwWaitMsTotal\":"); b.append(Long.toStr(this.stwWaitMsTotal));
-        b.append(",\"spanCommitBytes\":"); b.append(Long.toStr(this.spanCommitBytes));
-        b.append(",\"freelistBytes\":"); b.append(Long.toStr(this.freelistBytes));
-        b.append(",\"scavengeBytes\":"); b.append(Long.toStr(this.scavengeBytes));
-        b.append(",\"scavengeCycles\":"); b.append(Long.toStr(this.scavengeCycles));
-        b.append(",\"spanCount\":"); b.append(Long.toStr(this.spanCount));
-        b.append(",\"lastCollectHoldMs\":"); b.append(Long.toStr(this.lastCollectHoldMs));
-        b.append(",\"lastUnlinkMs\":"); b.append(Long.toStr(this.lastUnlinkMs));
-        b.append(",\"lastDrainMs\":"); b.append(Long.toStr(this.lastDrainMs));
-        b.append(",\"lastScavengeMs\":"); b.append(Long.toStr(this.lastScavengeMs));
-        b.append(",\"lastStatsLockWaitMs\":"); b.append(Long.toStr(this.lastStatsLockWaitMs));
-        b.append(",\"lastPublishMs\":"); b.append(Long.toStr(this.lastPublishMs));
-        b.append(",\"statsPublishCount\":"); b.append(Long.toStr(this.statsPublishCount));
-        b.append(",\"lastStatsSafepointMs\":"); b.append(Long.toStr(this.lastStatsSafepointMs));
-        b.append(",\"cpuPercent\":"); b.append(Integer.toStr(this.cpuPercent));
-        b.append(",\"cpuReady\":");
-        if (this.cpuReady) { b.append("true"); } else { b.append("false"); }
-        b.append(",\"threadCount\":"); b.append(Long.toStr(this.threadCount));
-        b.append(",\"gcThreads\":"); b.append(Long.toStr(this.gcThreads));
-        b.append(",\"handleCount\":"); b.append(Long.toStr(this.handleCount));
-        b.append(",\"uptimeMs\":"); b.append(Long.toStr(this.uptimeMs));
-        b.append(",\"usagePct\":"); b.append(Integer.toStr(this.usagePct));
-        b.append(",\"summary\":"); b.append(json.JSON.quote(this.summary));
-        b.append(",\"note\":"); b.append(json.JSON.quote(this.note));
-        b.append(",\"engine\":"); b.append(json.JSON.quote(this.engine));
-        b.append(",\"procMs\":"); b.append(Long.toStr(this.procMs));
-        b.append(",\"gcStatsMs\":"); b.append(Long.toStr(this.gcStatsMs));
-        b.append(",\"handlerMs\":"); b.append(Long.toStr(this.handlerMs));
-        b.append(",\"jsonMs\":"); b.append(Long.toStr(this.jsonMs));
-        b.append(",\"serverTotalMs\":"); b.append(Long.toStr(this.serverTotalMs));
-        b.append("}");
-        return b.finish();
-    }
-
     func toLatencyView(): GcLatencyView {
         val v = new GcLatencyView();
         v.heapBytes = this.heapBytes;
@@ -415,7 +335,7 @@ class DashboardController {
         return HttpResponse.html(html);
     }
 
-    // 全量 GcSnapshot；单次 stringify；jsonMs/serverTotal 权威在 X-Hao-* 头（body 内为 0 占位）
+    // 全量 GcSnapshot；反射 BeanInfo+索引读；单次 stringify；计时权威 X-Hao-*
     @GetMapping(path = "/api/gc")
     func apiGc(req: HttpRequest): HttpResponse {
         val t0 = monoNs();
@@ -426,7 +346,7 @@ class DashboardController {
         snap.summary = $"gc={snap.gcStatsMs} proc={snap.procMs} hold={snap.lastCollectHoldMs}"
             + $" sp={snap.lastStatsSafepointMs} collect={snap.collectCount}";
         val tJson = monoNs();
-        val body = snap.toJson();
+        val body = json.JSON.toJSONString(snap);
         val jsonMs = GcSnapshot.nsToMs(monoNs() - tJson);
         val serverMs = GcSnapshot.nsToMs(monoNs() - t0);
         val r = HttpResponse.json(200, body);

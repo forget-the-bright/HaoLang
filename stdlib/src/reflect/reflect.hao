@@ -84,9 +84,19 @@ class Class {
     func getField(o: Object, name: String): String? {
         return hao_reflect_field_get(this.meta, o, name);
     }
+    // JSON 热路径：按字段下标读（禁按名线性查找）
+    func getFieldAt(o: Object, i: Int): String? {
+        return hao_reflect_field_get_at(this.meta, o, i);
+    }
     // v0.49：引用字段对象指针；标量/String/空 → null（嵌套 Bean / JSON / 模板用）
     func getFieldObject(o: Object, name: String): Object? {
         return hao_reflect_field_get_obj(this.meta, o, name);
+    }
+    func getFieldObjectAt(o: Object, i: Int): Object? {
+        return hao_reflect_field_get_obj_at(this.meta, o, i);
+    }
+    func fieldIsStatic(i: Int): Bool {
+        return hao_reflect_field_is_static(this.meta, i) != 0;
     }
     func setField(o: Object, name: String, value: String): Bool {
         return hao_reflect_field_set(this.meta, o, name, value) == 0;
@@ -477,7 +487,10 @@ extern func hao_reflect_method_anno_count(m: NativeHandle, mi: Int): Int = "hao_
 extern func hao_reflect_method_anno_name(m: NativeHandle, mi: Int, ai: Int): String = "hao_reflect_method_anno_name";
 extern func hao_reflect_method_anno_value(m: NativeHandle, mi: Int, ai: Int): String = "hao_reflect_method_anno_value";
 extern func hao_reflect_field_get(m: NativeHandle, o: Object, name: String): String? = "hao_reflect_field_get";
+extern func hao_reflect_field_get_at(m: NativeHandle, o: Object, i: Int): String? = "hao_reflect_field_get_at";
 extern func hao_reflect_field_get_obj(m: NativeHandle, o: Object, name: String): Object? = "hao_reflect_field_get_obj";
+extern func hao_reflect_field_get_obj_at(m: NativeHandle, o: Object, i: Int): Object? = "hao_reflect_field_get_obj_at";
+extern func hao_reflect_field_is_static(m: NativeHandle, i: Int): Int = "hao_reflect_field_is_static";
 extern func hao_reflect_field_set(m: NativeHandle, o: Object, name: String, value: String): Int = "hao_reflect_field_set";
 extern func hao_reflect_method_return_type(m: NativeHandle, name: String): String = "hao_reflect_method_return_type";
 

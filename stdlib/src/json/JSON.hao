@@ -42,10 +42,63 @@ public class JsonBuf {
     }
 }
 
+// 对标 Fastjson ObjectWriterField / .NET JsonPropertyInfo：每字段一次元数据
+class JsonFieldInfo {
+    var quotedKey: String = "\"\"";
+    var kind: Int = 0; // 1=String 2=Bool/Number 3=Object
+    var index: Int = 0;
+}
+
+// 对标 Fastjson ObjectWriter / Jackson BeanDescription：按类缓存
+class JsonBeanInfo {
+    var fields: ArrayList<JsonFieldInfo>;
+
+    constructor() {
+        this.fields = new ArrayList<JsonFieldInfo>();
+    }
+}
+
 class JSON {
     // Feature 位标志（toJSONString 可选）
     static val PrettyFormat: Int = 1;
     static val WriteMapNullValue: Int = 2;
+
+    // Class 名 → BeanInfo（进程内缓存；字段 quotedKey 只编一次）
+    static var beanCache: HashMap<String, JsonBeanInfo>? = null;
+
+    static func beanCacheMap(): HashMap<String, JsonBeanInfo> {
+        if (JSON.beanCache == null) {
+            JSON.beanCache = new HashMap<String, JsonBeanInfo>();
+        }
+        return JSON.beanCache!!;
+    }
+
+    static func beanInfoOf(t: reflect.Class): JsonBeanInfo {
+        val key = t.getName();
+        val cache = JSON.beanCacheMap();
+        val hit = cache.get(key);
+        if (hit != null) { return hit!!; }
+        val info = new JsonBeanInfo();
+        var i = 0;
+        val fc = t.getFieldCount();
+        while (i < fc) {
+            val name = t.getFieldName(i);
+            val ft = t.getFieldType(i);
+            val idx = i;
+            i += 1;
+            if (t.fieldIsStatic(idx)) { continue; }
+            if (String.valueOf(name).startsWith("_")) { continue; }
+            val fi = new JsonFieldInfo();
+            fi.index = idx;
+            fi.quotedKey = JSON.quote(name);
+            if (JSON.fieldIsString(ft)) { fi.kind = 1; }
+            else if (JSON.fieldIsBool(ft) || JSON.fieldIsNumber(ft)) { fi.kind = 2; }
+            else { fi.kind = 3; }
+            info.fields.add(fi);
+        }
+        cache.put(key, info);
+        return info;
+    }
 
     static func parse(text: String): Object {
         val p = new JsonParser(text);
@@ -566,31 +619,29 @@ class JSON {
         return r + "]";
     }
 
-    // 反射 Bean：倍增字节缓冲 append（禁字段循环平方 r=r+）
+    // 反射 Bean：BeanInfo 缓存 + 按索引读（对标 Fastjson ObjectWriter；禁按名查找/每次 quote）
     static func stringifyBean(value: Object, t: reflect.Class, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
+        val info = JSON.beanInfoOf(t);
         val buf = new JsonBuf();
         buf.append("{");
         var first = true;
         var i = 0;
-        val fc = t.getFieldCount();
-        while (i < fc) {
-            val name = t.getFieldName(i);
-            val ft = t.getFieldType(i);
+        val n = info.fields.size();
+        while (i < n) {
+            val f = info.fields.get(i);
             i += 1;
-            // 跳过合成/内部
-            if (String.valueOf(name).startsWith("_")) { continue; }
             var piece = "";
-            if (JSON.fieldIsString(ft)) {
-                val s = t.getField(value, name);
+            if (f.kind == 1) {
+                val s = t.getFieldAt(value, f.index);
                 if (s == null) { piece = "null"; }
                 else { piece = JSON.quote(s!!); }
-            } else if (JSON.fieldIsBool(ft) || JSON.fieldIsNumber(ft)) {
-                val s = t.getField(value, name);
+            } else if (f.kind == 2) {
+                val s = t.getFieldAt(value, f.index);
                 if (s == null) { piece = "null"; }
                 else { piece = s!!; }
             } else {
-                val child = t.getFieldObject(value, name);
+                val child = t.getFieldObjectAt(value, f.index);
                 if (child == null) { piece = "null"; }
                 else { piece = JSON.stringifyAt(child!!, features, indent + 1, stack, depth); }
             }
@@ -600,7 +651,7 @@ class JSON {
                 buf.append("\n");
                 buf.append(JSON.pad(indent + 1));
             }
-            buf.append(JSON.quote(name));
+            buf.append(f.quotedKey);
             buf.append(":");
             if (pretty) { buf.append(" "); }
             buf.append(piece);

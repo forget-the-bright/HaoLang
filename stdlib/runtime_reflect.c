@@ -6,9 +6,9 @@
  *  由于对象槽位 0 存虚表指针、且每个类的虚表是唯一全局常量，运行时
  *  从对象反查虚表即可定位其所属类的元数据。
  *
- *  字段值操作：字段元数据含槽位偏移，按类型（Int/Double/Bool/String）
- *  读写对象槽位。值以字符串形式跨反射边界传递（get 转字符串、set
- *  解析字符串），对基本类型与 String 字段完全可用。
+ *  字段值操作：字段元数据含槽位偏移，按类型读写对象槽位。
+ *  兼容路径 getField(name) 仍转字符串；JSON 热路径用 field_get_at(index)
+ *  （对标 Fastjson ObjectWriter / .NET JsonTypeInfo：按索引 + 缓存描述，禁按名线性查找）。
  */
 #include "runtime_internal.h"
 #include <errno.h>
@@ -355,38 +355,14 @@ void* hao_reflect_field_get_obj(HaoNativeHandle* h, void* obj, HaoString* fname)
     return out;
 }
 
-/* 读字段值转字符串。obj 为对象实例。 */
-HaoString* hao_reflect_field_get(HaoNativeHandle* h, void* obj, HaoString* fname) {
-    void* meta = meta_raw(h);
-    const HaoClassMeta* m = (const HaoClassMeta*)meta;
-    char* name_c;
-    const HaoFieldMeta* f;
+/* 读 HaoFieldMeta 读槽 → JSON/反射用字符串（调用方已挂根 obj） */
+static HaoString* field_value_to_str(void* obj, const HaoFieldMeta* f) {
     char* base;
     char buf[64];
     const char* t;
-    if (!obj || !fname) return NULL;
-    /*
-     * obj 被 sweep 后内存常复用为 String 载荷；再按槽读会得到 ASCII 当指针
-     * （崩溃 rcx=「collectC」）。须先挂根再确认仍是 SLOTS/FULL 对象。
-     */
-    hao_gc_add_root(obj);
-    hao_gc_add_root(fname);
-    if (!hao_gc_expect_heap_object(obj)) {
-        fprintf(stderr, "panic: reflect field_get 非对象/已回收 obj=%p\n", obj);
-        fflush(stderr);
-        abort();
-    }
-    name_c = hao_ffi_dup_cstr(fname);
-    f = find_field(m, name_c);
-    free(name_c);
-    if (!f) {
-        hao_gc_remove_root(fname);
-        hao_gc_remove_root(obj);
-        return NULL;
-    }
+    if (!f || !obj) return NULL;
     base = (char*)obj + (size_t)f->slot * 8;
     t = f->typeStr;
-    /* 非空标量按值读；String/String? 按指针；T? 数值勿走此路（槽内是指针） */
     if (t && strcmp(t, "Int") == 0) {
         hao_fmt_i64_dec(buf, (int)sizeof buf, (int64_t)(*(int32_t*)base));
     } else if (t && strcmp(t, "Long") == 0) {
@@ -422,18 +398,85 @@ HaoString* hao_reflect_field_get(HaoNativeHandle* h, void* obj, HaoString* fname
             fflush(stderr);
             abort();
         }
-        hao_gc_remove_root(fname);
-        hao_gc_remove_root(obj);
         return s;
     } else {
         hao_fmt_ptr_angle(buf, (int)sizeof buf, *(void**)base);
     }
+    return hao_str_from_cstr(buf);
+}
+
+/* 按索引读字段（JSON 热路径：禁按名线性查找） */
+HaoString* hao_reflect_field_get_at(HaoNativeHandle* h, void* obj, int32_t i) {
+    void* meta = meta_raw(h);
+    const HaoClassMeta* m = (const HaoClassMeta*)meta;
+    const HaoFieldMeta* f;
+    HaoString* r;
+    if (!obj || !m || i < 0 || i >= m->fieldCount) return NULL;
+    hao_gc_add_root(obj);
+    if (!hao_gc_expect_heap_object(obj)) {
+        fprintf(stderr, "panic: reflect field_get_at 非对象/已回收 obj=%p\n", obj);
+        fflush(stderr);
+        abort();
+    }
+    f = &m->fields[i];
+    r = field_value_to_str(obj, f);
+    hao_gc_remove_root(obj);
+    return r;
+}
+
+void* hao_reflect_field_get_obj_at(HaoNativeHandle* h, void* obj, int32_t i) {
+    void* meta = meta_raw(h);
+    const HaoClassMeta* m = (const HaoClassMeta*)meta;
+    const HaoFieldMeta* f;
+    void* out = NULL;
+    if (!obj || !m || i < 0 || i >= m->fieldCount) return NULL;
+    f = &m->fields[i];
+    if (is_scalar_field_type(f->typeStr)) return NULL;
     {
-        HaoString* r = hao_str_from_cstr(buf);
+        char* base = (char*)obj + (size_t)f->slot * 8;
+        out = *(void**)base;
+    }
+    return out;
+}
+
+int32_t hao_reflect_field_is_static(HaoNativeHandle* h, int32_t i) {
+    void* meta = meta_raw(h);
+    const HaoClassMeta* m = (const HaoClassMeta*)meta;
+    if (!m || i < 0 || i >= m->fieldCount) return 0;
+    return m->fields[i].isStatic ? 1 : 0;
+}
+
+/* 读字段值转字符串。obj 为对象实例。 */
+HaoString* hao_reflect_field_get(HaoNativeHandle* h, void* obj, HaoString* fname) {
+    void* meta = meta_raw(h);
+    const HaoClassMeta* m = (const HaoClassMeta*)meta;
+    char* name_c;
+    const HaoFieldMeta* f;
+    HaoString* r;
+    if (!obj || !fname) return NULL;
+    /*
+     * obj 被 sweep 后内存常复用为 String 载荷；再按槽读会得到 ASCII 当指针
+     * （崩溃 rcx=「collectC」）。须先挂根再确认仍是 SLOTS/FULL 对象。
+     */
+    hao_gc_add_root(obj);
+    hao_gc_add_root(fname);
+    if (!hao_gc_expect_heap_object(obj)) {
+        fprintf(stderr, "panic: reflect field_get 非对象/已回收 obj=%p\n", obj);
+        fflush(stderr);
+        abort();
+    }
+    name_c = hao_ffi_dup_cstr(fname);
+    f = find_field(m, name_c);
+    free(name_c);
+    if (!f) {
         hao_gc_remove_root(fname);
         hao_gc_remove_root(obj);
-        return r;
+        return NULL;
     }
+    r = field_value_to_str(obj, f);
+    hao_gc_remove_root(fname);
+    hao_gc_remove_root(obj);
+    return r;
 }
 
 /* field_set 专用解析（非导出；整型/布尔 parse 已上移 Hao） */

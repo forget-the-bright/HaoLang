@@ -32,13 +32,18 @@ if (-not $apiGc.Success) {
 } elseif ($apiGc.Value -match 'toLatencyView') {
     Write-Host "FAIL GC_HTTP_LAT default /api/gc still uses toLatencyView (lean)"
     $fail++
-} elseif ($apiGc.Value -notmatch 'snap\.toJson\(\)') {
-    Write-Host "FAIL GC_HTTP_LAT default /api/gc must use snap.toJson() (not reflect stringify)"
+} elseif ($apiGc.Value -match 'snap\.toJson\(') {
+    Write-Host "FAIL GC_HTTP_LAT default still hand-written toJson (symptom bypass)"
+    $fail++
+} elseif ($apiGc.Value -notmatch 'toJSONString\(snap\)') {
+    Write-Host "FAIL GC_HTTP_LAT default /api/gc must use JSON.toJSONString(snap)"
     $fail++
 } else {
-    Write-Host "OK   default /api/gc uses hand-written snap.toJson()"
+    Write-Host "OK   default /api/gc uses reflect toJSONString (BeanInfo path)"
 }
-Need $dash "func toJson\(\)" "missing GcSnapshot.toJson"
+Need $json "class JsonBeanInfo" "missing JsonBeanInfo cache"
+Need $json "getFieldAt" "stringifyBean must use getFieldAt"
+Need $json "beanInfoOf" "missing beanInfoOf"
 
 # stringifyBean 热路径禁 r = r +
 $m = [regex]::Match($json, '(?s)static func stringifyBean\(.*?return buf\.finish\(\);\s*\}')
