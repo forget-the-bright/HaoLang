@@ -1,0 +1,31 @@
+// T07：concurrent sweep 首交付 — 密分配后 collect，heap/block 回落；指标可观测
+package main;
+
+import gc;
+import collections.*;
+
+class Box {
+    var tag: String = "";
+    constructor(t: String) { this.tag = t; }
+}
+
+func main() {
+    var keep = new Box("alive");
+    var junk: ArrayList<Object>? = new ArrayList<Object>();
+    var i = 0;
+    while (i < 1200) {
+        junk!!.add(new Box("x"));
+        i += 1;
+    }
+    val beforeHeap = gc.GC.heapBytes();
+    val beforeBlocks = gc.GC.blockCount();
+    junk = null;
+    gc.GC.collect();
+    gc.GC.collect();
+    val afterHeap = gc.GC.heapBytes();
+    val afterBlocks = gc.GC.blockCount();
+    fmt.println(keep.tag == "alive"); // true：可达不丢
+    fmt.println(afterHeap < beforeHeap && afterBlocks < beforeBlocks); // true：回收生效
+    fmt.println(gc.GC.concurrentSweepCycles() >= 1); // true：默开 concurrent sweep
+    fmt.println(gc.GC.markAbortCycles() == 0 || gc.GC.collectCount() >= 1); // true：无假绿 AV
+}

@@ -2,5 +2,9 @@ node_modules/
 out/
 *.vsix
 icons/hao-preview.png
+icons/hao-for-trace.png
+icons/hao-alpha.png
+icons/hao-traced.svg
+icons/hao-traced-clean.svg
 .vscode-test/
 *.log

@@ -10,6 +10,11 @@
 #define _GNU_SOURCE
 #endif
 #include "runtime_internal.h"
+#include <string.h>
+
+#ifdef _WIN32
+#include <excpt.h> /* finalizer SEH：__try/__except */
+#endif
 
 #ifndef _WIN32
 #include <pthread.h>
@@ -24,7 +29,14 @@ static void hao_gc_unlock(void);
 static void gc_scan_range(char* lo, char* hi);
 static void gc_mark_ptr(uintptr_t v);
 static int64_t gc_mono_ms(void);
+static int gc_test_should_fail_calloc(void);
 static void gc_stw_leave(void);
+static void gc_sleep_ms(int ms);
+static void gc_sweep_yield_locked(const char* tag);
+static void gc_hold_slice_begin(void);
+static void gc_hold_slice_end(void);
+static void gc_stats_fill_into(int64_t* s);
+static void gc_stats_publish_locked(void);
 
 /* 并发 drain：密分配+屏障可持续入灰；不设上限会占着 gc_collecting 拖死 HTTP */
 #define GC_CONCURRENT_DRAIN_MAX  (1u << 16)
@@ -44,7 +56,7 @@ static void gc_stw_leave(void);
 typedef void (*HaoFinalizerFn)(void* user);
 
 /* 32 字节块头（与 v2 同宽）：用户指针 = b+1，16 对齐。
- * scan_meta 为 32 位：SLOTS 位图低 32 槽；ARRAY 的 is_ptr；>32 槽退回 FULL。 */
+ * scan_meta：SLOTS=低 32 位图；BITMAP=nslots（位图在槽区尾）；ARRAY=is_ptr。 */
 typedef struct GCBlock {
     size_t user_size;
     struct GCBlock* next;
@@ -62,6 +74,7 @@ typedef char gc_block_size_ok[sizeof(GCBlock) == 32 ? 1 : -1];
 
 static int64_t gc_finalizer_runs = 0;
 static int64_t gc_finalizer_sets = 0;
+static int64_t g_finalizer_exceptions = 0; /* 回调 SEH/隔离吞异常 */
 static int64_t gc_collect_count = 0;
 static int64_t gc_minor_count = 0; /* young / nursery 回收次数（对标 .NET Gen0） */
 static int64_t gc_major_count = 0; /* 全堆回收次数（对标 .NET Gen2） */
@@ -78,6 +91,9 @@ static size_t gc_pend_fin_n = 0;
 static size_t gc_pend_fin_cap = 0;
 
 static GCBlock* gc_heap = NULL;
+/* v0.73 mspan：不再用 CRT exact-size freelist 永囤 */
+static GCBlock* g_span_doomed = NULL; /* trampoline 内只摘链；垫片外再 push/free */
+static int g_span_doomed_concurrent = 0;
 static int64_t  gc_num_blocks = 0; /* O(1); matches heap-list length */
 static size_t   gc_allocated = 0;
 static size_t   gc_nursery_alloc = 0;
@@ -90,7 +106,7 @@ static int64_t  g_stw_incomplete = 0;
 static int64_t  g_stw_incomplete_root = 0; /* v0.55.52：根软 STW 未齐 */
 static int64_t  g_stw_incomplete_term = 0; /* v0.55.52：终止软 STW 未齐 */
 static int64_t  g_stw_mark_all_fallbacks = 0; /* 兼容旧 API；本版恒 0（已废除全标活） */
-static int64_t  g_stw_grace_rescues = 0; /* P7e：热 miss 宽限后齐 park */
+/* v0.72：热宽限已删；hao_gc_stw_grace_rescues 恒 0（ABI 兼容） */
 static int      gc_pacing_level = 0;          /* 连续 incomplete 退避档位 */
 static size_t   gc_nursery_gate = GC_NURSERY_THRESHOLD; /* 可被 pacing 放大 */
 
@@ -99,13 +115,59 @@ static size_t   gc_nursery_gate = GC_NURSERY_THRESHOLD; /* 可被 pacing 放大 
 #define GC_PHASE_MARK 1
 static volatile int gc_phase = GC_PHASE_IDLE;
 static int64_t      g_concurrent_mark_cycles = 0;
+static int64_t      g_concurrent_sweep_cycles = 0; /* 成功 concurrent sweep 轮次（可关） */
+static int64_t      g_span_sweep_chunks = 0; /* span 槽回收入队次数 */
+static int64_t      g_span_freelist_hits = 0; /* span 槽复用命中 */
+static int64_t      g_span_commit_bytes = 0;  /* VirtualAlloc 未 Free 合计 */
+static int64_t      g_freelist_bytes = 0;    /* 空闲槽用户区合计 */
+static int64_t      g_scavenge_bytes = 0;
+static int64_t      g_scavenge_cycles = 0;
+static int64_t      g_span_count = 0;
+static int64_t      g_last_idle_scavenge_ms = 0;
+/* v0.74 GC-LAT-2：分段持锁/发布式 memstats */
+#define GC_STATS_SLOTS 64
+#define GC_SWEEP_SLICE_MS 2
+static int64_t      g_last_collect_hold_ms = 0;
+static int64_t      g_last_unlink_ms = 0;
+static int64_t      g_last_drain_ms = 0;
+static int64_t      g_last_scavenge_ms = 0;
+static int64_t      g_last_stats_lock_wait_ms = 0;
+static int64_t      g_last_stats_safepoint_ms = 0;
+static int64_t      g_last_publish_ms = 0;
+static int64_t      g_stats_publish_count = 0;
+static int64_t      g_stats_snap[2][GC_STATS_SLOTS];
+static volatile int g_stats_snap_i = 0;
+static int64_t      g_hold_acc_ms = 0; /* 单次 collect 持大锁累计 */
+static int64_t      g_hold_slice_t0 = 0;
+static int64_t      g_alloc_bytes_total = 0;
+static int64_t      g_freed_bytes_total = 0;
+static int64_t      g_stw_wait_ms_total = 0;
+static int64_t      g_promote_count = 0;
+static int64_t      g_proc_start_ms = 0;
+static const char*  g_last_miss_file = NULL;
+static int32_t      g_last_miss_line = 0;
+static int32_t      g_last_miss_col = 0;
+static void*        g_oom_exc = NULL;
+/* 测试钩：粘滞至 gc_oom_fail，使 calloc 路径连续失败（含 soft 清后重试） */
+static int          g_test_force_oom = 0;
+typedef struct {
+    void* wr;
+    void* referent;
+    int   soft;
+    int   used;
+} GcWeakEnt;
+static GcWeakEnt* g_weaks = NULL;
+static int        g_weak_n = 0;
+static int        g_weak_cap = 0;
+
 static int64_t      g_mark_assist_steps = 0;
 static int64_t      g_mark_abort_cycles = 0; /* 终止失败 abort MARK 次数（v0.53.3） */
 static int64_t      g_mark_abort_root = 0;   /* v0.55.52 */
 static int64_t      g_mark_abort_term = 0;
 static int64_t      g_mark_abort_park_wd = 0;
 static int64_t      g_mark_worker_steps = 0; /* mark worker 推进灰块数（v0.54） */
-static int64_t      g_park_watchdog_trips = 0; /* park_wait 超时强行放行（防 Web 永久楔死） */
+static int64_t      g_park_watchdog_trips = 0; /* park 超时 trip 次数（v0.71：不再 mutator leave） */
+static volatile int g_stw_watchdog_trip = 0;   /* mutator 置位；仅收集者 leave/abort */
 static size_t       gc_heap_bytes = 0; /* 用户区合计，alloc/sweep 维护 */
 /* v0.52：marked==gc_mark_epoch 为本轮已标；setup 只 ++epoch，勿扫百万清零 */
 static uint8_t      gc_mark_epoch = 1;
@@ -175,6 +237,9 @@ static __declspec(thread) void* g_refl_i64_pins[GC_REFL_I64_PINS];
 static __declspec(thread) int   g_refl_i64_pin_n = 0;
 /* v0.55.53：上次到达协作点（safepoint 轮询 / park / os_block）的 mono ms；0=从未 */
 static __declspec(thread) int64_t g_last_safepoint_mono_ms = 0;
+static __declspec(thread) const char* g_last_hao_file = NULL;
+static __declspec(thread) int32_t g_last_hao_line = 0;
+static __declspec(thread) int32_t g_last_hao_col = 0;
 #else
 static __thread char* g_stk_top = NULL;
 static __thread int   g_stk_reg  = 0;
@@ -193,6 +258,9 @@ static __thread int   g_scan_pin_n = 0;
 static __thread void* g_refl_i64_pins[GC_REFL_I64_PINS];
 static __thread int   g_refl_i64_pin_n = 0;
 static __thread int64_t g_last_safepoint_mono_ms = 0;
+static __thread const char* g_last_hao_file = NULL;
+static __thread int32_t g_last_hao_line = 0;
+static __thread int32_t g_last_hao_col = 0;
 #endif
 
 static void gc_pin_clear(void) { g_scan_pin_n = 0; }
@@ -223,6 +291,9 @@ typedef struct {
     void**   refl_i64_pins;    /* g_refl_i64_pins */
     int*     refl_i64_pin_n;   /* &g_refl_i64_pin_n */
     int64_t* last_sp_ms_slot;  /* &g_last_safepoint_mono_ms（v0.55.53） */
+    const char** last_src_file; /* 末次 safepoint Hao 源文件 */
+    int32_t*     last_src_line;
+    int32_t*     last_src_col;
 } GcThread;
 static GcThread gc_threads[GC_MAX_THREADS];
 static int   gc_thread_count = 0;
@@ -287,31 +358,70 @@ static void gc_spill_gprs_to(char* dst) {
 }
 #endif
 
+static void gc_stw_trip_clear(void) {
+    __atomic_store_n(&g_stw_watchdog_trip, 0, __ATOMIC_RELEASE);
+}
+
+static int gc_stw_trip_armed(void) {
+    return __atomic_load_n(&g_stw_watchdog_trip, __ATOMIC_ACQUIRE) != 0;
+}
+
+/* mutator：仅置 trip，禁止 gc_stw_leave（收口归收集者） */
+static void gc_stw_trip_set(void) {
+    int was = __atomic_exchange_n(&g_stw_watchdog_trip, 1, __ATOMIC_ACQ_REL);
+    if (!was) {
+        g_park_watchdog_trips += 1;
+        hao_trace("gc", "park_wd_trip");
+    }
+}
+
+/*
+ * 等 STW release：首超时 trip；第二超时 fatal（禁静默 leave→UAF）。
+ * 保持 parked，直到收集者 leave。
+ */
+static void gc_mutator_wait_stw_release(void) {
+    int64_t t0 = gc_mono_ms();
+    uint32_t spins = 0;
+    int tripped = 0;
+    while (!__atomic_load_n(&gc_stw_release, __ATOMIC_ACQUIRE)) {
+        spins++;
+        if (spins >= GC_PARK_WATCHDOG_SPINS ||
+            gc_mono_ms() - t0 >= GC_PARK_WATCHDOG_MS) {
+            if (!tripped) {
+                gc_stw_trip_set();
+                tripped = 1;
+                t0 = gc_mono_ms();
+                spins = 0;
+                continue;
+            }
+            hao_report_fatal(
+                "stw_wedge",
+                "park watchdog 2nd timeout; collector did not leave");
+            return;
+        }
+        gc_yield_brief();
+    }
+}
+
 static void gc_park_wait(void) {
     char local;
     g_park_sp = &local;
     __atomic_store_n(&g_last_safepoint_mono_ms, gc_mono_ms(), __ATOMIC_RELEASE);
+    {
+        const char* f = NULL;
+        int32_t ln = 0, col = 0;
+        hao_dbg_peek_src_loc(&f, &ln, &col);
+        g_last_hao_file = f;
+        g_last_hao_line = ln;
+        g_last_hao_col = col;
+    }
     __atomic_store_n(&g_parked, 1, __ATOMIC_RELEASE);
     {
         int64_t t0 = gc_mono_ms();
-        uint32_t spins = 0;
-        while (!__atomic_load_n(&gc_stw_release, __ATOMIC_ACQUIRE)) {
-            spins++;
-            if (spins >= GC_PARK_WATCHDOG_SPINS ||
-                gc_mono_ms() - t0 >= GC_PARK_WATCHDOG_MS) {
-                /*
-                 * 收集者应在数十 ms 内 leave。超时仍 request=1 则 Web/分配永久楔死。
-                 * 强行 leave：可能与正在扫栈的收集者竞态，但优于进程假活。
-                 * 下一轮 abort/setup 会 bump epoch 收口。
-                 */
-                g_park_watchdog_trips += 1;
-                g_mark_abort_cycles += 1;
-                g_mark_abort_park_wd += 1;
-                hao_trace("gc", "mark_abort reason=park_wd");
-                gc_stw_leave();
-                break;
-            }
-            gc_yield_brief();
+        gc_mutator_wait_stw_release();
+        {
+            int64_t w = gc_mono_ms() - t0;
+            if (w > 0) g_stw_wait_ms_total += w;
         }
     }
     __atomic_store_n(&g_parked, 0, __ATOMIC_RELEASE);
@@ -321,6 +431,14 @@ static void gc_park_wait(void) {
 void hao_gc_safepoint(void) {
     /* v0.55.53：轮询即记协作点龄（即使无 STW request） */
     __atomic_store_n(&g_last_safepoint_mono_ms, gc_mono_ms(), __ATOMIC_RELEASE);
+    {
+        const char* f = NULL;
+        int32_t ln = 0, col = 0;
+        hao_dbg_peek_src_loc(&f, &ln, &col);
+        g_last_hao_file = f;
+        g_last_hao_line = ln;
+        g_last_hao_col = col;
+    }
     if (!__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) return;
     hao_trace("gc", "safepoint park");
     gc_spill_gprs_to(g_gpr_spill);
@@ -402,7 +520,11 @@ void gc_register_thread(void) {
     gc_threads[gc_thread_count].refl_i64_pins = g_refl_i64_pins;
     gc_threads[gc_thread_count].refl_i64_pin_n = &g_refl_i64_pin_n;
     gc_threads[gc_thread_count].last_sp_ms_slot = &g_last_safepoint_mono_ms;
+    gc_threads[gc_thread_count].last_src_file = &g_last_hao_file;
+    gc_threads[gc_thread_count].last_src_line = &g_last_hao_line;
+    gc_threads[gc_thread_count].last_src_col = &g_last_hao_col;
     __atomic_store_n(&g_last_safepoint_mono_ms, gc_mono_ms(), __ATOMIC_RELEASE);
+    if (g_proc_start_ms == 0) g_proc_start_ms = gc_mono_ms();
     gc_thread_count++;
     hao_gc_unlock();
 }
@@ -451,19 +573,10 @@ void hao_gc_os_block_leave(void) {
      */
     if (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
         int64_t t0 = gc_mono_ms();
-        uint32_t spins = 0;
-        while (!__atomic_load_n(&gc_stw_release, __ATOMIC_ACQUIRE)) {
-            spins++;
-            if (spins >= GC_PARK_WATCHDOG_SPINS ||
-                gc_mono_ms() - t0 >= GC_PARK_WATCHDOG_MS) {
-                g_park_watchdog_trips += 1;
-                g_mark_abort_cycles += 1;
-                g_mark_abort_park_wd += 1;
-                hao_trace("gc", "mark_abort reason=park_wd");
-                gc_stw_leave();
-                break;
-            }
-            gc_yield_brief();
+        gc_mutator_wait_stw_release();
+        {
+            int64_t w = gc_mono_ms() - t0;
+            if (w > 0) g_stw_wait_ms_total += w;
         }
     }
     __atomic_store_n(&g_parked, 0, __ATOMIC_RELEASE);
@@ -491,19 +604,10 @@ void hao_gc_os_block_disarm(void) {
     /* 同 leave：持业务锁的 wait 返回后先等 STW，再撤 parked */
     if (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
         int64_t t0 = gc_mono_ms();
-        uint32_t spins = 0;
-        while (!__atomic_load_n(&gc_stw_release, __ATOMIC_ACQUIRE)) {
-            spins++;
-            if (spins >= GC_PARK_WATCHDOG_SPINS ||
-                gc_mono_ms() - t0 >= GC_PARK_WATCHDOG_MS) {
-                g_park_watchdog_trips += 1;
-                g_mark_abort_cycles += 1;
-                g_mark_abort_park_wd += 1;
-                hao_trace("gc", "mark_abort reason=park_wd");
-                gc_stw_leave();
-                break;
-            }
-            gc_yield_brief();
+        gc_mutator_wait_stw_release();
+        {
+            int64_t w = gc_mono_ms() - t0;
+            if (w > 0) g_stw_wait_ms_total += w;
         }
     }
     __atomic_store_n(&g_parked, 0, __ATOMIC_RELEASE);
@@ -582,18 +686,22 @@ void hao_gc_root_unwind(size_t wm) {
 }
 
 /*
- * 协作 STW（v0.50.4）：时间上限等待 mutator park；禁止 Win SuspendThread。
- * 未齐 → 返回 0（incomplete），由调用方跳过 sweep + pacing；**废除全标活**。
- * 调用方必须已持有 GC 锁；返回时仍持锁。返回 1=齐 park 并可扫，0=未齐。
+ * 协作 STW（v0.72 GC-LAT-1）：fail-fast 短预算；**禁止**再加长（见 gc_stw_budget_gate）。
+ * 未齐 → 返回 0（incomplete）；trip → 返回 2（park_wd，由收集者 abort）。
+ * v0.71：mutator watchdog 仅置 trip；v0.72：删热宽限，stall 无进展即结束等待。
+ * 调用方必须已持有 GC 锁；返回时仍持锁。返回 1=齐，0=未齐，2=watchdog trip。
  */
-#define GC_STW_ROUNDS          3
-#define GC_STW_ROUND_MS        8     /* 每轮最多等待（对齐低延迟） */
-#define GC_STW_TOTAL_MS        64    /* 根 STW 上限（多线程 HTTP 略放宽） */
-#define GC_STW_TERM_TOTAL_MS   48    /* 终止 STW 单次上限 */
-#define GC_STW_TERM_RETRIES    5     /* 终止握手重试（STW 内不再长 drain） */
+#define GC_STW_ROUNDS          2
+#define GC_STW_ROUND_MS        6     /* 每轮等待上限 */
+#define GC_STW_TOTAL_MS        16    /* 根 STW 上限 */
+#define GC_STW_TERM_TOTAL_MS   12    /* 终止 STW 单次上限 */
+#define GC_STW_TERM_RETRIES    2     /* 终止握手重试 */
+#define GC_STW_STALL_MS        4     /* parked 不增连续 stall → 早 abort 等待 */
 #define GC_TERM_COOLDOWN_MS    500   /* alloc 路径触发终止的最小间隔 */
 #define GC_NURSERY_GATE_MAX    ((size_t)4 << 20) /* pacing 放大 nursery 上限 4MiB */
 #define GC_THRESHOLD_PACE_MAX  ((size_t)64 << 20)
+
+static int64_t g_stw_hold_start_ms = 0; /* request=1 起算，leave 时 TRACE */
 
 static int64_t gc_mono_ms(void) {
 #ifdef _WIN32
@@ -640,6 +748,11 @@ static int gc_count_parked(const GcThread* snap, int nsnap, int64_t self,
 
 /* 放行 STW（调用方持 GC 锁） */
 static void gc_stw_leave(void) {
+    if (g_stw_hold_start_ms > 0) {
+        hao_trace("gc", "stw_hold_ms");
+        g_stw_hold_start_ms = 0;
+    }
+    hao_trace("gc", "stw_leave");
     __atomic_store_n(&gc_stw_request, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&gc_stw_release, 1, __ATOMIC_RELEASE);
     gc_yield_brief();
@@ -668,9 +781,9 @@ static int gc_all_threads_scanned(int64_t self) {
 }
 
 /*
- * v0.52 软 STW：等到齐或超时；**无论是否齐都扫已 park 者**，保持 request=1。
- * 返回 1=本轮目标已齐 park；0=未齐（计 incomplete，但不 leave、不放弃标记）。
- * total_ms：本轮等待预算。
+ * v0.52/v0.72 软 STW：等到齐、stall 或超时；**无论是否齐都扫已 park 者**，保持 request=1。
+ * 返回 1=本轮目标已齐 park；0=未齐；2=park_wd trip。
+ * total_ms：本轮等待预算（v0.72 短预算 fail-fast）。
  * 调用前设 g_stw_soft_phase / g_stw_soft_attempt（v0.55.52 分相定位）。
  */
 /* Win64：收集线程栈可能未 16B 齐；tid 列表勿走 snprintf/movdqa（v0.55.55） */
@@ -699,6 +812,48 @@ static int hao_gc_append_i64(char* buf, int cap, int len, int64_t v) {
     return len;
 }
 
+
+static int hao_gc_append_str(char* buf, int cap, int len, const char* s) {
+    if (len < 0) len = 0;
+    if (!s) return len;
+    while (*s && len + 1 < cap) buf[len++] = *s++;
+    if (len < cap) buf[len] = '\0';
+    return len;
+}
+
+static int hao_gc_append_ptr(char* buf, int cap, int len, const void* p) {
+    static const char* hex = "0123456789abcdef";
+    uintptr_t u = (uintptr_t)p;
+    char tmp[2 * sizeof(uintptr_t)];
+    int n = 0;
+    len = hao_gc_append_str(buf, cap, len, "0x");
+    if (u == 0) return hao_gc_append_str(buf, cap, len, "0");
+    while (u && n < (int)sizeof(tmp)) {
+        tmp[n++] = hex[u & 15u];
+        u >>= 4;
+    }
+    if (len + n >= cap) n = cap - len - 1;
+    if (n < 0) n = 0;
+    for (int i = 0; i < n; ++i) buf[len + i] = tmp[n - 1 - i];
+    len += n;
+    if (len < cap) buf[len] = '\0';
+    return len;
+}
+
+/* VERIFY fatal：禁 snprintf（对齐 tid 列表手写格式化） */
+static void gc_verify_fatal_ip(const char* head, const char* ikey, int64_t idx, void* ptr) {
+    char detail[160];
+    int len = 0;
+    len = hao_gc_append_str(detail, 160, len, head);
+    len = hao_gc_append_str(detail, 160, len, " ");
+    len = hao_gc_append_str(detail, 160, len, ikey);
+    len = hao_gc_append_str(detail, 160, len, "=");
+    len = hao_gc_append_i64(detail, 160, len, idx);
+    len = hao_gc_append_str(detail, 160, len, " ptr=");
+    (void)hao_gc_append_ptr(detail, 160, len, ptr);
+    hao_report_fatal("gc_verify", detail);
+}
+
 static void gc_record_stw_incomplete(const GcThread* snap, int nsnap, int64_t self,
                                      int targets, int parked, int missing) {
     int os_miss = 0;
@@ -724,6 +879,11 @@ static void gc_record_stw_incomplete(const GcThread* snap, int nsnap, int64_t se
             os_miss++;
         if (miss_n < GC_LAST_MISS_TIDS)
             miss_tids[miss_n++] = snap[i].id;
+        if (miss_n == 1 && snap[i].last_src_file && *snap[i].last_src_file) {
+            g_last_miss_file = *snap[i].last_src_file;
+            g_last_miss_line = snap[i].last_src_line ? *snap[i].last_src_line : 0;
+            g_last_miss_col = snap[i].last_src_col ? *snap[i].last_src_col : 0;
+        }
         if (snap[i].last_sp_ms_slot) {
             int64_t last = __atomic_load_n(snap[i].last_sp_ms_slot, __ATOMIC_ACQUIRE);
             if (last > 0) {
@@ -765,6 +925,7 @@ static void gc_record_stw_incomplete(const GcThread* snap, int nsnap, int64_t se
               (long long)max_age);
 }
 
+/* 返回：1=齐；0=incomplete；2=park_wd trip（勿计 incomplete） */
 static int gc_stw_enter_and_scan_soft(int total_ms) {
     int64_t self = gc_os_tid();
     int round;
@@ -772,6 +933,9 @@ static int gc_stw_enter_and_scan_soft(int total_ms) {
     int parked_now = 0;
     int64_t t0 = gc_mono_ms();
     if (total_ms <= 0) total_ms = GC_STW_TOTAL_MS;
+
+    hao_trace("gc", "stw_enter");
+    hao_trace("gc", "stw_budget_cap");
 
     GcThread snap[GC_MAX_THREADS];
     int nsnap = gc_thread_count;
@@ -785,10 +949,17 @@ static int gc_stw_enter_and_scan_soft(int total_ms) {
 
     for (round = 0; round < GC_STW_ROUNDS; ++round) {
         if (gc_mono_ms() - t0 >= total_ms) break;
+        if (gc_stw_trip_armed()) {
+            hao_trace("gc", "stw_miss reason=park_wd_trip");
+            return 2;
+        }
 
         __atomic_store_n(&gc_stw_release, 0, __ATOMIC_RELEASE);
         __atomic_store_n(&gc_stw_request, 1, __ATOMIC_RELEASE);
+        if (g_stw_hold_start_ms == 0)
+            g_stw_hold_start_ms = gc_mono_ms();
 
+        gc_hold_slice_end();
         hao_gc_unlock();
 
 #ifndef _WIN32
@@ -801,10 +972,25 @@ static int gc_stw_enter_and_scan_soft(int total_ms) {
         {
             int64_t round_start = gc_mono_ms();
             int spins = 0;
+            int last_parked = -1;
+            int64_t stall_since = round_start;
             for (;;) {
+                if (gc_stw_trip_armed()) {
+                    hao_gc_lock();
+                    gc_hold_slice_begin();
+                    hao_trace("gc", "stw_miss reason=park_wd_trip");
+                    return 2;
+                }
                 int tgt = 0;
                 int parked = gc_count_parked(snap, nsnap, self, &tgt);
                 if (tgt > 0 && parked >= tgt) break;
+                if (parked != last_parked) {
+                    last_parked = parked;
+                    stall_since = gc_mono_ms();
+                } else if (gc_mono_ms() - stall_since >= GC_STW_STALL_MS) {
+                    hao_trace("gc", "stw_stall_abort");
+                    break;
+                }
                 if (gc_mono_ms() - round_start >= GC_STW_ROUND_MS) break;
                 if (gc_mono_ms() - t0 >= total_ms) break;
                 gc_yield_brief();
@@ -814,6 +1000,7 @@ static int gc_stw_enter_and_scan_soft(int total_ms) {
         }
 
         hao_gc_lock();
+        gc_hold_slice_begin();
 
         nsnap = gc_thread_count;
         if (nsnap > GC_MAX_THREADS) nsnap = GC_MAX_THREADS;
@@ -830,14 +1017,20 @@ static int gc_stw_enter_and_scan_soft(int total_ms) {
             break;
 
         if (round + 1 >= GC_STW_ROUNDS) break;
-        __atomic_store_n(&gc_stw_request, 0, __ATOMIC_RELEASE);
-        __atomic_store_n(&gc_stw_release, 1, __ATOMIC_RELEASE);
+        /* 跨轮保持 stw_request，避免放行后已 park 线程跑飞再 miss */
+        gc_hold_slice_end();
         hao_gc_unlock();
-        gc_sleep_ms(1);
+        gc_yield_brief();
         hao_gc_lock();
+        gc_hold_slice_begin();
         nsnap = gc_thread_count;
         if (nsnap > GC_MAX_THREADS) nsnap = GC_MAX_THREADS;
         for (int i = 0; i < nsnap; ++i) snap[i] = gc_threads[i];
+    }
+
+    if (gc_stw_trip_armed()) {
+        hao_trace("gc", "stw_miss reason=park_wd_trip");
+        return 2;
     }
 
     /* 无论齐否：扫已 park 者并记入 scanned */
@@ -855,98 +1048,44 @@ static int gc_stw_enter_and_scan_soft(int total_ms) {
     }
 
     if (missing != 0 && targets > 0) {
-        /* P7e：缺 park 者最近刚过 safepoint（热协作者）→ 再宽限一轮再判 incomplete，降握手税 */
-#define GC_STW_HOT_MISS_AGE_MS  48
-#define GC_STW_HOT_GRACE_MS     6
-        {
-            int64_t now = gc_mono_ms();
-            int hot = 0;
-            int64_t max_age = -1;
-            for (int i = 0; i < nsnap; ++i) {
-                if (snap[i].id == self) continue;
-                int live = 0;
-                for (int j = 0; j < gc_thread_count; ++j)
-                    if (gc_threads[j].id == snap[i].id) { live = 1; break; }
-                if (!live) continue;
-                if (snap[i].parked_flag &&
-                    __atomic_load_n(snap[i].parked_flag, __ATOMIC_ACQUIRE))
-                    continue;
-                if (!snap[i].last_sp_ms_slot) continue;
-                int64_t last = __atomic_load_n(snap[i].last_sp_ms_slot, __ATOMIC_ACQUIRE);
-                if (last <= 0) continue;
-                int64_t age = now - last;
-                if (age < 0) age = 0;
-                if (age <= GC_STW_HOT_MISS_AGE_MS) hot = 1;
-                if (max_age < 0 || age > max_age) max_age = age;
-            }
-            if (hot) {
-                int64_t g0 = gc_mono_ms();
-                hao_gc_unlock();
-                while (gc_mono_ms() - g0 < GC_STW_HOT_GRACE_MS) {
-                    int tgt = 0;
-                    int parked = gc_count_parked(snap, nsnap, self, &tgt);
-                    if (tgt > 0 && parked >= tgt) break;
-                    gc_yield_brief();
-                }
-                hao_gc_lock();
-                nsnap = gc_thread_count;
-                if (nsnap > GC_MAX_THREADS) nsnap = GC_MAX_THREADS;
-                for (int i = 0; i < nsnap; ++i) snap[i] = gc_threads[i];
-                {
-                    int tgt = 0;
-                    parked_now = gc_count_parked(snap, nsnap, self, &tgt);
-                    missing = (tgt > parked_now) ? (tgt - parked_now) : 0;
-                    targets = tgt;
-                }
-                /* 宽限期内新 park 者补扫 */
-                for (int i = 0; i < nsnap; ++i) {
-                    if (snap[i].id == self) continue;
-                    int live = 0;
-                    for (int j = 0; j < gc_thread_count; ++j)
-                        if (gc_threads[j].id == snap[i].id) { live = 1; break; }
-                    if (!live) continue;
-                    if (snap[i].parked_flag &&
-                        __atomic_load_n(snap[i].parked_flag, __ATOMIC_ACQUIRE)) {
-                        gc_scan_parked_thread(&snap[i]);
-                        gc_scanned_tid_add(snap[i].id);
-                    }
-                }
-                if (missing == 0 || targets == 0) {
-                    g_stw_grace_rescues++;
-                    hao_trace("gc",
-                              "stw_grace_rescue phase=%s miss_age_ms=%lld",
-                              g_stw_soft_phase == GC_STW_PHASE_ROOT ? "root"
-                                  : (g_stw_soft_phase == GC_STW_PHASE_TERM ? "term" : "?"),
-                              (long long)max_age);
-                    return 1;
-                }
-            }
-        }
+        /* v0.72：无热宽限；未齐即 incomplete（fail-fast） */
         g_stw_incomplete++;
         if (g_stw_soft_phase == GC_STW_PHASE_ROOT)
             g_stw_incomplete_root++;
         else if (g_stw_soft_phase == GC_STW_PHASE_TERM)
             g_stw_incomplete_term++;
         gc_record_stw_incomplete(snap, nsnap, self, targets, parked_now, missing);
+        hao_trace("gc", "stw_miss reason=incomplete");
         return 0;
     }
     return 1;
 }
 
-static void gc_apply_incomplete_pacing(void) {
+static int gc_consecutive_aborts = 0; /* v0.71：连续 abort 才抬 pacing */
+
+static void gc_apply_incomplete_pacing(int reason) {
+    /* park_wd：收口 STW，不叠阈值倍增（避免握手税打成堆胀） */
+    if (reason == GC_ABORT_PARK_WD) {
+        gc_nursery_alloc = 0;
+        return;
+    }
+    gc_consecutive_aborts += 1;
+    /* 单次握手税不抬档；连续 abort（≥2）才升级 */
+    if (gc_consecutive_aborts < 2) {
+        gc_nursery_alloc = 0;
+        return;
+    }
     if (gc_pacing_level < 8) gc_pacing_level += 1;
     size_t mul = (size_t)1 << (gc_pacing_level > 4 ? 4 : gc_pacing_level);
     gc_nursery_gate = GC_NURSERY_THRESHOLD * mul;
     if (gc_nursery_gate > GC_NURSERY_GATE_MAX)
         gc_nursery_gate = GC_NURSERY_GATE_MAX;
-    /* 暂缓立刻再进 STW：抬高阈值并清零 nursery 压力计数 */
     if (gc_threshold < (size_t)1 << 20)
         gc_threshold = (size_t)1 << 20;
     gc_threshold *= 2;
     if (gc_threshold > GC_THRESHOLD_PACE_MAX)
         gc_threshold = GC_THRESHOLD_PACE_MAX;
     gc_nursery_alloc = 0;
-    /* 保留 gc_allocated，major 仍受阈值约束 */
 }
 
 static void gc_worklist_reset(void);
@@ -956,6 +1095,7 @@ static void gc_bump_mark_epoch(void);
 static void gc_abort_mark_cycle(int reason) {
     if (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE))
         gc_stw_leave();
+    gc_stw_trip_clear();
     __atomic_store_n(&gc_phase, GC_PHASE_IDLE, __ATOMIC_RELEASE);
     gc_worklist_reset();
     gc_scanned_tid_clear();
@@ -979,18 +1119,14 @@ static void gc_abort_mark_cycle(int reason) {
         g_last_finalizer_diag = 2; /* abort 主导可见 */
     hao_trace("gc", "finalizer_skip reason=abort count=%lld",
               (long long)g_finalizer_skip_abort);
-    gc_apply_incomplete_pacing();
+    gc_apply_incomplete_pacing(reason);
 }
 
 static void gc_on_successful_collect(void) {
-    if (gc_pacing_level > 0) gc_pacing_level -= 1;
-    size_t mul = (size_t)1 << (gc_pacing_level > 4 ? 4 : gc_pacing_level);
-    if (mul < 1) mul = 1;
-    gc_nursery_gate = GC_NURSERY_THRESHOLD * mul;
-    if (gc_nursery_gate < GC_NURSERY_THRESHOLD)
-        gc_nursery_gate = GC_NURSERY_THRESHOLD;
-    if (gc_nursery_gate > GC_NURSERY_GATE_MAX)
-        gc_nursery_gate = GC_NURSERY_GATE_MAX;
+    /* 成功 major：清零连续 abort 与 pacing 档 */
+    gc_consecutive_aborts = 0;
+    gc_pacing_level = 0;
+    gc_nursery_gate = GC_NURSERY_THRESHOLD;
 }
 
 static char* gc_heap_lo = NULL;
@@ -1095,6 +1231,431 @@ static GCBlock* gc_find_block_exact(void* p) {
     return b;
 }
 
+#define GC_SPAN_NCLASS 8
+#define GC_SPAN_LOS ((size_t)1 << 16)
+#define GC_MSPAGE_SIZE ((size_t)8192)
+#define GC_MSPAN_BYTES ((size_t)256 * 1024) /* 32 页；门禁常量 */
+#define GC_FREELIST_SOFT_MAX ((size_t)2 << 20)
+#define GC_SPAN_PAGE_HASH 4096
+
+typedef struct MSpan {
+    char* start;
+    size_t nbytes;
+    size_t elemsize;
+    size_t nelems;
+    int sizeclass; /* -1 = LOS */
+    uint8_t* allocBits;
+    uint8_t* markBits;
+    size_t free_count;
+    size_t alloc_count;
+    struct MSpan* next; /* per-class 或 LOS 链 */
+} MSpan;
+
+static MSpan* g_mspan_class[GC_SPAN_NCLASS];
+static MSpan* g_mspan_los;
+
+typedef struct SpanPageEnt {
+    uintptr_t page;
+    MSpan* span;
+    struct SpanPageEnt* next;
+} SpanPageEnt;
+static SpanPageEnt* g_span_page_tab[GC_SPAN_PAGE_HASH];
+
+static size_t gc_span_class_size(int sc) {
+    static const size_t k[GC_SPAN_NCLASS] = {
+        64, 128, 256, 512, 1024, 2048, 4096, 65536
+    };
+    if (sc < 0 || sc >= GC_SPAN_NCLASS) return 0;
+    return k[sc];
+}
+
+static int gc_span_class_of(size_t need) {
+    if (need == 0 || need > GC_SPAN_LOS) return -1;
+    if (need <= 64) return 0;
+    if (need <= 128) return 1;
+    if (need <= 256) return 2;
+    if (need <= 512) return 3;
+    if (need <= 1024) return 4;
+    if (need <= 2048) return 5;
+    if (need <= 4096) return 6;
+    return 7;
+}
+
+static int gc_bit_test(const uint8_t* bits, size_t i) {
+    return (bits[i >> 3] >> (i & 7)) & 1;
+}
+static void gc_bit_set(uint8_t* bits, size_t i) {
+    bits[i >> 3] |= (uint8_t)(1u << (i & 7));
+}
+static void gc_bit_clear(uint8_t* bits, size_t i) {
+    bits[i >> 3] &= (uint8_t)~(1u << (i & 7));
+}
+
+static void gc_span_page_register(MSpan* sp) {
+    uintptr_t base, end, pg;
+    if (!sp || !sp->start) return;
+    base = (uintptr_t)sp->start / GC_MSPAGE_SIZE;
+    end = ((uintptr_t)sp->start + sp->nbytes + GC_MSPAGE_SIZE - 1) / GC_MSPAGE_SIZE;
+    for (pg = base; pg < end; ++pg) {
+        SpanPageEnt* e = (SpanPageEnt*)calloc(1, sizeof(SpanPageEnt));
+        size_t h;
+        if (!e) {
+            fputs("panic: GC span page map alloc failed\n", stderr);
+            exit(1);
+        }
+        e->page = pg;
+        e->span = sp;
+        h = (size_t)(pg & (GC_SPAN_PAGE_HASH - 1));
+        e->next = g_span_page_tab[h];
+        g_span_page_tab[h] = e;
+    }
+}
+
+static void gc_span_page_unregister(MSpan* sp) {
+    uintptr_t base, end, pg;
+    if (!sp || !sp->start) return;
+    base = (uintptr_t)sp->start / GC_MSPAGE_SIZE;
+    end = ((uintptr_t)sp->start + sp->nbytes + GC_MSPAGE_SIZE - 1) / GC_MSPAGE_SIZE;
+    for (pg = base; pg < end; ++pg) {
+        size_t h = (size_t)(pg & (GC_SPAN_PAGE_HASH - 1));
+        SpanPageEnt** pp = &g_span_page_tab[h];
+        while (*pp) {
+            if ((*pp)->page == pg && (*pp)->span == sp) {
+                SpanPageEnt* dead = *pp;
+                *pp = dead->next;
+                free(dead);
+                break;
+            }
+            pp = &(*pp)->next;
+        }
+    }
+}
+
+static MSpan* gc_span_of_ptr(void* p) {
+    uintptr_t pg;
+    size_t h;
+    SpanPageEnt* e;
+    if (!p) return NULL;
+    pg = (uintptr_t)p / GC_MSPAGE_SIZE;
+    h = (size_t)(pg & (GC_SPAN_PAGE_HASH - 1));
+    for (e = g_span_page_tab[h]; e; e = e->next)
+        if (e->page == pg) return e->span;
+    return NULL;
+}
+
+static void gc_mspan_destroy_locked(MSpan* sp) {
+    size_t nbytes;
+    if (!sp) return;
+    hao_trace("gc", "span_free");
+    gc_span_page_unregister(sp);
+    nbytes = sp->nbytes;
+    if (sp->start) {
+        hao_os_vfree(sp->start, nbytes);
+        sp->start = NULL;
+    }
+    if (g_span_commit_bytes >= (int64_t)nbytes)
+        g_span_commit_bytes -= (int64_t)nbytes;
+    else
+        g_span_commit_bytes = 0;
+    g_scavenge_bytes += (int64_t)nbytes;
+    if (g_span_count > 0) g_span_count -= 1;
+    free(sp->allocBits);
+    free(sp->markBits);
+    free(sp);
+}
+
+static void gc_mspan_unlink_locked(MSpan* sp) {
+    MSpan** head;
+    MSpan** pp;
+    if (!sp) return;
+    if (sp->sizeclass < 0)
+        head = &g_mspan_los;
+    else
+        head = &g_mspan_class[sp->sizeclass];
+    pp = head;
+    while (*pp) {
+        if (*pp == sp) {
+            *pp = sp->next;
+            sp->next = NULL;
+            return;
+        }
+        pp = &(*pp)->next;
+    }
+}
+
+/* 空 span 立刻还 OS；部分空闲计入 freelistBytes */
+static void gc_mspan_maybe_release_locked(MSpan* sp) {
+    size_t free_user;
+    if (!sp) return;
+    if (sp->free_count < sp->nelems) {
+        free_user = sp->free_count * (sp->elemsize > GC_HEADER
+                                          ? sp->elemsize - GC_HEADER
+                                          : 0);
+        /* freelist_bytes 在 push/pop 增量维护，这里不重算全表 */
+        return;
+    }
+    free_user = sp->nelems * (sp->elemsize > GC_HEADER ? sp->elemsize - GC_HEADER : 0);
+    if (g_freelist_bytes >= (int64_t)free_user)
+        g_freelist_bytes -= (int64_t)free_user;
+    else
+        g_freelist_bytes = 0;
+    gc_mspan_unlink_locked(sp);
+    gc_mspan_destroy_locked(sp);
+    g_scavenge_cycles += 1;
+    hao_trace("gc", "scavenge");
+}
+
+static MSpan* gc_mspan_create_locked(int sc, size_t need) {
+    MSpan* sp;
+    size_t class_sz, elemsize, nbytes, nelems, bits_bytes;
+    char* mem;
+    size_t i;
+    if (gc_test_should_fail_calloc()) return NULL;
+    sp = (MSpan*)calloc(1, sizeof(MSpan));
+    if (!sp) return NULL;
+    if (sc < 0) {
+        elemsize = GC_HEADER + need;
+        nbytes = (elemsize + GC_MSPAGE_SIZE - 1) & ~(GC_MSPAGE_SIZE - 1);
+        nelems = 1;
+        sp->sizeclass = -1;
+    } else {
+        class_sz = gc_span_class_size(sc);
+        elemsize = GC_HEADER + class_sz;
+        nbytes = GC_MSPAN_BYTES;
+        nelems = nbytes / elemsize;
+        if (nelems < 1) {
+            nbytes = (elemsize + GC_MSPAGE_SIZE - 1) & ~(GC_MSPAGE_SIZE - 1);
+            nelems = 1;
+        }
+        sp->sizeclass = sc;
+    }
+    hao_gc_unlock();
+    mem = (char*)hao_os_valloc(nbytes);
+    hao_gc_lock();
+    if (!mem) {
+        free(sp);
+        return NULL;
+    }
+    bits_bytes = (nelems + 7) / 8;
+    sp->allocBits = (uint8_t*)calloc(1, bits_bytes);
+    sp->markBits = (uint8_t*)calloc(1, bits_bytes);
+    if (!sp->allocBits || !sp->markBits) {
+        hao_os_vfree(mem, nbytes);
+        free(sp->allocBits);
+        free(sp->markBits);
+        free(sp);
+        return NULL;
+    }
+    sp->start = mem;
+    sp->nbytes = nbytes;
+    sp->elemsize = elemsize;
+    sp->nelems = nelems;
+    sp->free_count = nelems;
+    sp->alloc_count = 0;
+    for (i = 0; i < nelems; ++i) {
+        GCBlock* b = (GCBlock*)(mem + i * elemsize);
+        b->user_size = 0;
+        b->next = NULL;
+        b->finalizer = NULL;
+        b->marked = 0;
+        b->scan_kind = GC_KIND_OPAQUE;
+        b->scan_meta = 0;
+        b->gen = GC_GEN_YOUNG;
+        b->age = 0;
+    }
+    g_span_commit_bytes += (int64_t)nbytes;
+    g_freelist_bytes += (int64_t)(nelems * (elemsize - GC_HEADER));
+    g_span_count += 1;
+    gc_span_page_register(sp);
+    if (sc < 0) {
+        sp->next = g_mspan_los;
+        g_mspan_los = sp;
+    } else {
+        sp->next = g_mspan_class[sc];
+        g_mspan_class[sc] = sp;
+    }
+    hao_trace("gc", "span_new");
+    return sp;
+}
+
+static void gc_span_ensure(void) {
+    /* mspan 惰性：无全局 calloc freelist 头 */
+}
+
+static void gc_span_push_locked(GCBlock* b) {
+    MSpan* sp;
+    size_t idx;
+    size_t user_part;
+    if (!b) return;
+    sp = gc_span_of_ptr(b);
+    if (!sp) {
+        /* 遗留 CRT 块（不应再出现）：直接 free */
+        hao_trace("gc", "span_free");
+        free(b);
+        return;
+    }
+    if (sp->elemsize == 0) {
+        hao_trace("gc", "bitmap_bad");
+        hao_report_fatal("gc_verify", "span elemsize=0");
+        return;
+    }
+    idx = (size_t)(((char*)b - sp->start) / sp->elemsize);
+    if (idx >= sp->nelems || (char*)b != sp->start + idx * sp->elemsize) {
+        hao_trace("gc", "bitmap_bad");
+        hao_report_fatal("gc_verify", "span slot misaligned");
+        return;
+    }
+    if (!gc_bit_test(sp->allocBits, idx)) {
+        hao_trace("gc", "bitmap_bad");
+        hao_report_fatal("gc_verify", "double free span slot");
+        return;
+    }
+    {
+        char* u = (char*)(b + 1);
+        size_t i, lim = sp->elemsize - GC_HEADER;
+        for (i = 0; i < lim; ++i) u[i] = 0;
+    }
+    b->finalizer = NULL;
+    b->marked = 0;
+    b->scan_kind = GC_KIND_OPAQUE;
+    b->scan_meta = 0;
+    b->gen = GC_GEN_YOUNG;
+    b->age = 0;
+    b->user_size = 0;
+    b->next = NULL;
+    gc_bit_clear(sp->allocBits, idx);
+    gc_bit_clear(sp->markBits, idx);
+    sp->free_count += 1;
+    if (sp->alloc_count > 0) sp->alloc_count -= 1;
+    user_part = sp->elemsize - GC_HEADER;
+    g_freelist_bytes += (int64_t)user_part;
+    g_span_sweep_chunks += 1;
+    gc_mspan_maybe_release_locked(sp);
+}
+
+static GCBlock* gc_span_pop_locked(size_t need) {
+    int sc = gc_span_class_of(need);
+    MSpan* sp;
+    size_t i;
+    if (sc < 0) return NULL;
+    for (sp = g_mspan_class[sc]; sp; sp = sp->next) {
+        if (sp->free_count == 0) continue;
+        for (i = 0; i < sp->nelems; ++i) {
+            if (gc_bit_test(sp->allocBits, i)) continue;
+            {
+                GCBlock* b = (GCBlock*)(sp->start + i * sp->elemsize);
+                size_t user_part = sp->elemsize - GC_HEADER;
+                gc_bit_set(sp->allocBits, i);
+                gc_bit_clear(sp->markBits, i);
+                sp->free_count -= 1;
+                sp->alloc_count += 1;
+                if (g_freelist_bytes >= (int64_t)user_part)
+                    g_freelist_bytes -= (int64_t)user_part;
+                else
+                    g_freelist_bytes = 0;
+                g_span_freelist_hits += 1;
+                hao_trace("gc", "span_alloc");
+                return b;
+            }
+        }
+    }
+    sp = gc_mspan_create_locked(sc, need);
+    if (!sp || sp->free_count == 0) return NULL;
+    for (i = 0; i < sp->nelems; ++i) {
+        if (gc_bit_test(sp->allocBits, i)) continue;
+        {
+            GCBlock* b = (GCBlock*)(sp->start + i * sp->elemsize);
+            size_t user_part = sp->elemsize - GC_HEADER;
+            gc_bit_set(sp->allocBits, i);
+            sp->free_count -= 1;
+            sp->alloc_count += 1;
+            if (g_freelist_bytes >= (int64_t)user_part)
+                g_freelist_bytes -= (int64_t)user_part;
+            else
+                g_freelist_bytes = 0;
+            g_span_freelist_hits += 1;
+            hao_trace("gc", "span_alloc");
+            return b;
+        }
+    }
+    return NULL;
+}
+
+static GCBlock* gc_mspan_alloc_los_locked(size_t need) {
+    MSpan* sp = gc_mspan_create_locked(-1, need);
+    GCBlock* b;
+    size_t user_part;
+    if (!sp) return NULL;
+    b = (GCBlock*)sp->start;
+    gc_bit_set(sp->allocBits, 0);
+    sp->free_count = 0;
+    sp->alloc_count = 1;
+    user_part = sp->elemsize - GC_HEADER;
+    if (g_freelist_bytes >= (int64_t)user_part)
+        g_freelist_bytes -= (int64_t)user_part;
+    else
+        g_freelist_bytes = 0;
+    hao_trace("gc", "span_alloc");
+    return b;
+}
+
+/* reason: 0=major 1=idle 2=urgent — 拆空闲过多的 span（空板已在 push 时还） */
+static void gc_mspan_scavenge_locked(int reason) {
+    int sc;
+    size_t soft = GC_FREELIST_SOFT_MAX;
+    size_t target;
+    int64_t t0 = gc_mono_ms();
+    int64_t slice_t0 = t0;
+    int freed = 0;
+    (void)reason;
+    if (gc_threshold * 2 > soft) soft = gc_threshold * 2;
+    target = soft / 2;
+    hao_trace("gc", "scavenge");
+    g_scavenge_cycles += 1;
+    /* 空 span 已在 push 释放；此处压掉「半空过多」：从各类摘 free_count 高的整板 */
+    for (sc = 0; sc < GC_SPAN_NCLASS && (size_t)g_freelist_bytes > target; ++sc) {
+        MSpan** pp = &g_mspan_class[sc];
+        while (*pp && (size_t)g_freelist_bytes > target) {
+            MSpan* sp = *pp;
+            if (sp->alloc_count == 0 && sp->free_count == sp->nelems) {
+                *pp = sp->next;
+                sp->next = NULL;
+                {
+                    size_t free_user =
+                        sp->nelems * (sp->elemsize > GC_HEADER ? sp->elemsize - GC_HEADER
+                                                               : 0);
+                    if (g_freelist_bytes >= (int64_t)free_user)
+                        g_freelist_bytes -= (int64_t)free_user;
+                    else
+                        g_freelist_bytes = 0;
+                }
+                gc_mspan_destroy_locked(sp);
+                freed += 1;
+                if ((freed % 2) == 0 ||
+                    (gc_mono_ms() - slice_t0) >= GC_SWEEP_SLICE_MS) {
+                    gc_sweep_yield_locked("scavenge");
+                    slice_t0 = gc_mono_ms();
+                }
+                continue;
+            }
+            /* 半空：若空闲比例高且超水位，仍保留（P2 可合并）；P1 只还全空 */
+            pp = &(*pp)->next;
+        }
+    }
+    g_last_idle_scavenge_ms = gc_mono_ms();
+    g_last_scavenge_ms = g_last_idle_scavenge_ms - t0;
+}
+
+static void gc_mspan_mark_bit_for_block(GCBlock* b) {
+    MSpan* sp;
+    size_t idx;
+    if (!b) return;
+    sp = gc_span_of_ptr(b);
+    if (!sp || !sp->markBits) return;
+    idx = (size_t)(((char*)b - sp->start) / sp->elemsize);
+    if (idx < sp->nelems) gc_bit_set(sp->markBits, idx);
+}
+
 /* 指标/查询入口：先 safepoint，避免 /api/gc 忙读时永不 park → STW incomplete */
 static void gc_lock_coop(void) {
     for (;;) {
@@ -1106,6 +1667,41 @@ static void gc_lock_coop(void) {
         }
         break;
     }
+}
+
+/* v0.72：只读计数 — 一次 safepoint 后直接持锁拷贝，不再空等 stw_request leave */
+static void gc_lock_stats_ro(void) {
+    hao_gc_safepoint();
+    hao_gc_lock();
+}
+
+/* LAT-2：持锁累计（unlock 窗口外计入 lastCollectHoldMs） */
+static void gc_hold_slice_begin(void) { g_hold_slice_t0 = gc_mono_ms(); }
+static void gc_hold_slice_end(void) {
+    if (g_hold_slice_t0 > 0) {
+        g_hold_acc_ms += gc_mono_ms() - g_hold_slice_t0;
+        g_hold_slice_t0 = 0;
+    }
+}
+static void gc_sweep_yield_locked(const char* tag) {
+    hao_trace("gc", tag);
+    gc_hold_slice_end();
+    hao_gc_unlock();
+    gc_sleep_ms(0);
+    hao_gc_lock();
+    gc_hold_slice_begin();
+}
+
+static void gc_stats_publish_locked(void) {
+    int64_t t0 = gc_mono_ms();
+    int next = 1 - __atomic_load_n(&g_stats_snap_i, __ATOMIC_RELAXED);
+    if (next < 0 || next > 1) next = 0;
+    memset(g_stats_snap[next], 0, sizeof(g_stats_snap[next]));
+    gc_stats_fill_into(g_stats_snap[next]);
+    __atomic_store_n(&g_stats_snap_i, next, __ATOMIC_RELEASE);
+    g_stats_publish_count += 1;
+    g_last_publish_ms = gc_mono_ms() - t0;
+    hao_trace("gc", "stats_publish");
 }
 
 int8_t hao_gc_is_heap_ptr(void* p) {
@@ -1132,7 +1728,7 @@ int8_t hao_gc_expect_heap_object(void* p) {
     if (!p) return 0;
     hao_gc_lock();
     b = gc_find_block_exact(p);
-    if (b && (b->scan_kind == GC_KIND_SLOTS || b->scan_kind == GC_KIND_FULL))
+    if (b && (b->scan_kind == GC_KIND_SLOTS || b->scan_kind == GC_KIND_BITMAP))
         ok = 1;
     hao_gc_unlock();
     return ok;
@@ -1178,31 +1774,52 @@ int64_t hao_gc_stw_mark_all_fallbacks(void) {
 
 int64_t hao_gc_stw_incomplete(void) {
     int64_t n;
-    gc_lock_coop();
+    gc_lock_stats_ro();
     n = g_stw_incomplete;
     hao_gc_unlock();
     return n;
 }
 
 int64_t hao_gc_stw_grace_rescues(void) {
-    int64_t n;
-    gc_lock_coop();
-    n = g_stw_grace_rescues;
-    hao_gc_unlock();
-    return n;
+    /* v0.72：热宽限删除；ABI 保留，恒 0 */
+    return 0;
 }
 
 int64_t hao_gc_concurrent_mark_cycles(void) {
     int64_t n;
-    gc_lock_coop();
+    gc_lock_stats_ro();
     n = g_concurrent_mark_cycles;
+    hao_gc_unlock();
+    return n;
+}
+
+int64_t hao_gc_concurrent_sweep_cycles(void) {
+    int64_t n;
+    gc_lock_stats_ro();
+    n = g_concurrent_sweep_cycles;
+    hao_gc_unlock();
+    return n;
+}
+
+int64_t hao_gc_span_sweep_chunks(void) {
+    int64_t n;
+    gc_lock_stats_ro();
+    n = g_span_sweep_chunks;
+    hao_gc_unlock();
+    return n;
+}
+
+int64_t hao_gc_freelist_hits(void) {
+    int64_t n;
+    gc_lock_stats_ro();
+    n = g_span_freelist_hits;
     hao_gc_unlock();
     return n;
 }
 
 int64_t hao_gc_heap_bytes(void) {
     int64_t n;
-    gc_lock_coop();
+    gc_lock_stats_ro();
     n = (int64_t)gc_heap_bytes;
     hao_gc_unlock();
     return n;
@@ -1227,13 +1844,16 @@ void hao_gc_fprint_debug_snapshot(FILE* f) {
 
 int64_t hao_gc_mark_assist_steps(void) {
     int64_t n;
-    gc_lock_coop();
+    gc_lock_stats_ro();
     n = g_mark_assist_steps;
     hao_gc_unlock();
     return n;
 }
 
 void gc_collect_inner(char* regs, size_t regs_size);
+static void gc_process_weak_refs_locked(void);
+static int gc_clear_soft_refs_locked(void);
+static void gc_oom_fail(size_t need);
 
 #define GC_WORKLIST_CAP 4096
 static GCBlock** gc_worklist = NULL;
@@ -1253,10 +1873,12 @@ static void gc_enqueue(GCBlock* b) {
      */
     if (!gc_mark_major && b->gen != GC_GEN_YOUNG) {
         b->marked = gc_mark_epoch;
+        gc_mspan_mark_bit_for_block(b);
         gc_scan_block_precise(b);
         return;
     }
     b->marked = gc_mark_epoch;
+    gc_mspan_mark_bit_for_block(b);
     if (gc_wl_count >= gc_wl_cap) {
         gc_wl_cap = gc_wl_cap ? gc_wl_cap * 2 : GC_WORKLIST_CAP;
         gc_worklist = (GCBlock**)realloc(gc_worklist, gc_wl_cap * sizeof(GCBlock*));
@@ -1267,8 +1889,21 @@ static void gc_enqueue(GCBlock* b) {
 
 static void gc_bump_mark_epoch(void) {
     uint8_t e = (uint8_t)(gc_mark_epoch + 1);
+    int sc;
     if (e == 0) e = 1; /* 跳过 0：calloc 初值 0 = 永白于任一 epoch */
     gc_mark_epoch = e;
+    /* P2：新一轮 mark 清 markBits，与对象头 epoch 对齐 */
+    for (sc = -1; sc < GC_SPAN_NCLASS; ++sc) {
+        MSpan* sp = (sc < 0) ? g_mspan_los : g_mspan_class[sc];
+        while (sp) {
+            if (sp->markBits && sp->nelems) {
+                size_t nb = (sp->nelems + 7) / 8;
+                size_t i;
+                for (i = 0; i < nb; ++i) sp->markBits[i] = 0;
+            }
+            sp = sp->next;
+        }
+    }
 }
 
 /* 调用方持锁；推进最多 max_steps 个 grey */
@@ -1483,6 +2118,66 @@ static void gc_pend_fin_add(HaoFinalizerFn fn, void* user, GCBlock* block) {
     gc_pend_fin_n++;
 }
 
+/* 持锁、trampoline 外：消化 g_span_doomed → freelist / pend_fin；时间片让路 */
+static void gc_span_drain_doomed_locked(void) {
+    int free_steps = 0;
+    int concurrent = g_span_doomed_concurrent;
+    GCBlock* doomed = g_span_doomed;
+    int64_t t0 = gc_mono_ms();
+    int64_t slice_t0 = t0;
+    g_span_doomed = NULL;
+    g_span_doomed_concurrent = 0;
+    gc_span_ensure();
+    while (doomed) {
+        GCBlock* b = doomed;
+        doomed = b->next;
+        void* user = (void*)(b + 1);
+        HaoFinalizerFn fn = b->finalizer;
+        b->finalizer = NULL;
+        if (fn)
+            gc_pend_fin_add(fn, user, b);
+        else
+            gc_span_push_locked(b);
+        free_steps += 1;
+        if (concurrent &&
+            ((free_steps % 32) == 0 ||
+             (gc_mono_ms() - slice_t0) >= GC_SWEEP_SLICE_MS)) {
+            gc_sweep_yield_locked("drain_batch");
+            slice_t0 = gc_mono_ms();
+        }
+    }
+    g_last_drain_ms = gc_mono_ms() - t0;
+}
+
+/* BITMAP：槽区后的 u32 位图；SLOTS：scan_meta 低位。 */
+static int gc_slot_bit_is_ptr(GCBlock* b, size_t i) {
+    if (!b) return 0;
+    if (b->scan_kind == GC_KIND_SLOTS) {
+        if (i >= 32) return 0;
+        return (b->scan_meta >> i) & 1u;
+    }
+    if (b->scan_kind == GC_KIND_BITMAP) {
+        size_t nslots = (size_t)b->scan_meta;
+        uint32_t* bm;
+        if (i >= nslots) return 0;
+        if (b->user_size < nslots * sizeof(uintptr_t) + 4) return 0;
+        bm = (uint32_t*)((char*)(b + 1) + nslots * sizeof(uintptr_t));
+        return (bm[i >> 5] >> (i & 31)) & 1u;
+    }
+    return 0;
+}
+
+static size_t gc_slots_count(GCBlock* b) {
+    if (!b) return 0;
+    if (b->scan_kind == GC_KIND_SLOTS) {
+        size_t n = b->user_size / sizeof(uintptr_t);
+        return n > 32 ? 32 : n;
+    }
+    if (b->scan_kind == GC_KIND_BITMAP)
+        return (size_t)b->scan_meta;
+    return 0;
+}
+
 /* 持锁：活堆上是否仍有指针指向 user（精确 kind 扫描）。 */
 static int gc_block_refers_to(GCBlock* b, void* user) {
     if (!b || !user) return 0;
@@ -1490,13 +2185,14 @@ static int gc_block_refers_to(GCBlock* b, void* user) {
     uintptr_t want = (uintptr_t)user;
     switch (b->scan_kind) {
     case GC_KIND_OPAQUE:
+    case GC_KIND_FULL: /* 禁止保守：不认伪指针边 */
         return 0;
-    case GC_KIND_SLOTS: {
-        uint32_t bm = b->scan_meta;
-        size_t nslots = b->user_size / sizeof(uintptr_t);
-        if (nslots > 32) nslots = 32;
-        for (size_t i = 0; i < nslots; ++i) {
-            if ((bm & (1u << i)) && ((uintptr_t*)u)[i] == want) return 1;
+    case GC_KIND_SLOTS:
+    case GC_KIND_BITMAP: {
+        size_t nslots = gc_slots_count(b);
+        size_t i;
+        for (i = 0; i < nslots; ++i) {
+            if (gc_slot_bit_is_ptr(b, i) && ((uintptr_t*)u)[i] == want) return 1;
         }
         return 0;
     }
@@ -1513,24 +2209,45 @@ static int gc_block_refers_to(GCBlock* b, void* user) {
             if (((uintptr_t*)elems)[i] == want) return 1;
         return 0;
     }
-    case GC_KIND_FULL:
-    default: {
-        size_t n = b->user_size / sizeof(uintptr_t);
-        for (size_t i = 0; i < n; ++i)
-            if (((uintptr_t*)u)[i] == want) return 1;
+    default:
         return 0;
-    }
     }
 }
 
-/* 持锁：外部根 / root_slot / 活堆是否仍引用 user（复活判定）。 */
+/* 持锁：与 mark 同口径——显式根/槽 + 全线程 shadow/pins + 活堆边。 */
 static int gc_user_still_reachable_locked(void* user) {
+    int ti;
     if (!user) return 0;
     for (size_t i = 0; i < gc_root_count; ++i)
         if (gc_roots[i] == user) return 1;
     for (size_t i = 0; i < gc_root_slot_count; ++i) {
         void** slot = (void**)gc_root_slots[i];
         if (slot && *slot == user) return 1;
+    }
+    for (ti = 0; ti < gc_thread_count; ++ti) {
+        GcThread* t = &gc_threads[ti];
+        size_t sn = (t->shadow_n && t->shadow_slot && *t->shadow_slot)
+                        ? *t->shadow_n
+                        : 0;
+        void*** sh = (t->shadow_slot) ? *t->shadow_slot : NULL;
+        size_t i;
+        int pi;
+        for (i = 0; i < sn; ++i) {
+            void** slot = sh ? sh[i] : NULL;
+            if (slot && *slot == user) return 1;
+        }
+        if (t->scan_pins && t->scan_pin_n) {
+            int n = *t->scan_pin_n;
+            if (n > GC_SCAN_PINS) n = GC_SCAN_PINS;
+            for (pi = 0; pi < n; ++pi)
+                if (t->scan_pins[pi] == user) return 1;
+        }
+        if (t->refl_i64_pins && t->refl_i64_pin_n) {
+            int n = *t->refl_i64_pin_n;
+            if (n > GC_REFL_I64_PINS) n = GC_REFL_I64_PINS;
+            for (pi = 0; pi < n; ++pi)
+                if (t->refl_i64_pins[pi] == user) return 1;
+        }
     }
     for (GCBlock* b = gc_heap; b; b = b->next) {
         if (gc_block_refers_to(b, user)) return 1;
@@ -1559,7 +2276,8 @@ static void gc_relink_block_locked(GCBlock* b) {
 }
 
 /* 回调在锁外执行；队列摘取需短暂加锁防并发 drain 互抢。
- * 回调后若仍可达则挂回堆（完整复活）；否则 free。禁止「挂根仍必 free」。 */
+ * 回调后若仍可达则挂回堆（完整复活）；否则 freelist。禁止「挂根仍必 free」。
+ * Win：SEH 隔离回调异常，禁止拖垮整个进程。 */
 static void gc_drain_finalizers(void) {
     hao_gc_lock();
     size_t n = gc_pend_fin_n;
@@ -1567,20 +2285,34 @@ static void gc_drain_finalizers(void) {
     gc_pend_fin = NULL;
     gc_pend_fin_n = 0;
     gc_pend_fin_cap = 0;
+    /* 空闲 scavenge：距上次 ≥400ms 且 freelist 偏大 */
+    if ((size_t)g_freelist_bytes > GC_FREELIST_SOFT_MAX / 2) {
+        int64_t now = gc_mono_ms();
+        if (now - g_last_idle_scavenge_ms >= 400)
+            gc_mspan_scavenge_locked(1);
+    }
     hao_gc_unlock();
     for (size_t i = 0; i < n; ++i) {
         if (list[i].fn) {
             __atomic_fetch_add(&gc_finalizer_runs, 1, __ATOMIC_RELAXED);
             /* 回调期间挂根：防并发 STW 与「栈上仍握 user」窗口踩 free */
             hao_gc_add_root(list[i].user);
+#ifdef _WIN32
+            __try {
+                list[i].fn(list[i].user);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                __atomic_fetch_add(&g_finalizer_exceptions, 1, __ATOMIC_RELAXED);
+            }
+#else
             list[i].fn(list[i].user);
+#endif
             hao_gc_remove_root(list[i].user);
         }
         hao_gc_lock();
         if (gc_user_still_reachable_locked(list[i].user))
             gc_relink_block_locked(list[i].block);
         else
-            free(list[i].block);
+            gc_span_push_locked(list[i].block);
         hao_gc_unlock();
     }
     free(list);
@@ -1631,13 +2363,14 @@ static void gc_scan_block_precise(GCBlock* b) {
     char* u = (char*)(b + 1);
     switch (b->scan_kind) {
     case GC_KIND_OPAQUE:
+    case GC_KIND_FULL: /* 禁止保守扫：FULL 当叶 */
         return;
-    case GC_KIND_SLOTS: {
-        uint32_t bm = b->scan_meta;
-        size_t nslots = b->user_size / sizeof(uintptr_t);
-        if (nslots > 32) nslots = 32;
-        for (size_t i = 0; i < nslots; ++i) {
-            if (bm & (1u << i))
+    case GC_KIND_SLOTS:
+    case GC_KIND_BITMAP: {
+        size_t nslots = gc_slots_count(b);
+        size_t i;
+        for (i = 0; i < nslots; ++i) {
+            if (gc_slot_bit_is_ptr(b, i))
                 gc_mark_ptr(((uintptr_t*)u)[i]);
         }
         return;
@@ -1655,13 +2388,8 @@ static void gc_scan_block_precise(GCBlock* b) {
             gc_mark_ptr(((uintptr_t*)elems)[i]);
         return;
     }
-    case GC_KIND_FULL:
-    default: {
-        size_t n = b->user_size / sizeof(uintptr_t);
-        for (size_t i = 0; i < n; ++i)
-            gc_mark_ptr(((uintptr_t*)u)[i]);
+    default:
         return;
-    }
     }
 }
 
@@ -1671,13 +2399,13 @@ static int gc_block_has_young_ptr(GCBlock* b) {
     if (!b || b->scan_kind == GC_KIND_OPAQUE) return 0;
     u = (char*)(b + 1);
     switch (b->scan_kind) {
-    case GC_KIND_SLOTS: {
-        uint32_t bm = b->scan_meta;
-        size_t nslots = b->user_size / sizeof(uintptr_t);
-        if (nslots > 32) nslots = 32;
-        for (size_t i = 0; i < nslots; ++i) {
+    case GC_KIND_SLOTS:
+    case GC_KIND_BITMAP: {
+        size_t nslots = gc_slots_count(b);
+        size_t i;
+        for (i = 0; i < nslots; ++i) {
             GCBlock* c;
-            if (!(bm & (1u << i))) continue;
+            if (!gc_slot_bit_is_ptr(b, i)) continue;
             c = gc_find_block((void*)((uintptr_t*)u)[i]);
             if (c && c->gen == GC_GEN_YOUNG) return 1;
         }
@@ -1702,14 +2430,8 @@ static int gc_block_has_young_ptr(GCBlock* b) {
         return 0;
     }
     case GC_KIND_FULL:
-    default: {
-        size_t n = b->user_size / sizeof(uintptr_t);
-        for (size_t i = 0; i < n; ++i) {
-            GCBlock* c = gc_find_block((void*)((uintptr_t*)u)[i]);
-            if (c && c->gen == GC_GEN_YOUNG) return 1;
-        }
+    default:
         return 0;
-    }
     }
 }
 
@@ -1742,7 +2464,24 @@ void hao_gc_barrier(void* dst, void* new_val) {
      * v0.54 混合屏障：dst 须为**槽地址**（先 barrier 再 store）。
      * MARK 期 Yuasa shade(old) + Dijkstra shade(new)；IDLE 仅 remset。
      * STW 重试放锁前须 pin old/new，否则 shadow-only 漏标 → 字符串等 UAF。
+     * v0.65：IDLE 且无 STW —— new_val==null 完全无锁；否则短锁只做 remset。
      */
+    if (__atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_IDLE &&
+        !__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
+        if (!new_val) return;
+        hao_gc_lock();
+        if (__atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_IDLE &&
+            !__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
+            GCBlock* db = gc_find_block(dst);
+            GCBlock* nb = gc_find_block(new_val);
+            if (db && nb && db->gen == GC_GEN_OLD && nb->gen == GC_GEN_YOUNG)
+                gc_remset_add((void*)(db + 1));
+            hao_gc_unlock();
+            return;
+        }
+        hao_gc_unlock();
+        /* 竞态落入慢路径 */
+    }
     hao_gc_lock();
     for (;;) {
         while (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
@@ -1759,15 +2498,12 @@ void hao_gc_barrier(void* dst, void* new_val) {
         GCBlock* db = gc_find_block(dst);
         GCBlock* ob = old_val ? gc_find_block(old_val) : NULL;
         GCBlock* nb = new_val ? gc_find_block(new_val) : NULL;
-        /* 分代 remset：old 容器 → young 新值 */
         if (db && nb && db->gen == GC_GEN_OLD && nb->gen == GC_GEN_YOUNG)
             gc_remset_add((void*)(db + 1));
         if (__atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_MARK) {
-            /* 重试窗口可能夹 STW；确认仍 MARK 再 shade */
             if (ob) gc_enqueue(ob);
             if (nb) gc_enqueue(nb);
         }
-        /* 若 shade 前又来了 STW 请求，重跑（重新 load old） */
         if (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE))
             continue;
         break;
@@ -1873,6 +2609,22 @@ static int gc_verify_env_on(void) {
     return on;
 }
 
+/* 默认 concurrent sweep；HAO_GC_STW_SWEEP=1 强制旧「整段 STW free」 */
+static int gc_stw_sweep_forced(void) {
+    static int inited, on;
+    const char* v;
+    if (inited) return on;
+    inited = 1;
+    v = getenv("HAO_GC_STW_SWEEP");
+    on = (v && v[0] && !(v[0] == '0' && v[1] == '\0') &&
+          !((v[0] == 'n' || v[0] == 'N') && (v[1] == 'o' || v[1] == 'O') &&
+            v[2] == '\0'));
+    return on;
+}
+
+#define GC_SWEEP_YIELD_EVERY 128
+/* SPAN：concurrent free 每 GC_SWEEP_YIELD_EVERY 块为一片（spanSweepChunks） */
+
 /* V2/V6/V7/V8/V9/V10：冒烟夹具用 TLS 毒槽（文件作用域；MSVC 函数内 TLS 不可靠） */
 #ifdef _WIN32
 static __declspec(thread) void* g_verify_poison_cell;
@@ -1905,49 +2657,53 @@ static __thread int g_verify_poison_ext_armed;
 #endif
 
 static void gc_verify_shadow_roots(void) {
+    int ti;
     size_t i;
     if (!gc_verify_env_on()) return;
-    for (i = 0; i < g_shadow_n; ++i) {
-        void** slot = g_shadow ? g_shadow[i] : NULL;
-        void* p;
-        if (!slot) continue;
-        p = *slot;
-        if (!p) continue;
-        if (!gc_find_block_exact(p)) {
-            /* 持锁内 fatal：进程退出，不 unlock；V5：带槽下标与指针便于定位 */
-            char detail[160];
-            snprintf(detail, sizeof(detail),
-                     "shadow root is not a live heap object shadow_i=%zu ptr=%p",
-                     i, p);
-            hao_report_fatal("gc_verify", detail);
+    /* 跨线程：扫全部已注册线程 shadow（对齐 mark 的 gc_threads 枚举） */
+    for (ti = 0; ti < gc_thread_count; ++ti) {
+        GcThread* t = &gc_threads[ti];
+        size_t sn = (t->shadow_n && t->shadow_slot && *t->shadow_slot)
+                        ? *t->shadow_n
+                        : 0;
+        void*** sh = t->shadow_slot ? *t->shadow_slot : NULL;
+        for (i = 0; i < sn; ++i) {
+            void** slot = sh ? sh[i] : NULL;
+            void* p;
+            if (!slot) continue;
+            p = *slot;
+            if (!p) continue;
+            if (!gc_find_block_exact(p)) {
+                gc_verify_fatal_ip("shadow root is not a live heap object",
+                                   "shadow_i", (int64_t)i, p);
+            }
         }
     }
 }
 
-/* V6：校验本线程 scan pin + 武装毒针；坏槽 fatal 含 pin_i=/ptr= */
+/* V6：全线程 scan pin + 本线程毒针；坏槽 fatal 含 pin_i=/ptr= */
 static void gc_verify_scan_pins(void) {
-    int i;
+    int ti, i;
     if (!gc_verify_env_on()) return;
-    for (i = 0; i < g_scan_pin_n && i < GC_SCAN_PINS; ++i) {
-        void* p = g_scan_pins[i];
-        if (!p) continue;
-        if (!gc_find_block_exact(p)) {
-            char detail[160];
-            snprintf(detail, sizeof(detail),
-                     "scan pin is not a live heap object pin_i=%d ptr=%p",
-                     i, p);
-            hao_report_fatal("gc_verify", detail);
+    for (ti = 0; ti < gc_thread_count; ++ti) {
+        GcThread* t = &gc_threads[ti];
+        int n = (t->scan_pin_n) ? *t->scan_pin_n : 0;
+        void** pins = t->scan_pins;
+        if (!pins) continue;
+        for (i = 0; i < n && i < GC_SCAN_PINS; ++i) {
+            void* p = pins[i];
+            if (!p) continue;
+            if (!gc_find_block_exact(p)) {
+                gc_verify_fatal_ip("scan pin is not a live heap object", "pin_i",
+                                   (int64_t)(i), p);
+            }
         }
     }
     /* 毒针不依赖易被 clear 的 g_scan_pins 寿命；合成 pin_i=0 便于门禁 */
     if (g_verify_poison_pin_armed) {
         void* p = g_verify_poison_pin;
         if (p && !gc_find_block_exact(p)) {
-            char detail[160];
-            snprintf(detail, sizeof(detail),
-                     "scan pin is not a live heap object pin_i=%d ptr=%p",
-                     0, p);
-            hao_report_fatal("gc_verify", detail);
+            gc_verify_fatal_ip("scan pin is not a live heap object", "pin_i", (int64_t)(0), p);
         }
     }
 }
@@ -1960,81 +2716,70 @@ static void gc_verify_remset(void) {
         void* p = gc_remset[i];
         if (!p) continue;
         if (!gc_find_block_exact(p)) {
-            char detail[160];
-            snprintf(detail, sizeof(detail),
-                     "remset entry is not a live heap object remset_i=%zu ptr=%p",
-                     i, p);
-            hao_report_fatal("gc_verify", detail);
+            gc_verify_fatal_ip("remset entry is not a live heap object", "remset_i", (int64_t)(i), p);
         }
     }
     if (g_verify_poison_remset_armed) {
         void* p = g_verify_poison_remset;
         if (p && !gc_find_block_exact(p)) {
-            char detail[160];
-            snprintf(detail, sizeof(detail),
-                     "remset entry is not a live heap object remset_i=%zu ptr=%p",
-                     (size_t)0, p);
-            hao_report_fatal("gc_verify", detail);
+            gc_verify_fatal_ip("remset entry is not a live heap object", "remset_i", (int64_t)((size_t)0), p);
         }
     }
 }
 
-/* V8：校验 refl_i64 pin；毒针合成 refl_i64_i=0 */
+/* V8：全线程 refl_i64 pin；本线程毒针合成 refl_i64_i=0 */
 static void gc_verify_refl_i64_pins(void) {
-    int i;
+    int ti, i;
     if (!gc_verify_env_on()) return;
-    for (i = 0; i < g_refl_i64_pin_n && i < GC_REFL_I64_PINS; ++i) {
-        void* p = g_refl_i64_pins[i];
-        if (!p) continue;
-        if (!gc_find_block_exact(p)) {
-            char detail[160];
-            snprintf(detail, sizeof(detail),
-                     "refl_i64 pin is not a live heap object refl_i64_i=%d ptr=%p",
-                     i, p);
-            hao_report_fatal("gc_verify", detail);
+    for (ti = 0; ti < gc_thread_count; ++ti) {
+        GcThread* t = &gc_threads[ti];
+        int n = (t->refl_i64_pin_n) ? *t->refl_i64_pin_n : 0;
+        void** pins = t->refl_i64_pins;
+        if (!pins) continue;
+        for (i = 0; i < n && i < GC_REFL_I64_PINS; ++i) {
+            void* p = pins[i];
+            if (!p) continue;
+            if (!gc_find_block_exact(p)) {
+                gc_verify_fatal_ip("refl_i64 pin is not a live heap object",
+                                   "refl_i64_i", (int64_t)(i), p);
+            }
         }
     }
     if (g_verify_poison_refl_armed) {
         void* p = g_verify_poison_refl;
         if (p && !gc_find_block_exact(p)) {
-            char detail[160];
-            snprintf(detail, sizeof(detail),
-                     "refl_i64 pin is not a live heap object refl_i64_i=%d ptr=%p",
-                     0, p);
-            hao_report_fatal("gc_verify", detail);
+            gc_verify_fatal_ip("refl_i64 pin is not a live heap object", "refl_i64_i", (int64_t)(0), p);
         }
     }
 }
 
-/* V9：校验本线程 GPR 溅射槽；非堆整数跳过；堆区内非精确活对象 fatal；毒针合成 gpr_i=0 */
+/* V9：全线程 GPR 溅射槽；非堆整数跳过；堆区内非精确活对象 fatal；毒针合成 gpr_i=0 */
 static void gc_verify_gpr_spill(void) {
+    int ti;
     size_t i, n;
     if (!gc_verify_env_on()) return;
     n = GC_GPR_SPILL_BYTES / sizeof(void*);
-    for (i = 0; i < n; ++i) {
-        void* p = ((void**)g_gpr_spill)[i];
-        if (!p) continue;
-        if (((uintptr_t)p & (sizeof(uintptr_t) - 1)) != 0) continue;
-        /* 与 mark 一致：堆区外非堆值跳过 */
-        if (gc_heap_lo && gc_heap_hi &&
-            ((char*)p < gc_heap_lo || (char*)p >= gc_heap_hi))
-            continue;
-        if (!gc_find_block_exact(p)) {
-            char detail[160];
-            snprintf(detail, sizeof(detail),
-                     "gpr spill is not a live heap object gpr_i=%zu ptr=%p",
-                     i, p);
-            hao_report_fatal("gc_verify", detail);
+    for (ti = 0; ti < gc_thread_count; ++ti) {
+        GcThread* t = &gc_threads[ti];
+        void** spill = (void**)t->gpr_spill;
+        if (!spill) continue;
+        for (i = 0; i < n; ++i) {
+            void* p = spill[i];
+            if (!p) continue;
+            if (((uintptr_t)p & (sizeof(uintptr_t) - 1)) != 0) continue;
+            if (gc_heap_lo && gc_heap_hi &&
+                ((char*)p < gc_heap_lo || (char*)p >= gc_heap_hi))
+                continue;
+            if (!gc_find_block_exact(p)) {
+                gc_verify_fatal_ip("gpr spill is not a live heap object", "gpr_i",
+                                   (int64_t)(i), p);
+            }
         }
     }
     if (g_verify_poison_gpr_armed) {
         void* p = g_verify_poison_gpr;
         if (p && !gc_find_block_exact(p)) {
-            char detail[160];
-            snprintf(detail, sizeof(detail),
-                     "gpr spill is not a live heap object gpr_i=%zu ptr=%p",
-                     (size_t)0, p);
-            hao_report_fatal("gc_verify", detail);
+            gc_verify_fatal_ip("gpr spill is not a live heap object", "gpr_i", (int64_t)((size_t)0), p);
         }
     }
 }
@@ -2046,11 +2791,7 @@ static void gc_verify_c_leaf(void) {
     {
         void* p = g_verify_poison_leaf;
         if (p && !gc_find_block_exact(p)) {
-            char detail[160];
-            snprintf(detail, sizeof(detail),
-                     "c leaf is not a live heap object leaf_i=%d ptr=%p",
-                     0, p);
-            hao_report_fatal("gc_verify", detail);
+            gc_verify_fatal_ip("c leaf is not a live heap object", "leaf_i", (int64_t)(0), p);
         }
     }
 }
@@ -2062,11 +2803,90 @@ static void gc_verify_ext_roots(void) {
     {
         void* p = g_verify_poison_ext;
         if (p && !gc_find_block_exact(p)) {
-            char detail[160];
-            snprintf(detail, sizeof(detail),
-                     "ext root is not a live heap object ext_i=%d ptr=%p",
-                     0, p);
-            hao_report_fatal("gc_verify", detail);
+            gc_verify_fatal_ip("ext root is not a live heap object", "ext_i", (int64_t)(0), p);
+        }
+    }
+}
+
+static void gc_verify_fatal_mismatch(const char* head, int64_t a, int64_t b) {
+    char detail[160];
+    int len = 0;
+    len = hao_gc_append_str(detail, 160, len, head);
+    len = hao_gc_append_str(detail, 160, len, " a=");
+    len = hao_gc_append_i64(detail, 160, len, a);
+    len = hao_gc_append_str(detail, 160, len, " b=");
+    (void)hao_gc_append_i64(detail, 160, len, b);
+    hao_report_fatal("gc_verify", detail);
+}
+
+static void gc_verify_heap_integrity(void) {
+    GCBlock* b;
+    int64_t n = 0;
+    size_t bytes = 0;
+    if (!gc_verify_env_on()) return;
+    for (b = gc_heap; b; b = b->next) {
+        n += 1;
+        if (b->scan_kind == GC_KIND_FULL)
+            gc_verify_fatal_ip("forbidden GC_KIND_FULL on live heap", "heap_i", n,
+                               (void*)(b + 1));
+        if (b->user_size == 0)
+            gc_verify_fatal_ip("heap block user_size=0", "heap_i", n, (void*)(b + 1));
+        if (b->user_size > ((size_t)1 << 28))
+            gc_verify_fatal_ip("heap block user_size too large", "heap_i", n,
+                               (void*)(b + 1));
+        if (bytes > SIZE_MAX - b->user_size)
+            gc_verify_fatal_ip("heap bytes overflow while walking", "heap_i", n,
+                               (void*)(b + 1));
+        bytes += b->user_size;
+        if (n > gc_num_blocks + 1000000)
+            gc_verify_fatal_mismatch("heap walk exceeded blockCount+slop", n,
+                                     gc_num_blocks);
+    }
+    if (n != gc_num_blocks)
+        gc_verify_fatal_mismatch("heap walk blockCount mismatch", n, gc_num_blocks);
+    if (bytes != gc_heap_bytes)
+        gc_verify_fatal_mismatch("heap walk heapBytes mismatch", (int64_t)bytes,
+                                 (int64_t)gc_heap_bytes);
+}
+
+/* VERIFY：mspan allocBits/markBits + 空闲计数；collect 外不得残留 doomed */
+static void gc_verify_freelist_integrity(void) {
+    int sc;
+    if (!gc_verify_env_on()) return;
+    if (g_span_doomed) {
+        gc_verify_fatal_mismatch("g_span_doomed non-null outside drain", 1, 0);
+    }
+    for (sc = -1; sc < GC_SPAN_NCLASS; ++sc) {
+        MSpan* sp = (sc < 0) ? g_mspan_los : g_mspan_class[sc];
+        while (sp) {
+            size_t i, alloc_n = 0, free_n = 0;
+            size_t bits_bytes = (sp->nelems + 7) / 8;
+            if (!sp->allocBits || !sp->markBits || !sp->start)
+                gc_verify_fatal_mismatch("mspan missing bits/start", (int64_t)sc, 0);
+            for (i = 0; i < sp->nelems; ++i) {
+                int a = gc_bit_test(sp->allocBits, i);
+                if (a) alloc_n++;
+                else free_n++;
+                if (a) {
+                    GCBlock* b = (GCBlock*)(sp->start + i * sp->elemsize);
+                    int marked = gc_block_is_marked(b);
+                    int mb = gc_bit_test(sp->markBits, i);
+                    /* P2：活且在堆上时 markBits 应与 epoch 一致（允许 unmarked 在 IDLE） */
+                    if (gc_find_block((void*)(b + 1))) {
+                        if (marked && !mb)
+                            gc_verify_fatal_ip("markBits clear but block marked",
+                                               "span_i", (int64_t)i, (void*)(b + 1));
+                    }
+                }
+            }
+            if (alloc_n + free_n != sp->nelems)
+                gc_verify_fatal_mismatch("mspan bit count", (int64_t)alloc_n,
+                                         (int64_t)sp->nelems);
+            if (free_n != sp->free_count)
+                gc_verify_fatal_mismatch("mspan free_count", (int64_t)free_n,
+                                         (int64_t)sp->free_count);
+            (void)bits_bytes;
+            sp = sp->next;
         }
     }
 }
@@ -2079,6 +2899,8 @@ static void gc_verify_roots(void) {
     gc_verify_gpr_spill();
     gc_verify_c_leaf();
     gc_verify_ext_roots();
+    gc_verify_heap_integrity();
+    gc_verify_freelist_integrity();
 }
 
 /* V2：冒烟/调试钩子——压入非堆指针，下一 VERIFY collect 应 fatal */
@@ -2135,6 +2957,7 @@ void gc_collect_inner(char* regs, size_t regs_size) {
     char* prev_c_hi = g_collect_c_hi;
     g_collect_c_hi = &c_hi_frame;
 
+
     int64_t self = gc_os_tid();
     int continuing =
         (__atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_MARK);
@@ -2166,7 +2989,12 @@ void gc_collect_inner(char* regs, size_t regs_size) {
             g_stw_soft_attempt = 0;
             int root_ok = gc_stw_enter_and_scan_soft(GC_STW_TOTAL_MS);
             gc_scanned_tid_add(self);
-            if (!root_ok) {
+            if (root_ok == 2) {
+                gc_abort_mark_cycle(GC_ABORT_PARK_WD);
+                g_collect_c_hi = prev_c_hi;
+                return;
+            }
+            if (root_ok == 0) {
                 gc_abort_mark_cycle(GC_ABORT_ROOT);
                 g_collect_c_hi = prev_c_hi;
                 return;
@@ -2178,6 +3006,11 @@ void gc_collect_inner(char* regs, size_t regs_size) {
         /* 续跑：仅当仍 MARK（未 abort）；不 bump epoch */
         major = gc_cycle_is_major;
         gc_mark_major = major;
+        if (gc_stw_trip_armed()) {
+            gc_abort_mark_cycle(GC_ABORT_PARK_WD);
+            g_collect_c_hi = prev_c_hi;
+            return;
+        }
         gc_drain_worklist(1);
     }
 
@@ -2185,25 +3018,37 @@ void gc_collect_inner(char* regs, size_t regs_size) {
     {
         int term_ok = 0;
         for (int attempt = 0; attempt < GC_STW_TERM_RETRIES; ++attempt) {
+            if (gc_stw_trip_armed()) {
+                gc_abort_mark_cycle(GC_ABORT_PARK_WD);
+                g_collect_c_hi = prev_c_hi;
+                return;
+            }
             gc_scanned_tid_clear();
             g_stw_soft_phase = GC_STW_PHASE_TERM;
             g_stw_soft_attempt = attempt;
             int soft_ok = gc_stw_enter_and_scan_soft(GC_STW_TERM_TOTAL_MS);
+            if (soft_ok == 2) {
+                gc_abort_mark_cycle(GC_ABORT_PARK_WD);
+                g_collect_c_hi = prev_c_hi;
+                return;
+            }
             gc_scanned_tid_add(self);
             gc_seed_roots_and_remset(regs, regs_size);
             /* 二次 seed：屏障窗口漏灰时第一轮可能假空 */
-            if (soft_ok && gc_wl_head >= gc_wl_count)
+            if (soft_ok == 1 && gc_wl_head >= gc_wl_count)
                 gc_seed_roots_and_remset(regs, regs_size);
-            if (soft_ok && gc_all_threads_scanned(self) &&
+            if (soft_ok == 1 && gc_all_threads_scanned(self) &&
                 gc_wl_head >= gc_wl_count) {
                 term_ok = 1;
                 break;
             }
             gc_stw_leave();
             gc_drain_worklist(1);
+            gc_hold_slice_end();
             hao_gc_unlock();
             gc_sleep_ms(2);
             hao_gc_lock();
+            gc_hold_slice_begin();
         }
         if (!term_ok) {
             /* 禁止无限 MARK 黑囤：作废本轮色，下一轮从根重来 */
@@ -2215,18 +3060,30 @@ void gc_collect_inner(char* regs, size_t regs_size) {
     major = gc_cycle_is_major;
 
     __atomic_store_n(&gc_phase, GC_PHASE_IDLE, __ATOMIC_RELEASE);
+    /* 强可达已定：弱/软仅当 referent 未强标时置空（平常 collect 不强清强活 soft） */
+    gc_process_weak_refs_locked();
     /*
-     * v0.55.15：sweep 期间保持 STW（不中途放锁/不先 leave）。
-     * 旧「先 leave 再边扫边放锁」在漏标时与 mutator 并发 free → str_len 等处 0xC0000005。
-     * 堆块数通常有限，整段 sweep 持锁停顿可接受。
+     * concurrent sweep + exact-size freelist（默开；HAO_GC_STW_SWEEP=1 关）：
+     * 1) 持锁把白块从 gc_heap 摘到 doomed（不 free）。
+     * 2) 先 stw_leave；垫片外再 drain 入 freelist（LOS 仍 free）。
+     * STW 模式：整段保持 stw_request（旧行为）。
      */
+    int concurrent_sweep = !gc_stw_sweep_forced();
+    if (concurrent_sweep)
+        gc_stw_leave();
+
     void** promoted_buf = NULL;
     size_t promoted_n = 0, promoted_cap = 0;
+    GCBlock* doomed = NULL;
 
     gc_in_collect = 1;
     GCBlock** prev = &gc_heap;
     size_t live = 0;
     int64_t live_fin = 0; /* v0.55.53：存活且仍挂 finalizer */
+    int64_t doomed_n = 0;
+    int unlink_steps = 0;
+    int64_t unlink_t0 = gc_mono_ms();
+    int64_t unlink_slice = unlink_t0;
     while (*prev) {
         GCBlock* b = *prev;
         int marked = gc_block_is_marked(b);
@@ -2237,6 +3094,7 @@ void gc_collect_inner(char* regs, size_t regs_size) {
                 b->age += 1;
                 if (b->age >= GC_PROMOTE_AGE) {
                     b->gen = GC_GEN_OLD;
+                    g_promote_count += 1;
                     if (promoted_n >= promoted_cap) {
                         promoted_cap = promoted_cap ? promoted_cap * 2 : 256;
                         promoted_buf = (void**)realloc(
@@ -2260,30 +3118,49 @@ void gc_collect_inner(char* regs, size_t regs_size) {
             else
                 gc_heap_bytes = 0;
             gc_page_index_remove(b);
-            void* user = (void*)(b + 1);
-            HaoFinalizerFn fn = b->finalizer;
-            b->finalizer = NULL;
-            if (fn)
-                gc_pend_fin_add(fn, user, b);
-            else
-                free(b);
+            if (gc_find_block((void*)(b + 1))) {
+                fputs("panic: GC unlink still findable after page_index_remove\n",
+                      stderr);
+                exit(1);
+            }
+            b->next = doomed;
+            doomed = b;
+            doomed_n += 1;
+            g_freed_bytes_total += (int64_t)b->user_size;
+        }
+        unlink_steps += 1;
+        /* LAT-2：concurrent 路径 unlink 时间片让路，避免堵 memstats */
+        if (concurrent_sweep &&
+            ((unlink_steps % 64) == 0 ||
+             (gc_mono_ms() - unlink_slice) >= GC_SWEEP_SLICE_MS)) {
+            gc_sweep_yield_locked("unlink_batch");
+            unlink_slice = gc_mono_ms();
+            /* 让路后 prev 仍指向合法下一节点（链在持锁外未改拓扑的仅 alloc 挂头） */
+            if (!*prev && doomed) {
+                /* 无更多活链节点；循环将结束 */
+            }
         }
     }
+    g_last_unlink_ms = gc_mono_ms() - unlink_t0;
+
+    /* 白块已摘链：freelist/free 延后到 trampoline 外（对齐栈），此处只挂起 */
+    {
+        gc_worklist_reset();
+        g_span_doomed = doomed;
+        g_span_doomed_concurrent = concurrent_sweep;
+    }
     gc_in_collect = 0;
-    gc_stw_leave();
+    if (concurrent_sweep)
+        g_concurrent_sweep_cycles += 1;
+    else
+        gc_stw_leave();
     gc_worklist_reset();
     gc_scanned_tid_clear();
 
     if (major) {
-        /* major 已扫全堆：remset 整表丢弃，避免陈旧 old→young 边拖活 */
         gc_remset_count = 0;
     } else {
-        /* 只保留仍在堆上的屏障边 */
         gc_remset_filter_live();
-        /*
-         * 晋升瞬间可能产生 old→young；仅当块内仍握 young 子时挂 remset。
-         * 盲目挂全部晋升（含 OPAQUE String）会把 remset 撑到数千（monitor remset≈8007）。
-         */
         for (size_t i = 0; i < promoted_n; ++i) {
             GCBlock* pb = gc_find_block(promoted_buf[i]);
             if (pb && gc_block_has_young_ptr(pb))
@@ -2362,6 +3239,118 @@ static void gc_note_verify_skip_reenter(void) {
     hao_trace("gc", "verify skip reenter collect");
 }
 
+
+/* ---- 弱/软引用：强标后、摘白前处理；referent 不经侧表入灰 ---- */
+static int gc_weak_grow_locked(void) {
+    int ncap = g_weak_cap ? g_weak_cap * 2 : 256;
+    GcWeakEnt* nw;
+    int i;
+    nw = (GcWeakEnt*)realloc(g_weaks, (size_t)ncap * sizeof(GcWeakEnt));
+    if (!nw) return 0;
+    for (i = g_weak_cap; i < ncap; ++i) {
+        nw[i].wr = NULL;
+        nw[i].referent = NULL;
+        nw[i].soft = 0;
+        nw[i].used = 0;
+    }
+    g_weaks = nw;
+    g_weak_cap = ncap;
+    return 1;
+}
+
+static void gc_weak_remove_at(int i) {
+    if (i < 0 || i >= g_weak_n || !g_weaks) return;
+    g_weaks[i] = g_weaks[g_weak_n - 1];
+    g_weaks[g_weak_n - 1].used = 0;
+    g_weak_n -= 1;
+}
+
+static void gc_process_weak_refs_locked(void) {
+    int i = 0;
+    while (i < g_weak_n) {
+        GcWeakEnt* e = &g_weaks[i];
+        GCBlock* wb;
+        GCBlock* rb;
+        if (!e->used || !e->wr) { gc_weak_remove_at(i); continue; }
+        wb = gc_find_block_exact(e->wr);
+        if (!wb || !gc_block_is_marked(wb)) { gc_weak_remove_at(i); continue; }
+        if (!e->referent) { i += 1; continue; }
+        rb = gc_find_block_exact(e->referent);
+        /* weak/soft 同规则：仅未强标时置空；OOM 前另走 gc_clear_soft_refs_locked */
+        if (!rb || !gc_block_is_marked(rb))
+            e->referent = NULL;
+        i += 1;
+    }
+}
+
+static int gc_clear_soft_refs_locked(void) {
+    int n = 0, i;
+    for (i = 0; i < g_weak_n; ++i) {
+        if (g_weaks[i].used && g_weaks[i].soft && g_weaks[i].referent) {
+            g_weaks[i].referent = NULL;
+            n += 1;
+        }
+    }
+    return n;
+}
+
+/* HAO_GC_TEST_OOM=1 或 hao_gc_test_force_oom_once：下一次起 calloc 强制失败至 OOM */
+static int gc_test_should_fail_calloc(void) {
+    const char* v;
+    if (g_test_force_oom) return 1;
+    v = getenv("HAO_GC_TEST_OOM");
+    if (v && v[0] && !(v[0] == '0' && v[1] == '\0') &&
+        !((v[0] == 'n' || v[0] == 'N') && (v[1] == 'o' || v[1] == 'O') &&
+          v[2] == '\0')) {
+        g_test_force_oom = 1;
+        return 1;
+    }
+    return 0;
+}
+
+void hao_gc_test_force_oom_once(void) {
+    g_test_force_oom = 1;
+}
+
+void hao_gc_ensure_oom_exc(void) {
+    /* 单例仅由 Hao GC.boot → hao_gc_set_oom_exception 安装；C 侧无法捏造 */
+}
+
+static void gc_oom_fail(size_t need) {
+    char buf[192];
+    int bl = 0;
+    size_t snap_heap = 0, snap_live = 0, snap_thr = 0;
+    int64_t snap_blocks = 0;
+    g_test_force_oom = 0;
+    hao_gc_lock();
+    snap_heap = gc_heap_bytes;
+    snap_live = gc_live;
+    snap_thr = gc_threshold;
+    snap_blocks = gc_num_blocks;
+    hao_gc_unlock();
+    bl = hao_gc_append_str(buf, 192, bl, "oom need=");
+    bl = hao_gc_append_i64(buf, 192, bl, (int64_t)need);
+    bl = hao_gc_append_str(buf, 192, bl, "B heap=");
+    bl = hao_gc_append_i64(buf, 192, bl, (int64_t)snap_heap);
+    bl = hao_gc_append_str(buf, 192, bl, " live=");
+    bl = hao_gc_append_i64(buf, 192, bl, (int64_t)snap_live);
+    bl = hao_gc_append_str(buf, 192, bl, " thr=");
+    bl = hao_gc_append_i64(buf, 192, bl, (int64_t)snap_thr);
+    bl = hao_gc_append_str(buf, 192, bl, " blocks=");
+    (void)hao_gc_append_i64(buf, 192, bl, snap_blocks);
+    if (g_oom_exc && hao_exc_has_catcher()) {
+        /* OutOfMemoryException: [0]=vt [1]=message [2]=needBytes；先 barrier 再 store */
+        void** slots = (void**)g_oom_exc;
+        HaoString* msg = hao_str_from_cstr(buf);
+        hao_gc_barrier(&slots[1], msg);
+        slots[1] = msg;
+        ((int64_t*)g_oom_exc)[2] = (int64_t)need;
+        hao_throw(g_oom_exc);
+        return;
+    }
+    hao_report_fatal("oom", buf);
+}
+
 static void gc_run_collect_locked(int major) {
     if (gc_collecting) {
         gc_note_verify_skip_reenter();
@@ -2373,10 +3362,27 @@ static void gc_run_collect_locked(int major) {
     if (!prev_c_hi || &frame > prev_c_hi) g_collect_c_hi = &frame;
     gc_collecting = 1;
     g_collect_want_major = major ? 1 : 0;
+    g_hold_acc_ms = 0;
+    gc_hold_slice_begin();
     /* V3：与 gc_collect 同口径——trampoline 外 VERIFY（禁垫片内 CRT fatal） */
     gc_verify_roots();
+    gc_span_ensure();
     gc_collect_trampoline();
+    /* LAT-2：与 gc_collect 同 — drain/scavenge 短批，返回时仍持锁 */
+    gc_stats_publish_locked();
+    gc_hold_slice_end();
+    hao_gc_unlock();
+    hao_gc_lock();
+    gc_hold_slice_begin();
+    gc_span_drain_doomed_locked();
+    gc_mspan_scavenge_locked(g_collect_want_major ? 0 : 1);
     gc_verify_roots();
+    gc_stats_publish_locked();
+    g_last_collect_hold_ms = g_hold_acc_ms;
+    if (g_hold_slice_t0 > 0)
+        g_last_collect_hold_ms += gc_mono_ms() - g_hold_slice_t0;
+    gc_hold_slice_end();
+    gc_hold_slice_begin(); /* 调用方仍持锁 */
     gc_collecting = 0;
     g_collect_c_hi = prev_c_hi;
 }
@@ -2407,10 +3413,32 @@ void gc_collect(void) {
     }
     gc_collecting = 1;
     g_collect_want_major = 1;
+    g_hold_acc_ms = 0;
+    gc_hold_slice_begin();
     /* V2：collect 前/后 VERIFY（trampoline 外，避免裸垫片栈对齐坑） */
     gc_verify_roots();
+    gc_span_ensure();
     gc_collect_trampoline();
+    /*
+     * LAT-2：trampoline 内已 stw_leave（concurrent）；drain/scavenge 不得再整段占大锁。
+     * 先 publish + unlock，再短批持锁消化 doomed。
+     */
+    gc_stats_publish_locked();
+    gc_hold_slice_end();
+    hao_gc_unlock();
+
+    hao_gc_lock();
+    gc_hold_slice_begin();
+    /* freelist drain 必须在垫片外：trampoline 栈上 CRT/写 freelist 会 AV */
+    gc_span_drain_doomed_locked();
+    gc_mspan_scavenge_locked(1);
     gc_verify_roots();
+    gc_stats_publish_locked();
+    g_last_collect_hold_ms = g_hold_acc_ms;
+    if (g_hold_slice_t0 > 0)
+        g_last_collect_hold_ms += gc_mono_ms() - g_hold_slice_t0;
+    gc_hold_slice_end();
+    hao_trace("gc", "collect_hold");
     gc_collecting = 0;
     hao_gc_unlock();
     gc_drain_finalizers();
@@ -2521,11 +3549,9 @@ void hao_gc_clear_finalizer(void* obj) {
 
 int64_t hao_gc_finalizer_runs(void) { return gc_finalizer_runs; }
 
-/* 写入 gc.GcStats：槽 0 vtable；1..38 与 GC.hao 字段声明序一致（v0.55.53 扩至 38） */
-void hao_gc_stats(void* obj) {
-    if (!obj) return;
-    int64_t* s = (int64_t*)obj;
-    gc_lock_coop();
+/* 写入 gc.GcStats：槽 0 vtable；1..N 与 GC.hao 字段声明序一致 */
+static void gc_stats_fill_into(int64_t* s) {
+    if (!s) return;
     s[1] = (int64_t)gc_live;
     s[2] = (int64_t)gc_heap_bytes;
     s[3] = (int64_t)gc_nursery_alloc;
@@ -2544,9 +3570,8 @@ void hao_gc_stats(void* obj) {
     s[16] = (int64_t)gc_thread_count;
     s[17] = g_mark_abort_cycles;
     s[18] = g_mark_worker_steps;
-    s[19] = (int64_t)gc_remset_count; /* v0.55.2 */
-    s[20] = g_park_watchdog_trips;    /* v0.55.11：park 超时强行放行 */
-    /* v0.55.52：分相 abort/incomplete + 末次未齐快照 */
+    s[19] = (int64_t)gc_remset_count;
+    s[20] = g_park_watchdog_trips;
     s[21] = g_stw_incomplete_root;
     s[22] = g_stw_incomplete_term;
     s[23] = g_mark_abort_root;
@@ -2558,7 +3583,6 @@ void hao_gc_stats(void* obj) {
     s[29] = (int64_t)g_last_stw_parked;
     s[30] = (int64_t)g_last_stw_missing;
     s[31] = (int64_t)g_last_stw_os_block_missing;
-    /* v0.55.53：缺 park tid/龄 + finalizer 发现面 */
     s[32] = (int64_t)g_last_miss_tid_n;
     s[33] = g_last_miss_tids[0];
     s[34] = g_last_miss_tids[1];
@@ -2566,74 +3590,137 @@ void hao_gc_stats(void* obj) {
     s[36] = g_finalizer_skip_abort;
     s[37] = g_finalizer_live_at_sweep;
     s[38] = (int64_t)g_last_finalizer_diag;
-    hao_gc_unlock();
+    s[39] = g_concurrent_sweep_cycles;
+    s[40] = g_span_sweep_chunks;
+    s[41] = g_span_freelist_hits;
+    {
+        int64_t elapsed = gc_mono_ms() - g_proc_start_ms;
+        if (elapsed < 1) elapsed = 1;
+        if (g_proc_start_ms == 0) {
+            g_proc_start_ms = gc_mono_ms();
+            elapsed = 1;
+        }
+        s[42] = (g_alloc_bytes_total * 1000) / elapsed;
+        s[43] = (g_freed_bytes_total * 1000) / elapsed;
+        s[44] = g_stw_wait_ms_total;
+        s[45] = g_promote_count;
+        s[46] = (g_promote_count * 1000) / elapsed;
+        s[47] = (int64_t)g_last_miss_line;
+        s[48] = (int64_t)g_last_miss_col;
+        s[49] = g_span_commit_bytes;
+        s[50] = g_freelist_bytes;
+        s[51] = g_scavenge_bytes;
+        s[52] = g_scavenge_cycles;
+        s[53] = g_span_count;
+        /* v0.74 LAT-2 */
+        s[54] = g_last_collect_hold_ms;
+        s[55] = g_last_unlink_ms;
+        s[56] = g_last_drain_ms;
+        s[57] = g_last_scavenge_ms;
+        s[58] = g_last_stats_lock_wait_ms;
+        s[59] = g_last_publish_ms;
+        s[60] = g_stats_publish_count;
+        s[61] = g_last_stats_safepoint_ms;
+    }
+}
+
+void hao_gc_stats(void* obj) {
+    int64_t* s;
+    int64_t t0, t1;
+    int idx;
+    if (!obj) return;
+    s = (int64_t*)obj;
+    t0 = gc_mono_ms();
+    /* 协作：STW 中仍须 park；leave 后读快照不堵 sweep 大锁 */
+    hao_gc_safepoint();
+    t1 = gc_mono_ms();
+    g_last_stats_safepoint_ms = t1 - t0;
+    if (g_last_stats_safepoint_ms < 0) g_last_stats_safepoint_ms = 0;
+    if (g_stats_publish_count == 0) {
+        /* 冷启动：短持锁填首帧快照 */
+        int64_t tw = gc_mono_ms();
+        hao_gc_lock();
+        g_last_stats_lock_wait_ms = gc_mono_ms() - tw;
+        if (g_last_stats_lock_wait_ms < 0) g_last_stats_lock_wait_ms = 0;
+        gc_stats_publish_locked();
+        hao_gc_unlock();
+        hao_trace("gc", "stats_wait");
+    } else {
+        g_last_stats_lock_wait_ms = 0;
+    }
+    idx = __atomic_load_n(&g_stats_snap_i, __ATOMIC_ACQUIRE);
+    if (idx < 0 || idx > 1) idx = 0;
+    memcpy(&s[1], &g_stats_snap[idx][1], (GC_STATS_SLOTS - 1) * sizeof(int64_t));
+    /* 读侧刷新本次观测（不回写 snap） */
+    s[58] = g_last_stats_lock_wait_ms;
+    s[61] = g_last_stats_safepoint_ms;
 }
 
 int64_t hao_gc_remset_count(void) {
-    gc_lock_coop();
+    gc_lock_stats_ro();
     int64_t n = (int64_t)gc_remset_count;
     hao_gc_unlock();
     return n;
 }
 
 int64_t hao_gc_mark_abort_cycles(void) {
-    gc_lock_coop();
+    gc_lock_stats_ro();
     int64_t n = g_mark_abort_cycles;
     hao_gc_unlock();
     return n;
 }
 
 int64_t hao_gc_mark_worker_steps(void) {
-    gc_lock_coop();
+    gc_lock_stats_ro();
     int64_t n = g_mark_worker_steps;
     hao_gc_unlock();
     return n;
 }
 
 int64_t hao_gc_live_bytes(void) {
-    gc_lock_coop();
+    gc_lock_stats_ro();
     int64_t v = (int64_t)gc_live;
     hao_gc_unlock();
     return v;
 }
 
 int64_t hao_gc_threshold(void) {
-    gc_lock_coop();
+    gc_lock_stats_ro();
     int64_t v = (int64_t)gc_threshold;
     hao_gc_unlock();
     return v;
 }
 
 int64_t hao_gc_allocated_since(void) {
-    gc_lock_coop();
+    gc_lock_stats_ro();
     int64_t v = (int64_t)gc_allocated;
     hao_gc_unlock();
     return v;
 }
 
 int64_t hao_gc_block_count(void) {
-    gc_lock_coop();
+    gc_lock_stats_ro();
     int64_t n = gc_num_blocks;
     hao_gc_unlock();
     return n;
 }
 
 int64_t hao_gc_collect_count(void) {
-    gc_lock_coop();
+    gc_lock_stats_ro();
     int64_t v = gc_collect_count;
     hao_gc_unlock();
     return v;
 }
 
 int64_t hao_gc_minor_count(void) {
-    gc_lock_coop();
+    gc_lock_stats_ro();
     int64_t v = gc_minor_count;
     hao_gc_unlock();
     return v;
 }
 
 int64_t hao_gc_major_count(void) {
-    gc_lock_coop();
+    gc_lock_stats_ro();
     int64_t v = gc_major_count;
     hao_gc_unlock();
     return v;
@@ -2641,7 +3728,7 @@ int64_t hao_gc_major_count(void) {
 
 /* 自上次 minor/major 以来 nursery 累计分配（触发 minor 的压力指标） */
 int64_t hao_gc_nursery_bytes(void) {
-    gc_lock_coop();
+    gc_lock_stats_ro();
     int64_t v = (int64_t)gc_nursery_alloc;
     hao_gc_unlock();
     return v;
@@ -2649,7 +3736,7 @@ int64_t hao_gc_nursery_bytes(void) {
 
 /* 已向 GC 注册的线程数（参与 STW 栈扫描；≠ OS 线程总数） */
 int64_t hao_gc_registered_threads(void) {
-    gc_lock_coop();
+    gc_lock_stats_ro();
     int64_t v = (int64_t)gc_thread_count;
     hao_gc_unlock();
     return v;
@@ -2714,6 +3801,7 @@ void* gc_alloc_ex(size_t n, uint8_t kind, uint64_t meta) {
         hao_report_fatal("oom", "内存分配过大（超出可表示尺寸）");
     }
     size_t need = (n + GC_ALIGN - 1) & ~(size_t)(GC_ALIGN - 1);
+    g_alloc_bytes_total += (int64_t)need;
 
     if (gc_allocated > SIZE_MAX - need)
         gc_allocated = SIZE_MAX;
@@ -2744,62 +3832,172 @@ void* gc_alloc_ex(size_t n, uint8_t kind, uint64_t meta) {
     }
 
     size_t total = GC_HEADER + need;
-    /* calloc/free 不得持 GC 锁：否则其它 mutator 堵在锁上无法 park → STW 永远 incomplete */
-    hao_gc_unlock();
-    GCBlock* b = (GCBlock*)calloc(1, total);
-    if (!b) {
-        for (;;) {
-            hao_gc_safepoint();
-            hao_gc_lock();
-            if (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
-                hao_gc_unlock();
-                continue;
-            }
-            break;
-        }
-        gc_run_collect_locked(1);
-        hao_gc_unlock();
-        b = (GCBlock*)calloc(1, total);
-        if (!b) {
-            char buf[160];
-            snprintf(buf, sizeof(buf),
-                     "内存分配失败（请求 %zu 字节用户区 + 头）", need);
-            hao_report_fatal("oom", buf);
-        }
-    }
-    for (;;) {
-        hao_gc_safepoint();
-        hao_gc_lock();
-        if (__atomic_load_n(&gc_stw_request, __ATOMIC_ACQUIRE)) {
-            hao_gc_unlock();
-            continue;
-        }
-        break;
-    }
-    b->user_size = need;
-    /* 并发标记期黑分配：打上当前 epoch */
-    b->marked = (__atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_MARK)
+    gc_span_ensure();
+    /* 紧急 scavenge：缓存过大时先还空板 */
+    if ((size_t)g_freelist_bytes > GC_FREELIST_SOFT_MAX * 2)
+        gc_mspan_scavenge_locked(2);
+
+    {
+        GCBlock* reused = gc_span_pop_locked(need);
+        if (!reused && gc_span_class_of(need) < 0)
+            reused = gc_mspan_alloc_los_locked(need);
+        if (reused) {
+            char* u;
+            size_t i;
+            size_t zlim = total;
+            MSpan* sp = gc_span_of_ptr(reused);
+            if (sp && sp->elemsize > zlim) zlim = sp->elemsize;
+            for (i = 0; i < zlim; ++i) ((char*)reused)[i] = 0;
+            reused->user_size = need;
+            reused->marked =
+                (__atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_MARK)
                     ? gc_mark_epoch
                     : 0;
-    b->scan_kind = kind;
-    b->scan_meta = (uint32_t)meta;
-    b->gen = GC_GEN_YOUNG;
-    b->age = 0;
-    b->next = gc_heap;
-    gc_heap = b;
-    gc_num_blocks += 1;
-    gc_heap_bytes += need;
-
-    char* u = (char*)(b + 1);
-    if (!gc_heap_lo || u < gc_heap_lo) gc_heap_lo = u;
-    if (!gc_heap_hi || u + need > gc_heap_hi) gc_heap_hi = u + need;
-    gc_page_index_add(b);
-
-    hao_gc_unlock();
-    gc_drain_finalizers();
-    return u;
+            if (reused->marked) gc_mspan_mark_bit_for_block(reused);
+            reused->scan_kind = kind;
+            reused->scan_meta = (uint32_t)meta;
+            reused->gen = GC_GEN_YOUNG;
+            reused->age = 0;
+            reused->next = gc_heap;
+            gc_heap = reused;
+            gc_num_blocks += 1;
+            gc_heap_bytes += need;
+            u = (char*)(reused + 1);
+            if (!gc_heap_lo || u < gc_heap_lo) gc_heap_lo = u;
+            if (!gc_heap_hi || u + need > gc_heap_hi) gc_heap_hi = u + need;
+            gc_page_index_add(reused);
+            hao_gc_unlock();
+            gc_drain_finalizers();
+            return u;
+        }
+    }
+    /* mspan 分配失败：major + soft 清后重试（禁止再走 CRT calloc 永囤） */
+    {
+        GCBlock* b = NULL;
+        int attempt;
+        for (attempt = 0; attempt < 3 && !b; ++attempt) {
+            if (attempt == 1) {
+                gc_run_collect_locked(1);
+            } else if (attempt == 2) {
+                int cleared = gc_clear_soft_refs_locked();
+                if (cleared > 0) gc_run_collect_locked(1);
+            }
+            b = gc_span_pop_locked(need);
+            if (!b && gc_span_class_of(need) < 0)
+                b = gc_mspan_alloc_los_locked(need);
+            if (b) {
+                char* u;
+                size_t i;
+                size_t zlim = total;
+                MSpan* sp = gc_span_of_ptr(b);
+                if (sp && sp->elemsize > zlim) zlim = sp->elemsize;
+                for (i = 0; i < zlim; ++i) ((char*)b)[i] = 0;
+                b->user_size = need;
+                b->marked =
+                    (__atomic_load_n(&gc_phase, __ATOMIC_ACQUIRE) == GC_PHASE_MARK)
+                        ? gc_mark_epoch
+                        : 0;
+                if (b->marked) gc_mspan_mark_bit_for_block(b);
+                b->scan_kind = kind;
+                b->scan_meta = (uint32_t)meta;
+                b->gen = GC_GEN_YOUNG;
+                b->age = 0;
+                b->next = gc_heap;
+                gc_heap = b;
+                gc_num_blocks += 1;
+                gc_heap_bytes += need;
+                u = (char*)(b + 1);
+                if (!gc_heap_lo || u < gc_heap_lo) gc_heap_lo = u;
+                if (!gc_heap_hi || u + need > gc_heap_hi) gc_heap_hi = u + need;
+                gc_page_index_add(b);
+                hao_gc_unlock();
+                gc_drain_finalizers();
+                return u;
+            }
+        }
+        gc_oom_fail(need);
+        return NULL;
+    }
 }
 
 void* gc_alloc(size_t n) {
-    return gc_alloc_ex(n, GC_KIND_FULL, 0);
+    /* 禁止 FULL 保守堆：未知载荷按叶（OPAQUE） */
+    return gc_alloc_ex(n, GC_KIND_OPAQUE, 0);
+}
+
+int64_t hao_gc_finalizer_exceptions(void) {
+    return __atomic_load_n(&g_finalizer_exceptions, __ATOMIC_RELAXED);
+}
+
+void hao_gc_set_oom_exception(void* exc) {
+    void* old;
+    hao_gc_lock();
+    old = g_oom_exc;
+    g_oom_exc = exc;
+    hao_gc_unlock();
+    if (old && old != exc) hao_gc_remove_root(old);
+    if (exc) hao_gc_add_root(exc);
+}
+
+HaoString* hao_gc_last_miss_file(void) {
+    const char* f = g_last_miss_file ? g_last_miss_file : "";
+    return hao_str_from_cstr(f);
+}
+
+int64_t hao_gc_last_miss_line(void) { return (int64_t)g_last_miss_line; }
+int64_t hao_gc_last_miss_col(void) { return (int64_t)g_last_miss_col; }
+
+void hao_weak_register(void* weak_obj, void* referent, int32_t soft) {
+    int i;
+    if (!weak_obj) return;
+    hao_gc_lock();
+    for (i = 0; i < g_weak_n; ++i) {
+        if (g_weaks[i].used && g_weaks[i].wr == weak_obj) {
+            g_weaks[i].referent = referent;
+            g_weaks[i].soft = soft ? 1 : 0;
+            hao_gc_unlock();
+            return;
+        }
+    }
+    if (g_weak_n >= g_weak_cap) {
+        if (!gc_weak_grow_locked()) {
+            hao_gc_unlock();
+            hao_report_fatal("gc", "weak ref table grow failed");
+            return;
+        }
+    }
+    g_weaks[g_weak_n].wr = weak_obj;
+    g_weaks[g_weak_n].referent = referent;
+    g_weaks[g_weak_n].soft = soft ? 1 : 0;
+    g_weaks[g_weak_n].used = 1;
+    g_weak_n += 1;
+    hao_gc_unlock();
+}
+
+void* hao_weak_get(void* weak_obj) {
+    int i;
+    void* r = NULL;
+    if (!weak_obj) return NULL;
+    hao_gc_lock();
+    for (i = 0; i < g_weak_n; ++i) {
+        if (g_weaks[i].used && g_weaks[i].wr == weak_obj) {
+            r = g_weaks[i].referent;
+            break;
+        }
+    }
+    hao_gc_unlock();
+    return r;
+}
+
+void hao_weak_clear(void* weak_obj) {
+    int i;
+    if (!weak_obj) return;
+    hao_gc_lock();
+    for (i = 0; i < g_weak_n; ++i) {
+        if (g_weaks[i].used && g_weaks[i].wr == weak_obj) {
+            g_weaks[i].referent = NULL;
+            break;
+        }
+    }
+    hao_gc_unlock();
 }

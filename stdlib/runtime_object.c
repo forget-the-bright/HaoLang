@@ -8,22 +8,88 @@
  *  类型判定（is/as）：对象槽位 0 存虚表指针，每个类的虚表是唯一
  *  全局常量，因此虚表地址可直接作为类型标识；子类判定由编译期生成的
  *  「类型及其所有子类虚表列表」（NULL 结尾）支持。
+ *
+ *  扫描：≤32 槽 SLOTS；>32 槽 GC_KIND_BITMAP（位图挂槽区尾）。禁止 FULL。
  */
 #include "runtime_internal.h"
 
-/* 分配含 nfields 个槽的对象；bitmap 标明哪些槽是 GC 指针。*/
+static size_t gc_bitmap_trailer_bytes(size_t nslots) {
+    /* u32 字向上取整，再对齐到 8 */
+    size_t nw = (nslots + 31u) / 32u;
+    size_t b = nw * 4u;
+    return (b + 7u) & ~(size_t)7u;
+}
+
+static void gc_write_bitmap_trailer(void* user, size_t nslots, const uint64_t* words,
+                                    size_t nwords) {
+    size_t i;
+    uint32_t* dst;
+    if (!user || nslots == 0) return;
+    dst = (uint32_t*)((char*)user + nslots * 8u);
+    {
+        size_t nw32 = (nslots + 31u) / 32u;
+        for (i = 0; i < nw32; ++i) dst[i] = 0;
+    }
+    if (!words || nwords <= 0) return;
+    for (i = 0; i < nslots; ++i) {
+        size_t wi = i / 64u;
+        unsigned sh = (unsigned)(i % 64u);
+        if (wi >= (size_t)nwords) break;
+        if ((words[wi] >> sh) & 1ull)
+            dst[i / 32u] |= (1u << (i % 32u));
+    }
+}
+
+/* 分配含 nfields 个槽的对象；bitmap 标明哪些槽是 GC 指针（≤64 槽）。*/
 void* hao_object_new(int64_t nfields, int64_t bitmap) {
+    uint64_t w0;
     if (nfields < 0) nfields = 0;
     if ((uint64_t)nfields > (UINT64_MAX / 8ULL)) {
         fputs("panic: 对象字段数过大\n", stderr);
         exit(1);
     }
-    size_t bytes = (size_t)nfields * 8;
-    if (bytes < 16) bytes = 16;
-    /* 超过 32 槽时位图装不下：退回 FULL 保守扫 */
-    uint8_t kind = (nfields > 32) ? GC_KIND_FULL : GC_KIND_SLOTS;
-    uint64_t meta = (kind == GC_KIND_FULL) ? 0 : ((uint64_t)bitmap & 0xFFFFFFFFu);
-    return gc_alloc_ex(bytes, kind, meta);
+    if (nfields > 64) {
+        fputs("panic: hao_object_new 仅支持 ≤64 槽；更大请用 hao_object_new_map\n",
+              stderr);
+        exit(1);
+    }
+    w0 = (uint64_t)bitmap;
+    if (nfields <= 32) {
+        size_t bytes = (size_t)nfields * 8u;
+        if (bytes < 16) bytes = 16;
+        return gc_alloc_ex(bytes, GC_KIND_SLOTS, w0 & 0xffffffffu);
+    }
+    {
+        size_t slot_bytes = (size_t)nfields * 8u;
+        size_t trail = gc_bitmap_trailer_bytes((size_t)nfields);
+        void* p = gc_alloc_ex(slot_bytes + trail, GC_KIND_BITMAP, (uint64_t)nfields);
+        gc_write_bitmap_trailer(p, (size_t)nfields, &w0, 1);
+        return p;
+    }
+}
+
+void* hao_object_new_map(int64_t nfields, const uint64_t* words, int64_t nwords) {
+    size_t slot_bytes, trail;
+    void* p;
+    if (nfields < 0) nfields = 0;
+    if (nfields == 0) {
+        return gc_alloc_ex(16, GC_KIND_SLOTS, 0);
+    }
+    if ((uint64_t)nfields > 4096u) {
+        fputs("panic: 对象字段数超过 4096\n", stderr);
+        exit(1);
+    }
+    if (nfields <= 32) {
+        uint64_t bm = (words && nwords > 0) ? words[0] : 0;
+        size_t bytes = (size_t)nfields * 8u;
+        if (bytes < 16) bytes = 16;
+        return gc_alloc_ex(bytes, GC_KIND_SLOTS, bm & 0xffffffffu);
+    }
+    slot_bytes = (size_t)nfields * 8u;
+    trail = gc_bitmap_trailer_bytes((size_t)nfields);
+    p = gc_alloc_ex(slot_bytes + trail, GC_KIND_BITMAP, (uint64_t)nfields);
+    gc_write_bitmap_trailer(p, (size_t)nfields, words, (size_t)(nwords > 0 ? nwords : 0));
+    return p;
 }
 
 int8_t hao_type_is(void* obj, void** allowed) {
@@ -87,7 +153,7 @@ int hao_fmt_ptr_angle(char* out, int cap, const void* p) {
         tmp[n++] = hex[u & 0xf];
         u >>= 4;
     } while (u && n < 16);
-    while (n < 16) tmp[n++] = '0'; /* 固定 16 位宽，对齐旧 snprintf %016llx */
+    while (n < 16) tmp[n++] = '0';
     if (len + n + 2 >= cap) n = cap - len - 2;
     for (i = 0; i < n; ++i) out[len++] = tmp[n - 1 - i];
     out[len++] = '>';

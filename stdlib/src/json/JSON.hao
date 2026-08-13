@@ -8,6 +8,40 @@ import lang;
 import os;
 import reflect;
 
+// 可增长字符串分片缓冲：stringifyBean / 手写 toJson 热路径禁平方 r=r+ 整结果
+// finish 用二叉树拼接 O(n log n)，避免逐字节 push 的 GC 根税
+public class JsonBuf {
+    var parts: [String];
+
+    constructor() {
+        this.parts = new [String]{};
+    }
+
+    func append(s: String) {
+        this.parts += s;
+    }
+
+    func finish(): String {
+        var cur = this.parts;
+        while (cur.length > 1) {
+            var nxt: [String] = new [String]{};
+            var i = 0;
+            while (i < cur.length) {
+                if (i + 1 < cur.length) {
+                    nxt += (cur[i] + cur[i + 1]);
+                    i += 2;
+                } else {
+                    nxt += cur[i];
+                    i += 1;
+                }
+            }
+            cur = nxt;
+        }
+        if (cur.length == 0) { return ""; }
+        return cur[0];
+    }
+}
+
 class JSON {
     // Feature 位标志（toJSONString 可选）
     static val PrettyFormat: Int = 1;
@@ -532,9 +566,11 @@ class JSON {
         return r + "]";
     }
 
+    // 反射 Bean：倍增字节缓冲 append（禁字段循环平方 r=r+）
     static func stringifyBean(value: Object, t: reflect.Class, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
-        var r = "{";
+        val buf = new JsonBuf();
+        buf.append("{");
         var first = true;
         var i = 0;
         val fc = t.getFieldCount();
@@ -558,15 +594,23 @@ class JSON {
                 if (child == null) { piece = "null"; }
                 else { piece = JSON.stringifyAt(child!!, features, indent + 1, stack, depth); }
             }
-            if (!first) { r = r + ","; }
+            if (!first) { buf.append(","); }
             first = false;
-            if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
-            r = r + JSON.quote(name) + ":";
-            if (pretty) { r = r + " "; }
-            r = r + piece;
+            if (pretty) {
+                buf.append("\n");
+                buf.append(JSON.pad(indent + 1));
+            }
+            buf.append(JSON.quote(name));
+            buf.append(":");
+            if (pretty) { buf.append(" "); }
+            buf.append(piece);
         }
-        if (pretty && !first) { r = r + "\n" + JSON.pad(indent); }
-        return r + "}";
+        if (pretty && !first) {
+            buf.append("\n");
+            buf.append(JSON.pad(indent));
+        }
+        buf.append("}");
+        return buf.finish();
     }
 
     static func stringifyObj(obj: JSONObject, features: Int, indent: Int, stack: [Long], depth: Int): String {

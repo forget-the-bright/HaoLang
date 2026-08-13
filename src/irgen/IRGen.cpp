@@ -6,6 +6,8 @@
 #include "util/StringUtil.h"
 
 #include <algorithm>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <functional>
 #include <set>
@@ -25,6 +27,28 @@ void IRGen::error(antlr4::ParserRuleContext* ctx, const std::string& msg) {
 void IRGen::error(antlr4::Token* tok, const std::string& msg) {
     diags_.error(currentUnitPath_, tok->getLine(),
                  tok->getCharPositionInLine(), msg);
+}
+
+bool IRGen::irgenTraceEnabled() {
+    const char* tr = std::getenv("HAO_IRGEN_TRACE");
+    return tr && tr[0] && tr[0] != '0';
+}
+
+void IRGen::traceIrgen(const char* fmt, ...) {
+    if (!irgenTraceEnabled()) return;
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    std::fflush(stderr);
+}
+
+void IRGen::traceIrgenAlways(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    std::fflush(stderr);
 }
 
 SourceLoc IRGen::locFrom(antlr4::ParserRuleContext* ctx) const {
@@ -129,194 +153,54 @@ void IRGen::emitRuntimeFrameArgs(bool hasThis,
 }
 
 // ============================================================
-//  类型解析
+//  类型解析（G2：实现在 sema/TypeResolve.cpp；IRGen 只组装环境）
 // ============================================================
+
+TypeResolveEnv IRGen::typeResolveEnv(
+    std::vector<TypeResolveImport>* importsOut) {
+    TypeResolveEnv env;
+    env.currentPkgPrefix = &currentPkgPrefix_;
+    importsOut->clear();
+    importsOut->reserve(currentImports_.size());
+    for (const auto& im : currentImports_) {
+        TypeResolveImport x;
+        x.importPath = im.importPath;
+        x.alias = im.alias;
+        x.wildcard = im.wildcard;
+        importsOut->push_back(std::move(x));
+    }
+    env.currentImports = importsOut;
+    env.pkgExports = &pkgExports_;
+    env.delegates = &delegates_;
+    env.currentTypeParams = &currentTypeParams_;
+    env.currentSubst = &currentSubst_;
+    env.hasClass = [this](const std::string& n) { return classes_.count(n) > 0; };
+    env.hasInterface = [this](const std::string& n) {
+        return interfaces_.count(n) > 0;
+    };
+    env.instantiateClass = [this](const std::string& tmpl,
+                                  const std::vector<TypePtr>& args,
+                                  antlr4::ParserRuleContext* site) {
+        instantiateClass(tmpl, args, site);
+    };
+    env.ensureInterfaceInstances = [this](const TypePtr& ty) {
+        ensureInterfaceInstances(ty);
+    };
+    env.error = [this](antlr4::ParserRuleContext* ctx, const std::string& msg) {
+        error(ctx, msg);
+    };
+    return env;
+}
 
 std::string IRGen::resolveTypeQualifiedName(HaoLangParser::QualifiedNameContext* qn,
                                             bool* isIface) {
-    auto ids = qn->IDENT();
-    if (ids.empty()) return "";
-
-    auto lookupInternal = [&](const std::string& internal) -> std::string {
-        if (classes_.count(internal)) { if (isIface) *isIface = false; return internal; }
-        if (interfaces_.count(internal)) { if (isIface) *isIface = true; return internal; }
-        return "";
-    };
-
-    if (ids.size() == 1) {
-        std::string shortName = ids[0]->getText();
-        // 当前包
-        std::string r = lookupInternal(currentPkgPrefix_ + shortName);
-        if (!r.empty()) return r;
-        // 通配导入包
-        for (const auto& im : currentImports_) {
-            if (!im.wildcard) continue;
-            auto it = pkgExports_.find(im.importPath);
-            if (it == pkgExports_.end()) continue;
-            auto eit = it->second.find(shortName);
-            if (eit != it->second.end()) return lookupInternal(eit->second);
-        }
-        return "";
-    }
-
-    // 限定名 pkg.Type：第一段是 import 别名
-    std::string alias = ids[0]->getText();
-    for (const auto& im : currentImports_) {
-        if (im.alias != alias) continue;
-        // 支持 a.b.C：取最后一段为类型名，前面拼回 importPath
-        std::string member = ids.back()->getText();
-        auto it = pkgExports_.find(im.importPath);
-        if (it == pkgExports_.end()) break;
-        auto eit = it->second.find(member);
-        if (eit != it->second.end()) return lookupInternal(eit->second);
-        break;
-    }
-    return "";
+    std::vector<TypeResolveImport> imports;
+    return hao::resolveTypeQualifiedName(typeResolveEnv(&imports), qn, isIface);
 }
 
 TypePtr IRGen::resolveType(HaoLangParser::TypeContext* t) {
-    if (!t) return Type::makeUnknown();
-
-    TypePtr base = Type::makeUnknown();
-    auto* bt = t->baseType();
-
-    if (auto* named = dynamic_cast<HaoLangParser::NamedTypeContext*>(bt)) {
-        auto* qn = named->qualifiedName();
-        std::string tn = qn->getText();
-
-        // ---- 预置 Action/Func 泛型函数类型别名（v0.20.0，C# 风格）----
-        // 全局可用（对标 Object 根父类），无需 import。
-        //   Action          = ()->Unit
-        //   Action<T1,...>  = (T1,...)->Unit
-        //   Func<...T, R>   = (...T)->R   （最后一个类型实参是返回类型）
-        if (qn->IDENT().size() == 1 && (tn == "Action" || tn == "Func")) {
-            auto* ta = named->typeArgs();
-            std::vector<TypePtr> args;
-            if (ta) {
-                for (auto* at : ta->typeArg()) {
-                    if (at->QUESTION()) {
-                        if (at->EXTENDS() && at->type())
-                            args.push_back(Type::makeWildcardExtends(
-                                resolveType(at->type())));
-                        else if (at->SUPER() && at->type())
-                            args.push_back(Type::makeWildcardSuper(
-                                resolveType(at->type())));
-                        else
-                            args.push_back(Type::makeWildcard());
-                    } else if (at->type())
-                        args.push_back(resolveType(at->type()));
-                    else
-                        args.push_back(Type::makeUnknown());
-                }
-            }            if (tn == "Action") {
-                base = Type::makeFunc(std::move(args), Type::makeUnit());
-            } else { // Func
-                if (args.empty()) {
-                    error(t, "Func 至少需要一个类型实参（最后一个为返回类型），如 Func<Int,String>");
-                    base = Type::makeUnknown();
-                } else {
-                    TypePtr ret = args.back();
-                    args.pop_back();
-                    base = Type::makeFunc(std::move(args), ret);
-                }
-            }
-            goto resolvedNamed;
-        }
-
-        // ---- delegate 命名函数类型别名（v0.19.0）----
-        if (qn->IDENT().size() == 1) {
-            auto dit = delegates_.find(currentPkgPrefix_ + tn);
-            if (dit == delegates_.end()) dit = delegates_.find(tn);
-            if (dit != delegates_.end()) {
-                base = dit->second;
-                goto resolvedNamed;
-            }
-        }
-
-        // ---- 类型参数优先 ----
-        if (currentTypeParams_.count(tn)) {
-            base = Type::makeTypeParam(tn);
-            base = substType(base, currentSubst_);
-        } else if (qn->IDENT().size() == 1) {
-            // 内建类型（主名 / i32 / int 等别名）
-            if (TypePtr bt = typeFromName(tn)) {
-                base = bt;
-            } else {
-                bool iface = false;
-                std::string internal = resolveTypeQualifiedName(qn, &iface);
-                if (!internal.empty()) {
-                    base = iface ? (TypePtr)Type::makeInterface(internal)
-                                 : (TypePtr)Type::makeClass(internal);
-                } else {
-                    base = Type::makeClass(tn);
-                }
-            }
-        } else {
-            // 多段限定名 pkg.Type
-            bool iface = false;
-            std::string internal = resolveTypeQualifiedName(qn, &iface);
-            if (!internal.empty()) {
-                base = iface ? (TypePtr)Type::makeInterface(internal)
-                             : (TypePtr)Type::makeClass(internal);
-            } else {
-                base = Type::makeClass(tn);
-            }
-        }
-
-        // ---- 泛型实参 Box<Int> / Map<?,?> ----
-        if (auto* ta = named->typeArgs()) {
-            std::vector<TypePtr> args;
-            for (auto* at : ta->typeArg()) {
-                if (at->QUESTION()) {
-                    if (at->EXTENDS() && at->type())
-                        args.push_back(Type::makeWildcardExtends(resolveType(at->type())));
-                    else if (at->SUPER() && at->type())
-                        args.push_back(Type::makeWildcardSuper(resolveType(at->type())));
-                    else
-                        args.push_back(Type::makeWildcard());
-                } else if (at->type()) {
-                    args.push_back(resolveType(at->type()));
-                } else {
-                    args.push_back(Type::makeUnknown());
-                }
-            }
-            bool hasWild = false;
-            for (const auto& a : args)
-                if (a->kind == TypeKind::Wildcard) { hasWild = true; break; }
-            if (base->kind == TypeKind::Class) {
-                if (!hasWild && !base->hasTypeParam())
-                    instantiateClass(base->className, args, t);
-                base = Type::makeClass(base->className, args);
-            } else if (base->kind == TypeKind::Interface) {
-                base = Type::makeInterface(base->className, args);
-                if (!hasWild && !base->hasTypeParam())
-                    ensureInterfaceInstances(base);
-            }
-        } else if (base->kind == TypeKind::Interface) {
-            // 裸接口名 Map：登记待用；typeids 走类型族
-        }
-    } else if (auto* arr = dynamic_cast<HaoLangParser::ArrayTypeContext*>(bt)) {
-        base = Type::makeArray(resolveType(arr->type()));
-    } else if (auto* ft = dynamic_cast<HaoLangParser::FuncTypeContext*>(bt)) {
-        // 函数类型：(T1, T2) -> R
-        std::vector<TypePtr> ps;
-        if (auto* tl = ft->typeList())
-            for (auto* tc : tl->type())
-                ps.push_back(resolveType(tc));
-        base = Type::makeFunc(std::move(ps), resolveType(ft->type()));
-    }
-
-    resolvedNamed:
-    // 后缀 ? 表示可空
-    if (t->QUESTION()) {
-        // 文档约定：不支持 Func?/Action?（调用路径无空检查，易空指针）
-        if (base->kind == TypeKind::Func) {
-            error(t, "不支持可空函数类型（Func?/Action?），请用非空 Func 或可空包装对象");
-            return Type::makeUnknown();
-        }
-        base = base->asNullable();
-    }
-    return base;
+    std::vector<TypeResolveImport> imports;
+    return hao::resolveType(typeResolveEnv(&imports), t);
 }
 
 // ============================================================
@@ -1902,7 +1786,7 @@ void IRGen::collectFunctionSignatures(const SourceUnit& u) {
             continue;
         }
         if (provided.empty())
-            syms_.declareGlobal(sym);   // 首个代表符号进符号表
+            hao::symDeclareGlobal(syms_, sym);   // 首个代表符号进符号表
         provided.push_back(sym);
 
         // public 函数登记到包导出表（extern 也可以被跨包调用）
@@ -2047,7 +1931,7 @@ void IRGen::collectGenericFunctions(const SourceUnit& u) {
         sym->line = fn->getStart()->getLine();
         sym->returnType = Type::makeUnknown();
         sym->isPrivate = declIsPrivate(fn->modifier());
-        syms_.declareGlobal(sym);
+        hao::symDeclareGlobal(syms_, sym);
 
         if (!sym->isPrivate)
             pkgExports_[u.importPath][shortName] = sym->name;
@@ -2147,7 +2031,7 @@ SymbolPtr IRGen::instantiateFunction(const std::string& tplName,
             sym->paramTypes.push_back(resolveType(p->type()));
         }
     sym->type = Type::makeFunc(sym->paramTypes, sym->returnType);
-    syms_.declareGlobal(sym);
+    hao::symDeclareGlobal(syms_, sym);
     PendingFnInstance pi;
     pi.decl = fn;
     pi.subst = subst;
@@ -2419,7 +2303,7 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
         ts->type = Type::makeClass(thisClassName);
         ts->isMutable = false;
         ts->irAddr = thisAddr_;
-        syms_.declare(ts);
+        hao::symDeclare(syms_, ts);
         dbgArgBase = 1;
         emitDbgDeclareIf(thisAddr_, "this", dbgLine, 1);
         /* D15：this 初值薄 dbg.value */
@@ -2481,7 +2365,7 @@ void IRGen::genFunctionBody(HaoLangParser::BlockContext* body,
             if (isGcPointerType(ptype))
                 emitGcRootPush(addr);
         }
-        syms_.declare(ps);
+        hao::symDeclare(syms_, ps);
         unsigned argNo = dbgArgBase + static_cast<unsigned>(i) + 1;
         emitDbgDeclareIf(ps->irAddr, pname, dbgLine, argNo);
         /* D15：形参初值薄 dbg.value（array-by-ref 仅 declare） */

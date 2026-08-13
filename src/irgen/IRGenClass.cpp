@@ -62,7 +62,7 @@ void IRGen::registerInterfaceNames(const SourceUnit& u) {
         sym->name = iname;
         sym->type = Type::makeInterface(iname);
         sym->line = itf->getStart()->getLine();
-        syms_.declareGlobal(sym);
+        hao::symDeclareGlobal(syms_, sym);
 
         // 登记到包导出表（private 不导出）
         if (!declIsPrivate(itf->modifier()))
@@ -1255,6 +1255,7 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
     }
 
     em_.pushFunctionState();
+    ++emitFnDepth_;
     currentClass_ = ci;
     currentReturn_ = Type::makeClass(ci->name);
     sawReturn_ = false;
@@ -1289,7 +1290,7 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
     if (ci->hasStaticInit)
         emitCallVoid("@" + ci->name + ".ensureInit", "");
 
-    std::string objRaw = emitObjectNew(ci->slotCount(), objectPtrBitmap(ci.get()));
+    std::string objRaw = emitObjectNewForClass(ci.get());
     std::string objSlot = emitSpillGcRoot("new.obj", objRaw);
     std::string obj = emitLoad("ptr", objSlot);
     std::string vtp = emitGep("ptr", obj, "i64", "0");
@@ -1367,6 +1368,7 @@ std::string IRGen::emitNewFactory(const ClassInfoPtr& ci) {
 
     std::string def = em_.popFunctionState();
     em_.addFunctionDef(def);
+    --emitFnDepth_;
 
     currentPkgPrefix_ = savedPrefix;
     currentImports_ = savedImports;
@@ -2276,7 +2278,7 @@ void IRGen::registerClassNames(const SourceUnit& u) {
         tsym->type = Type::makeClass(cname);
         tsym->classInfo = ci;
         tsym->line = ci->line;
-        syms_.declareGlobal(tsym);
+        hao::symDeclareGlobal(syms_, tsym);
 
         if (!declIsPrivate(cls->modifier()))
             pkgExports_[u.importPath][shortName] = cname;
@@ -2309,7 +2311,7 @@ void IRGen::registerClassNames(const SourceUnit& u) {
         tsym->type = Type::makeClass(cname);
         tsym->classInfo = ci;
         tsym->line = ci->line;
-        syms_.declareGlobal(tsym);
+        hao::symDeclareGlobal(syms_, tsym);
 
         if (!declIsPrivate(ed->modifier()))
             pkgExports_[u.importPath][shortName] = cname;
@@ -2342,7 +2344,7 @@ void IRGen::registerClassNames(const SourceUnit& u) {
         tsym->type = Type::makeClass(cname);
         tsym->classInfo = ci;
         tsym->line = ci->line;
-        syms_.declareGlobal(tsym);
+        hao::symDeclareGlobal(syms_, tsym);
 
         pkgExports_[u.importPath][shortName] = cname;
     }
@@ -3442,7 +3444,7 @@ void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
         TypePtr enumTy = Type::makeClass(ci->name);
         for (auto* ec : ed->enumConstant()) {
             std::string cname = ec->IDENT()->getText();
-            std::string obj = emitObjectNew(ci->slotCount(), objectPtrBitmap(ci.get()));
+            std::string obj = emitObjectNewForClass(ci.get());
             std::string vtp = emitGep("ptr", obj, "i64", "0");
             emitStore("ptr", ci->vtableIRName, vtp);
             std::string nameC = em_.internString(cname);

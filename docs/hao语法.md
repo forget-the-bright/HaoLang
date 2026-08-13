@@ -514,9 +514,9 @@ ch.trySendInt(1);
 | `haoroutine { }` | **无参**体；火即忘；带参写法编译拒绝 |
 | channel 载荷 | 当前以 **Long** 为主；`sendStr`/`recvStr(): String?` |
 | `trySend`/`tryRecv` | 非阻塞 |
-| `select` | `case` 接收/发送 + 可选 `default`；实现为 try 轮询，无 default 时 sleep(1ms)+safepoint |
-| 公平 | case 轮转 |
-| 未实现 | 泛型 channel 载荷；真多路阻塞 wait（后续） |
+| `select` | `case` 接收/发送 + 可选 `default`；**真等待**：先 `try_*`；有 `default` 全失败立即 default；无 `default` 登记各 chan 后 park（`hao_chan_select` / os_block），对端 send/recv/close 唤醒 |
+| 公平 | TLS 轮转起始下标 |
+| 未实现 | 泛型 channel 载荷；完整 Go memory model |
 
 对标：Go `go` / `chan` / `select` —— **语义子集 + 不同关键字与载荷模型**。勿假设与 Go 内存模型/调度器一一对应。
 
@@ -599,7 +599,7 @@ extern func ntohs(x: Int): Int = "ntohs" @link("ws2_32");
 2. **表达式 `when` 必须 `else`**。  
 3. **可空不参与算术/条件/下标** —— 用 negcheck 思维写代码。  
 4. **`haoroutine` 无参**；channel 非泛型载荷。  
-5. **`select` 非真阻塞多路复用**（轮询）。  
+5. **`select` 真等待已交付**（无 default park；有 default 非阻塞）；泛型 channel 载荷仍未做。  
 6. **无** `i128`/`u128`；对象字段槽仍偏宽（非紧凑打包）。  
 7. **Map 满表**可抛异常；注意 `growthEnabled`。  
 8. **跨包 `internal` 必拒**。  

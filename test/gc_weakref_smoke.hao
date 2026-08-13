@@ -1,0 +1,22 @@
+// 弱引用：仅弱可达时 get→null；强根仍在时 get 非 null
+package main;
+
+import gc;
+
+class Box {
+    var tag: String = "";
+    constructor(t: String) { this.tag = t; }
+}
+
+func main() {
+    gc.GC.boot();
+    var keep = new Box("strong");
+    var wrKeep = new gc.WeakRef(keep);
+    var onlyWeak: Box? = new Box("weak-only");
+    var wrDrop = new gc.WeakRef(onlyWeak);
+    onlyWeak = null;
+    gc.GC.collect();
+    gc.GC.collect();
+    fmt.println(wrKeep.get() != null);
+    fmt.println(wrDrop.get() == null);
+}

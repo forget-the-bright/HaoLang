@@ -3227,7 +3227,7 @@ Value IRGen::genPrimary(HaoLangParser::PrimaryContext* e) {
         }
 
         // 分配对象内存（有虚表时槽位 0 留给虚表指针；位图不含 vtable）
-        std::string objRaw = emitObjectNew(ci->slotCount(), objectPtrBitmap(ci.get()));
+        std::string objRaw = emitObjectNewForClass(ci.get());
         // 字段默认 / ctor 求值可能 safepoint：obj 须进 shadow
         std::string objSlot = emitSpillGcRoot("new.obj", objRaw);
         std::string obj = emitLoad("ptr", objSlot);

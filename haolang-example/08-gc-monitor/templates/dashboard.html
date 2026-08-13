@@ -101,8 +101,20 @@
         <div class="value" id="privateBytes">{{privateBytes}}</div>
       </div>
       <div class="metric">
-        <div class="label">当前堆 heapBytes<br>alloc/sweep 维护的用户区合计（看堆压）</div>
+        <div class="label">当前堆 heapBytes<br>存活对象用户区（看堆压）</div>
         <div class="value" id="heapBytes">{{heapBytes}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">freelist 缓存<br>板内空闲槽（仍 commit）</div>
+        <div class="value" id="freelistBytes">{{freelistBytes}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">spanCommit<br>VirtualAlloc 未 Free 的板合计</div>
+        <div class="value" id="spanCommitBytes">{{spanCommitBytes}}</div>
+      </div>
+      <div class="metric">
+        <div class="label">scavenge 归还<br>累计归还 OS 字节</div>
+        <div class="value" id="scavengeBytes">{{scavengeBytes}}</div>
       </div>
       <div class="metric">
         <div class="label">上次 major 存活 liveBytes<br>成功 major 后才更新（可能为 0）</div>
@@ -271,7 +283,7 @@
     return m + "分" + (s % 60) + "秒";
   }
   function apply(data) {
-    const bytesIds = ["workingSetBytes","privateBytes","heapBytes","liveBytes","nurseryBytes"];
+    const bytesIds = ["workingSetBytes","privateBytes","heapBytes","liveBytes","nurseryBytes","freelistBytes","spanCommitBytes","scavengeBytes"];
     bytesIds.forEach(function (id) {
       document.getElementById(id).textContent = fmtBytes(data[id]);
     });
@@ -302,7 +314,18 @@
     try {
       const r = await fetch("/api/gc", { cache: "no-store" });
       if (!r.ok) throw new Error("HTTP " + r.status);
-      apply(await r.json());
+      const data = await r.json();
+      // 计时权威：响应头（body 内 jsonMs/serverTotalMs 为单次 stringify 占位 0）
+      const srv = r.headers.get("X-Hao-Server-Ms");
+      const jm = r.headers.get("X-Hao-Json-Ms");
+      const gcMs = r.headers.get("X-Hao-GcStats-Ms");
+      const procMs = r.headers.get("X-Hao-Proc-Ms");
+      if (srv != null || jm != null) {
+        data.summary = "srv=" + (srv || "?") + " json=" + (jm || "?")
+          + " gc=" + (gcMs || "?") + " proc=" + (procMs || "?")
+          + " | " + (data.summary || "");
+      }
+      apply(data);
     } catch (e) {
       document.getElementById("summary").textContent = "刷新失败: " + e;
     }

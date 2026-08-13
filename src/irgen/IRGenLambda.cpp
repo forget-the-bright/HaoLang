@@ -398,6 +398,7 @@ Value IRGen::genLambda(HaoLangParser::LambdaContext* lam) {
 // ------------------------------------------------------------
 void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     em_.pushFunctionState();
+    ++emitFnDepth_;
 
     auto savedClass = currentClass_;
     std::string savedThisAddr = thisAddr_;
@@ -510,7 +511,7 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
             cs->isMutable = true;
             cs->irAddr = addr;
             cs->boxed = cap.boxed;
-            syms_.declare(cs);
+            hao::symDeclare(syms_, cs);
             /* D16：捕获 unpack 薄 declare/value */
             {
                 int pl = mi.ctx->getStart()
@@ -563,7 +564,7 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
                 if (isGcPointerType(mi.paramTypes[i]))
                     emitGcRootPush(addr);
             }
-            syms_.declare(ps);
+            hao::symDeclare(syms_, ps);
             /* D13：lambda 参数薄 declare/value（对齐顶层函数参数） */
             {
                 int pl = mi.ctx->getStart()
@@ -637,6 +638,7 @@ void IRGen::genLambdaImpl(const LambdaInfo& mi) {
     em_.emitRaw("}");
     std::string def = em_.popFunctionState();
     em_.addFunctionDef(def);
+    --emitFnDepth_;
 
     currentClass_ = savedClass;
     thisAddr_ = savedThisAddr;

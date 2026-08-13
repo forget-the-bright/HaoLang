@@ -496,9 +496,17 @@ public class HttpApp {
             }
             val out = ch.pipeline.fireChannelRead(req);
             if (out == null || !(out is HttpResponse)) { break; }
-            /* /api/* 压测常 keep-alive 占满 worker；默认短连接，避免 4 worker 被挂死连接钉死 */
+            /* /api/* 默认 keep-alive（v0.75）；HAO_HTTP_API_SHORT=1 才强制短连
+             * （旧动机：压测 keep-alive 占满 4 worker；现用分段计时+HttpClient 验收） */
+            /* HAO_HTTP_API_SHORT=1|true → /api 短连；默认 keep-alive */
             var useKeep = keep;
-            if (String.valueOf(req.path).startsWith("/api/")) { useKeep = false; }
+            val shortEnv = os.getenv("HAO_HTTP_API_SHORT");
+            if (shortEnv != null && String.valueOf(req.path).startsWith("/api/")) {
+                val n = Integer.parse(shortEnv!!);
+                if (n != null && n!! == 1) {
+                    useKeep = false;
+                }
+            }
             HttpServer.writeResponse(ch.sock, out as HttpResponse, useKeep);
             handled = true;
             if (!useKeep) { break; }

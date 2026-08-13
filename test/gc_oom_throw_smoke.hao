@@ -1,0 +1,25 @@
+// 语言 OOM：boot + force calloc 失败 → catch OutOfMemoryException 且 needBytes>0
+package main;
+
+import gc;
+import exception;
+
+extern func hao_gc_test_force_oom_once(): Unit = "hao_gc_test_force_oom_once";
+
+func main() {
+    gc.GC.boot();
+    var caught = false;
+    var needOk = false;
+    try {
+        hao_gc_test_force_oom_once();
+        /* LOS：>64KiB 不走 freelist，必经 calloc 失败路径 */
+        var big = new [Byte](70000);
+        fmt.println(big.length); /* 不应到达 */
+    } catch (e: exception.OutOfMemoryException) {
+        caught = true;
+        needOk = e.needBytes > 0;
+    }
+    fmt.println(caught && needOk);
+    val s = gc.GC.stats();
+    fmt.println(s.allocRateBps >= 0 && s.stwWaitMsTotal >= 0);
+}

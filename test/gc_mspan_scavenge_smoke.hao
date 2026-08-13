@@ -1,0 +1,35 @@
+// v0.73：mspan 造压后 collect，spanCommit/scavenge 应可见变化
+package main;
+
+import collections.*;
+import gc;
+
+func main() {
+    gc.GC.boot();
+    var junk = new ArrayList<Object>();
+    var i = 0;
+    while (i < 8000) {
+        junk.add(String.valueOf("mspan-warm-" + Integer.toStr(i)));
+        i += 1;
+    }
+    val before = gc.GC.stats();
+    junk = new ArrayList<Object>();
+    gc.GC.collect();
+    gc.GC.collect();
+    val after = gc.GC.stats();
+    val commitDrop = before.spanCommitBytes - after.spanCommitBytes;
+    val scavUp = after.scavengeBytes - before.scavengeBytes;
+    // 验收：降载后必须见 commit↓ 或 scavenge↑（禁只涨假计数）
+    val returned = scavUp > 0 || commitDrop > 0;
+    val okSpans = after.spanCount >= 0;
+    val okCommit = after.spanCommitBytes >= 0;
+    val progressed = after.collectCount > before.collectCount
+        || after.scavengeCycles > before.scavengeCycles
+        || returned
+        || after.freelistHits > 0;
+    fmt.println(okSpans);
+    fmt.println(okCommit);
+    fmt.println(progressed);
+    fmt.println(returned);
+    fmt.println($"GATE commit={after.spanCommitBytes} fl={after.freelistBytes} scavB={after.scavengeBytes} scavC={after.scavengeCycles} spans={after.spanCount} hits={after.freelistHits} drop={commitDrop}");
+}

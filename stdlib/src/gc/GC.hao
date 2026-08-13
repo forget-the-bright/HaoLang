@@ -1,17 +1,18 @@
 package gc;
 
+import exception;
+
 // ============================================================
 //  gc.GC —— 垃圾回收详情与手动回收
 // ------------------------------------------------------------
 //  职责：查询 GC 运行状态，并显式触发一次 major 收集。
-//  能力（v0.55.10）：可达性主路径；详文 docs/IR与GC契约.md（混合屏障、shadow 精确根、
-//    诚实双轨、并发 mark + mark worker、remset 仅 minor 等）。
-//  看堆压用 heapBytes；liveBytes = 上次成功 major 后存活（可能为 0）。
-//  何时手动 collect：测试、压测、或刚丢掉大图后想立刻回收；平时靠阈值自动触发。
-//  线程安全：各方法内部由 runtime 加锁；勿在应用层锁内随意 collect。
+//  能力（v0.70）：弱/软引用；语言 OOM 载荷；速率面板；miss 源码粘滞；全线程 VERIFY。
+//  详文 docs/IR与GC契约.md。
 // ============================================================
 
 extern func gc_collect(): Unit = "gc_collect";
+extern func hao_gc_ensure_oom_exc(): Unit = "hao_gc_ensure_oom_exc";
+extern func hao_gc_test_force_oom_once(): Unit = "hao_gc_test_force_oom_once";
 extern func hao_gc_live_bytes(): Long = "hao_gc_live_bytes";
 extern func hao_gc_threshold(): Long = "hao_gc_threshold";
 extern func hao_gc_allocated_since(): Long = "hao_gc_allocated_since";
@@ -23,11 +24,19 @@ extern func hao_gc_nursery_bytes(): Long = "hao_gc_nursery_bytes";
 extern func hao_gc_registered_threads(): Long = "hao_gc_registered_threads";
 extern func hao_gc_finalizer_runs(): Long = "hao_gc_finalizer_runs";
 extern func hao_gc_finalizer_sets(): Long = "hao_gc_finalizer_sets";
+extern func hao_gc_finalizer_exceptions(): Long = "hao_gc_finalizer_exceptions";
 extern func hao_gc_stw_incomplete(): Long = "hao_gc_stw_incomplete";
 extern func hao_gc_stw_grace_rescues(): Long = "hao_gc_stw_grace_rescues";
 extern func hao_gc_stw_mark_all_fallbacks(): Long = "hao_gc_stw_mark_all_fallbacks";
 extern func hao_gc_concurrent_mark_cycles(): Long = "hao_gc_concurrent_mark_cycles";
+extern func hao_gc_concurrent_sweep_cycles(): Long = "hao_gc_concurrent_sweep_cycles";
+extern func hao_gc_span_sweep_chunks(): Long = "hao_gc_span_sweep_chunks";
+extern func hao_gc_freelist_hits(): Long = "hao_gc_freelist_hits";
 extern func hao_gc_heap_bytes(): Long = "hao_gc_heap_bytes";
+extern func hao_gc_set_oom_exception(exc: Object): Unit = "hao_gc_set_oom_exception";
+extern func hao_gc_last_miss_file(): String = "hao_gc_last_miss_file";
+extern func hao_gc_last_miss_line(): Long = "hao_gc_last_miss_line";
+extern func hao_gc_last_miss_col(): Long = "hao_gc_last_miss_col";
 extern func hao_gc_mark_assist_steps(): Long = "hao_gc_mark_assist_steps";
 extern func hao_gc_mark_abort_cycles(): Long = "hao_gc_mark_abort_cycles";
 extern func hao_gc_mark_worker_steps(): Long = "hao_gc_mark_worker_steps";
@@ -75,16 +84,55 @@ public class GcStats {
     var finalizerSkipAbort: Long = 0;  /* abort 跳过 sweep/drain 累计 */
     var finalizerLiveAtSweep: Long = 0; /* 上次成功 sweep 仍活且带 finalizer */
     var lastFinalizerDiag: Long = 0;   /* 0=无 1=live 主导 2=abort 主导 */
+    var concurrentSweepCycles: Long = 0; /* 成功 concurrent sweep 轮次 */
+    var spanSweepChunks: Long = 0; /* mspan 槽回收入队次数 */
+    var freelistHits: Long = 0; /* mspan 空闲槽复用命中 */
+    /* v0.69+：速率面板 + miss 源码粘滞（速率=进程起算均值） */
+    var allocRateBps: Long = 0; /* 分配字节/秒（进程起算均值） */
+    var freeRateBps: Long = 0; /* 回收字节/秒（进程起算均值） */
+    var stwWaitMsTotal: Long = 0;
+    var promoteCount: Long = 0;
+    var promoteRatePerSec: Long = 0; /* 晋升/秒（进程起算均值） */
+    var lastMissLine: Long = 0;
+    var lastMissCol: Long = 0;
+    /* v0.73 mspan */
+    var spanCommitBytes: Long = 0; /* VirtualAlloc 未 Free */
+    var freelistBytes: Long = 0; /* 空闲槽用户区 */
+    var scavengeBytes: Long = 0; /* 累计归还 OS 字节 */
+    var scavengeCycles: Long = 0;
+    var spanCount: Long = 0;
+    /* v0.74 GC-LAT-2：分段持锁 + 发布式 memstats */
+    var lastCollectHoldMs: Long = 0;
+    var lastUnlinkMs: Long = 0;
+    var lastDrainMs: Long = 0;
+    var lastScavengeMs: Long = 0;
+    var lastStatsLockWaitMs: Long = 0;
+    var lastPublishMs: Long = 0;
+    var statsPublishCount: Long = 0;
+    /* v0.75：stats 路径 safepoint/park 墙钟（诚实；非锁等） */
+    var lastStatsSafepointMs: Long = 0;
 }
 
 extern func hao_gc_stats(dst: GcStats): Unit = "hao_gc_stats";
 
 class GC {
+    static var booted: Bool = false;
+
+    // 安装语言 OOM 单例（进程内一次）。collect/stats/WeakRef/SoftRef 会自动调用。
+    // 真 OOM 路径须先 boot，否则无 catcher 单例时仍 fatal。
+    static func boot() {
+        if (GC.booted) return;
+        GC.booted = true;
+        hao_gc_set_oom_exception(new exception.OutOfMemoryException("OutOfMemory"));
+        hao_gc_ensure_oom_exc();
+    }
+
     // 手动触发一次 major 收集（软 STW 根/终止 + 并发 mark + sweep；失败可 abort）。
     // 复杂度：与堆规模相关 O(堆块数 + 根扫描)
     // 副作用：collectCount +1；可能运行 finalizer（锁外）；阈值按存活字节重算
     // 注意：勿在应用层锁内随意调用（防与业务锁交叉死锁）
     static func collect() {
+        GC.boot();
         gc_collect();
     }
 
@@ -92,6 +140,7 @@ class GC {
     // @return 新 GcStats 快照
     // 复杂度：O(1)
     static func stats(): GcStats {
+        GC.boot();
         val s = new GcStats();
         hao_gc_stats(s);
         return s;
@@ -181,12 +230,20 @@ class GC {
         return hao_gc_finalizer_sets();
     }
 
+    // finalizer 回调被 SEH 隔离吞掉的次数（Win；防拖垮进程）。
+    // @return 次数
+    // 复杂度：O(1)
+    static func finalizerExceptions(): Long {
+        return hao_gc_finalizer_exceptions();
+    }
+
     // STW 未齐 park 次数（v0.53：终止未齐则 abort MARK，不无限黑囤）。
     // @return 次数
     // 复杂度：O(1)
     static func stwIncomplete(): Long {
         return hao_gc_stw_incomplete();
     }
+    /** v0.72：HOT_GRACE 已删，恒 0（ABI 保留） */
     static func stwGraceRescues(): Long {
         return hao_gc_stw_grace_rescues();
     }
@@ -210,6 +267,27 @@ class GC {
     // 复杂度：O(1)
     static func concurrentMarkCycles(): Long {
         return hao_gc_concurrent_mark_cycles();
+    }
+
+    // 成功 concurrent sweep 轮次（默开；HAO_GC_STW_SWEEP=1 强制 STW free 时不涨）。
+    // @return 次数
+    // 复杂度：O(1)
+    static func concurrentSweepCycles(): Long {
+        return hao_gc_concurrent_sweep_cycles();
+    }
+
+    // exact-size freelist 累计入队次数（API 名 spanSweepChunks 保留）。
+    // @return 次数
+    // 复杂度：O(1)
+    static func spanSweepChunks(): Long {
+        return hao_gc_span_sweep_chunks();
+    }
+
+    // exact-size freelist alloc 命中次数（复用同尺寸块）。
+    // @return 次数
+    // 复杂度：O(1)
+    static func freelistHits(): Long {
+        return hao_gc_freelist_hits();
     }
 
     // 终止 STW 未齐导致 abort MARK 的次数（v0.53.3+；对标「回收压力/握手失败」）。
@@ -238,6 +316,6 @@ class GC {
     // 复杂度：O(1)（单次 stats）
     static func summary(): String {
         val s = GC.stats();
-        return $"GC[v3] live={s.liveBytes}B heap={s.heapBytes}B threshold={s.threshold}B allocatedSince={s.allocatedSinceGc}B blocks={s.blockCount} collects={s.collectCount} minor={s.minorCount} major={s.majorCount} finalizerRuns={s.finalizerRuns} finalizerSets={s.finalizerSets} stwIncomplete={s.stwIncomplete} stwIncRoot={s.stwIncompleteRoot} stwIncTerm={s.stwIncompleteTerm} concurrentMark={s.concurrentMarkCycles} markAssist={s.markAssistSteps} markAbort={s.markAbortCycles} abortRoot={s.markAbortRoot} abortTerm={s.markAbortTerm} abortParkWd={s.markAbortParkWd} markWorker={s.markWorkerSteps} remset={s.remsetCount} parkWd={s.parkWatchdogTrips} lastStwPhase={s.lastStwPhase} lastMissing={s.lastStwMissing}/{s.lastStwTargets} lastOsBlock={s.lastStwOsBlockMissing} missTid0={s.lastMissTid0} missAgeMs={s.lastMissMaxAgeMs} finDiag={s.lastFinalizerDiag}";
+        return $"GC[v3] live={s.liveBytes}B heap={s.heapBytes}B threshold={s.threshold}B allocatedSince={s.allocatedSinceGc}B blocks={s.blockCount} collects={s.collectCount} minor={s.minorCount} major={s.majorCount} finalizerRuns={s.finalizerRuns} finalizerSets={s.finalizerSets} stwIncomplete={s.stwIncomplete} stwIncRoot={s.stwIncompleteRoot} stwIncTerm={s.stwIncompleteTerm} concurrentMark={s.concurrentMarkCycles} concurrentSweep={s.concurrentSweepCycles} markAssist={s.markAssistSteps} markAbort={s.markAbortCycles} abortRoot={s.markAbortRoot} abortTerm={s.markAbortTerm} abortParkWd={s.markAbortParkWd} markWorker={s.markWorkerSteps} remset={s.remsetCount} parkWd={s.parkWatchdogTrips} lastStwPhase={s.lastStwPhase} lastMissing={s.lastStwMissing}/{s.lastStwTargets} lastOsBlock={s.lastStwOsBlockMissing} missTid0={s.lastMissTid0} missAgeMs={s.lastMissMaxAgeMs} finDiag={s.lastFinalizerDiag}";
     }
 }

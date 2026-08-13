@@ -85,6 +85,11 @@ void* hao_except_capture(void) {
     return e;
 }
 
+/* 是否存在可 longjmp 的 try 帧（语言 OOM 抛点用） */
+int hao_exc_has_catcher(void) {
+    return g_excDepth > 0 ? 1 : 0;
+}
+
 /* 抛出异常：沿帧栈 longjmp 到最近的 try；没有则终止进程 */
 void hao_throw(void* obj) {
     if (g_excDepth <= 0) {

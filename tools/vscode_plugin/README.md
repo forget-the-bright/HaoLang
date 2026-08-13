@@ -1,7 +1,7 @@
 # HaoLang VSCode 插件（0.1.0）
 
-Phase **0+1**：语法高亮（TextMate 全覆盖）+ language-configuration + snippets + `hao` CLI 集成。  
-**不含**独立 LSP / Debug Adapter。
+Phase **0+1+LSP0**：语法高亮 + language-configuration + snippets + `hao` CLI + **诊断→Problems**（`DiagnosticCollection`；保存/打开/`HaoLang: Diagnose`）。  
+**不含**独立 LSP / Debug Adapter；**禁止**假 `hao check`。
 
 ## 安装（开发）
 
@@ -33,9 +33,10 @@ npm run compile
 | Snippets | `package` / `func` / `class` / `when` / `newarr` / `try` / `test` …（真语法，无 `fn`/`struct`） |
 | 命令 | Run / Build / Test / Fmt / Clean / Mod Tidy / Version |
 | ProblemMatcher `$hao` | `路径:行:列: 错误:` / `警告:` |
+| **诊断→Problems** | 保存/打开 `.hao` 或命令 `HaoLang: Diagnose`：跑 `hao build` 解析诊断进 Problems（插件 **0.1.4**） |
 | 格式化 | Document Formatting → `hao fmt`（stdout）；可选保存时 `hao fmt -w` |
 | 状态栏 | 显示 `hao version` |
-| `.hao` 文件图标 | 无底板；拟人「比好」拇指手势（渐变玻璃质感 + 蒸汽/爪环/水滴/星芒点缀）；仅语言 icon |
+| `.hao` 文件图标 | 预览拟人比好手势：`icons/hao-mascot-256.png`（语言 icon）+ 同款矢量容器 `icons/hao-mascot.svg`；无底板 |
 
 > 若资源管理器里 `.hao` 仍是普通文档图标：命令面板 → `Preferences: File Icon Theme`，选用支持语言图标的主题（如 **Seti (Visual Studio Code)** / **Minimal**）。切勿再装整套「只含 Hao」的主题，否则会盖掉其它语言图标。
 

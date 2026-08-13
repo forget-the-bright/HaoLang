@@ -1,0 +1,36 @@
+// FEAT-SELECT：无 default 真等待（子线程延迟 send 唤醒）；有 default 立即走 default
+package main;
+
+import channel;
+import thread;
+
+func main() {
+    // 1) 有 default：空通道立即 default（不 park）
+    var idle = channel.make(1);
+    var hitDefault = false;
+    select {
+        case x = idle.recvInt():
+            fmt.println(false);
+            return;
+        default:
+            hitDefault = true;
+    }
+    if (!hitDefault) {
+        fmt.println(false);
+        return;
+    }
+
+    // 2) 无 default：主线程 park，子线程延迟 send 唤醒
+    var ch = channel.make(1);
+    haoroutine {
+        thread.sleep(80);
+        ch.sendInt(42);
+    }
+    var got = 0;
+    select {
+        case v = ch.recvInt():
+            got = v;
+    }
+    fmt.println(got == 42);
+    fmt.println(hitDefault);
+}

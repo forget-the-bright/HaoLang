@@ -11,6 +11,8 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <sstream>
+#include <vector>
 
 namespace hao {
 
@@ -517,14 +519,14 @@ bool IRGen::isGcPointerType(const TypePtr& t) {
 }
 
 int64_t IRGen::objectPtrBitmap(const ClassInfo* ci) {
-    int64_t bm = 0;
+    uint64_t bm = 0;
     if (!ci) return 0;
-    // 与 runtime_object：nfields>32 → FULL；位图仅低 32 槽有效
+    // ≤64 槽：打包进 i64；更大走 hao_object_new_map（emitObjectNewForClass）
     for (const auto& f : ci->fields) {
-        if (f.slot >= 0 && f.slot < 32 && isGcPointerType(f.type))
-            bm |= (int64_t(1) << f.slot);
+        if (f.slot >= 0 && f.slot < 64 && isGcPointerType(f.type))
+            bm |= (uint64_t(1) << (unsigned)f.slot);
     }
-    return bm;
+    return (int64_t)bm;
 }
 
 void IRGen::emitHeapStore(const std::string& addr, const std::string& valIr,
@@ -557,13 +559,7 @@ void IRGen::emitGcRootPush(const std::string& slotAddr) {
 void IRGen::emitGcRootUnwind() {
     if (gcRootWm_.empty()) return;
     /* A13：正路径可观测（默认关） */
-    {
-        const char* tr = getenv("HAO_IRGEN_TRACE");
-        if (tr && tr[0] && tr[0] != '0') {
-            fprintf(stderr, "hao:irgen:gc_unwind wm=%s\n", gcRootWm_.c_str());
-            fflush(stderr);
-        }
-    }
+    traceIrgen("hao:irgen:gc_unwind wm=%s\n", gcRootWm_.c_str());
     ops_.emitCallVoid("@hao_gc_root_unwind", "i64 " + gcRootWm_);
 }
 
@@ -592,13 +588,7 @@ void IRGen::emitPushUnwindGcRoot() {
 void IRGen::storeUnwindGcRootPtr(const std::string& ptrIr) {
     if (unwindGcRootAddr_.empty()) return;
     /* A14：正路径可观测（默认关） */
-    {
-        const char* tr = getenv("HAO_IRGEN_TRACE");
-        if (tr && tr[0] && tr[0] != '0') {
-            fprintf(stderr, "hao:irgen:unwind_gc ptr=%s\n", ptrIr.c_str());
-            fflush(stderr);
-        }
-    }
+    traceIrgen("hao:irgen:unwind_gc ptr=%s\n", ptrIr.c_str());
     emitStore("ptr", ptrIr, unwindGcRootAddr_);
 }
 
@@ -608,28 +598,16 @@ void IRGen::clearUnwindGcRoot() {
 
 void IRGen::beginBlockGcScope() {
     /* A11：正路径可观测（默认关） */
-    {
-        const char* tr = getenv("HAO_IRGEN_TRACE");
-        if (tr && tr[0] && tr[0] != '0') {
-            fprintf(stderr, "hao:irgen:block_enter depth=%zu\n",
+    traceIrgen("hao:irgen:block_enter depth=%zu\n",
                     blockGcSlots_.size());
-            fflush(stderr);
-        }
-    }
     blockGcSlots_.push_back({});
 }
 
 void IRGen::endBlockGcScope() {
     if (blockGcSlots_.empty()) return;
     /* A11：正路径可观测（默认关） */
-    {
-        const char* tr = getenv("HAO_IRGEN_TRACE");
-        if (tr && tr[0] && tr[0] != '0') {
-            fprintf(stderr, "hao:irgen:block_leave depth=%zu slots=%zu\n",
+    traceIrgen("hao:irgen:block_leave depth=%zu slots=%zu\n",
                     blockGcSlots_.size(), blockGcSlots_.back().size());
-            fflush(stderr);
-        }
-    }
     if (!blockTerminated_) {
         for (const auto& addr : blockGcSlots_.back())
             emitStore("ptr", "null", addr);
@@ -640,15 +618,34 @@ void IRGen::endBlockGcScope() {
 void IRGen::noteBlockGcSlot(const std::string& slotAddr) {
     if (slotAddr.empty() || blockGcSlots_.empty()) return;
     /* A14：正路径可观测（默认关） */
-    {
-        const char* tr = getenv("HAO_IRGEN_TRACE");
-        if (tr && tr[0] && tr[0] != '0') {
-            fprintf(stderr, "hao:irgen:note_block depth=%zu\n",
+    traceIrgen("hao:irgen:note_block depth=%zu\n",
                     blockGcSlots_.size());
-            fflush(stderr);
-        }
-    }
     blockGcSlots_.back().push_back(slotAddr);
+}
+
+void IRGen::beginStmtGcTemps() {
+    stmtGcTemps_.push_back({});
+    stmtGcTempFnDepth_.push_back(emitFnDepth_);
+}
+
+void IRGen::endStmtGcTemps() {
+    if (stmtGcTemps_.empty()) return;
+    if (!blockTerminated_ && !stmtGcTempFnDepth_.empty() &&
+        stmtGcTempFnDepth_.back() == emitFnDepth_) {
+        for (const auto& addr : stmtGcTemps_.back())
+            emitStore("ptr", "null", addr);
+    }
+    stmtGcTemps_.pop_back();
+    if (!stmtGcTempFnDepth_.empty()) stmtGcTempFnDepth_.pop_back();
+}
+
+void IRGen::noteStmtGcTemp(const std::string& slotAddr) {
+    if (slotAddr.empty() || stmtGcTemps_.empty()) return;
+    /* 禁止把嵌套 define（lambda/工厂）里的 slot 记到外层语句帧 → 跨函数 undef */
+    if (stmtGcTempFnDepth_.empty() ||
+        stmtGcTempFnDepth_.back() != emitFnDepth_)
+        return;
+    stmtGcTemps_.back().push_back(slotAddr);
 }
 
 /* 循环入口预分配槽数：须在循环前（支配整段循环），禁止在 body 内 alloca */
@@ -671,15 +668,8 @@ void IRGen::enterLoopSpillScope() {
     if (!loopSpillPools_.empty()) {
         auto& pool = loopSpillPools_.back();
         /* A10：正路径可观测（默认关） */
-        {
-            const char* tr = getenv("HAO_IRGEN_TRACE");
-            if (tr && tr[0] && tr[0] != '0') {
-                fprintf(stderr,
-                        "hao:irgen:enter_spill depth=%d next=%zu slots=%zu\n",
+        traceIrgen("hao:irgen:enter_spill depth=%d next=%zu slots=%zu\n",
                         loopSpillDepth_, pool.next, pool.slots.size());
-                fflush(stderr);
-            }
-        }
         pool.scopeStack.push_back(pool.next);
         size_t enterSticky = pool.stickyStack.size();
         pool.stickyEnterStack.push_back(enterSticky);
@@ -692,13 +682,8 @@ void IRGen::enterLoopSpillScope() {
 void IRGen::leaveLoopSpillScope() {
     /* A15：空栈 / depth<=0 早退亦 TRACE（默认关） */
     if (loopSpillDepth_ <= 0) {
-        const char* tr = getenv("HAO_IRGEN_TRACE");
-        if (tr && tr[0] && tr[0] != '0') {
-            fprintf(stderr,
-                    "hao:irgen:leave_spill noop=1 depth=%d\n",
+        traceIrgen("hao:irgen:leave_spill noop=1 depth=%d\n",
                     loopSpillDepth_);
-            fflush(stderr);
-        }
         return;
     }
     if (!loopSpillPools_.empty()) {
@@ -706,15 +691,8 @@ void IRGen::leaveLoopSpillScope() {
         if (!pool.scopeStack.empty()) {
             size_t base = pool.scopeStack.back();
             /* A9：正路径可观测（默认关） */
-            {
-                const char* tr = getenv("HAO_IRGEN_TRACE");
-                if (tr && tr[0] && tr[0] != '0') {
-                    fprintf(stderr,
-                            "hao:irgen:leave_spill base=%zu next=%zu high=%zu\n",
+            traceIrgen("hao:irgen:leave_spill base=%zu next=%zu high=%zu\n",
                             base, pool.next, pool.highWater);
-                    fflush(stderr);
-                }
-            }
             size_t lim = pool.highWater > pool.next ? pool.highWater : pool.next;
             if (lim > pool.slots.size()) lim = pool.slots.size();
             for (size_t i = base; i < lim; ++i)
@@ -732,15 +710,8 @@ void IRGen::leaveLoopSpillScope() {
                 pool.stickyEnterStack.pop_back();
             if (!pool.stickyFloorStack.empty())
                 pool.stickyFloorStack.pop_back();
-        } else {
-            const char* tr = getenv("HAO_IRGEN_TRACE");
-            if (tr && tr[0] && tr[0] != '0') {
-                fprintf(stderr,
-                        "hao:irgen:leave_spill noop=1 depth=%d next=%zu\n",
+        } else traceIrgen("hao:irgen:leave_spill noop=1 depth=%d next=%zu\n",
                         loopSpillDepth_, pool.next);
-                fflush(stderr);
-            }
-        }
     }
     --loopSpillDepth_;
     if (loopSpillDepth_ == 0 && !loopSpillPools_.empty())
@@ -751,15 +722,8 @@ void IRGen::pinLoopSpillCheckpoint() {
     if (loopSpillPools_.empty()) return;
     auto& pool = loopSpillPools_.back();
     /* A10：正路径可观测（默认关） */
-    {
-        const char* tr = getenv("HAO_IRGEN_TRACE");
-        if (tr && tr[0] && tr[0] != '0') {
-            fprintf(stderr,
-                    "hao:irgen:pin_spill next=%zu sticky_n=%zu\n",
+    traceIrgen("hao:irgen:pin_spill next=%zu sticky_n=%zu\n",
                     pool.next, pool.stickyStack.size());
-            fflush(stderr);
-        }
-    }
     pool.stickyStack.push_back(pool.next);
 }
 
@@ -768,15 +732,8 @@ void IRGen::markLoopSpillStickyFloor() {
     auto& pool = loopSpillPools_.back();
     if (pool.stickyFloorStack.empty()) return;
     /* A11：正路径可观测（默认关） */
-    {
-        const char* tr = getenv("HAO_IRGEN_TRACE");
-        if (tr && tr[0] && tr[0] != '0') {
-            fprintf(stderr,
-                    "hao:irgen:sticky_floor sticky_n=%zu next=%zu\n",
+    traceIrgen("hao:irgen:sticky_floor sticky_n=%zu next=%zu\n",
                     pool.stickyStack.size(), pool.next);
-            fflush(stderr);
-        }
-    }
     pool.stickyFloorStack.back() = pool.stickyStack.size();
 }
 
@@ -791,30 +748,17 @@ void IRGen::clearLoopSpillSlots() {
     size_t lim = pool.highWater > pool.next ? pool.highWater : pool.next;
     if (lim > pool.slots.size()) lim = pool.slots.size();
     /* A6：正路径可观测（默认关）；固定前缀便于门禁匹配 */
-    {
-        const char* tr = getenv("HAO_IRGEN_TRACE");
-        if (tr && tr[0] && tr[0] != '0') {
-            fprintf(stderr,
-                    "hao:irgen:clear_spill base=%zu target=%zu next=%zu\n",
+    traceIrgen("hao:irgen:clear_spill base=%zu target=%zu next=%zu\n",
                     base, target, pool.next);
-            fflush(stderr);
-        }
-    }
     /* A5：清到本层 base 以下 = 嵌套 sticky 分层仍坏
      * 始终打固定前缀；HAO_IRGEN_STRICT=1 时记诊断（拒绝 emit） */
     if (target < base) {
-        fprintf(stderr,
-                "hao:irgen:clear_spill_underflow target=%zu < base=%zu "
+        traceIrgenAlways("hao:irgen:clear_spill_underflow target=%zu < base=%zu "
                 "(nested sticky floor bug?)\n",
                 target, base);
-        fflush(stderr);
-        const char* tr = getenv("HAO_IRGEN_TRACE");
-        if (tr && tr[0] && tr[0] != '0') {
-            fprintf(stderr,
-                    "[hao:irgen] clearLoopSpill target=%zu < base=%zu "
+        traceIrgen("[hao:irgen] clearLoopSpill target=%zu < base=%zu "
                     "(nested sticky floor bug?)\n",
                     target, base);
-        }
         const char* st = getenv("HAO_IRGEN_STRICT");
         int strict = 0;
         if (st && st[0] && !(st[0] == '0' && st[1] == '\0') &&
@@ -847,15 +791,8 @@ void IRGen::recycleLoopSpillSlots() {
     else if (!pool.scopeStack.empty())
         target = pool.scopeStack.back();
     /* A8：正路径可观测（默认关） */
-    {
-        const char* tr = getenv("HAO_IRGEN_TRACE");
-        if (tr && tr[0] && tr[0] != '0') {
-            fprintf(stderr,
-                    "hao:irgen:recycle_spill target=%zu next=%zu high=%zu\n",
+    traceIrgen("hao:irgen:recycle_spill target=%zu next=%zu high=%zu\n",
                     target, pool.next, pool.highWater);
-            fflush(stderr);
-        }
-    }
     /* 回退游标前须清 null，否则上轮 spill 残留在已 push 的槽里假活 */
     size_t lim = pool.highWater > pool.next ? pool.highWater : pool.next;
     if (lim > pool.slots.size()) lim = pool.slots.size();
@@ -871,15 +808,8 @@ void IRGen::unpinLoopSpillCheckpoint() {
     if (pool.stickyStack.empty()) return;
     size_t sticky = pool.stickyStack.back();
     /* A9：正路径可观测（默认关） */
-    {
-        const char* tr = getenv("HAO_IRGEN_TRACE");
-        if (tr && tr[0] && tr[0] != '0') {
-            fprintf(stderr,
-                    "hao:irgen:unpin_spill sticky=%zu next=%zu\n",
+    traceIrgen("hao:irgen:unpin_spill sticky=%zu next=%zu\n",
                     sticky, pool.next);
-            fflush(stderr);
-        }
-    }
     size_t lim = pool.next > sticky ? pool.next : sticky;
     for (size_t i = sticky; i < lim && i < pool.slots.size(); ++i)
         emitStore("ptr", "null", pool.slots[i]);
@@ -890,43 +820,24 @@ void IRGen::unpinLoopSpillCheckpoint() {
 std::string IRGen::acquireLoopGcSlot(const std::string& nameHint) {
     if (loopSpillPools_.empty()) {
         /* A15：非池回退可观测（默认关）；alloca 进 entry 保支配 */
-        {
-            const char* tr = getenv("HAO_IRGEN_TRACE");
-            if (tr && tr[0] && tr[0] != '0') {
-                fprintf(stderr,
-                        "hao:irgen:acquire_spill pool=0 hint=%s\n",
+        traceIrgen("hao:irgen:acquire_spill pool=0 hint=%s\n",
                         nameHint.c_str());
-                fflush(stderr);
-            }
-        }
         std::string addr = em_.emitEntryAllocaPtr(nameHint);
         emitStore("ptr", "null", addr);
         emitGcRootPush(addr);
+        /* T06：非循环语句临时根 — 语句结束后 null（非中途清） */
+        noteStmtGcTemp(addr);
         return addr;
     }
     auto& pool = loopSpillPools_.back();
     /* A7：正路径可观测（默认关） */
-    {
-        const char* tr = getenv("HAO_IRGEN_TRACE");
-        if (tr && tr[0] && tr[0] != '0') {
-            fprintf(stderr,
-                    "hao:irgen:acquire_spill next=%zu slots=%zu hint=%s\n",
+    traceIrgen("hao:irgen:acquire_spill next=%zu slots=%zu hint=%s\n",
                     pool.next, pool.slots.size(), nameHint.c_str());
-            fflush(stderr);
-        }
-    }
     if (pool.next >= pool.slots.size()) {
         /* 扩池：alloca 进 entry（支配），再 root_push 一次并入可复用表 */
         /* A12：正路径可观测（默认关） */
-        {
-            const char* tr = getenv("HAO_IRGEN_TRACE");
-            if (tr && tr[0] && tr[0] != '0') {
-                fprintf(stderr,
-                        "hao:irgen:grow_spill next=%zu slots=%zu hint=%s\n",
+        traceIrgen("hao:irgen:grow_spill next=%zu slots=%zu hint=%s\n",
                         pool.next, pool.slots.size(), nameHint.c_str());
-                fflush(stderr);
-            }
-        }
         std::string addr = em_.emitEntryAllocaPtr(nameHint);
         emitStore("ptr", "null", addr);
         emitGcRootPush(addr);
@@ -966,7 +877,39 @@ void IRGen::emitVarStore(const SymbolPtr& sym, const TypePtr& ty,
 std::string IRGen::emitObjectNew(int64_t nfields, int64_t bitmap) {
     return emitCall("ptr", "@hao_object_new",
                     "i64 " + std::to_string(nfields) + ", i64 " +
-                        std::to_string(bitmap));
+                    std::to_string((uint64_t)bitmap));
+}
+
+std::string IRGen::emitObjectNewForClass(const ClassInfo* ci) {
+    if (!ci) return emitObjectNew(0, 0);
+    int64_t n = (int64_t)ci->slotCount();
+    if (n <= 64)
+        return emitObjectNew(n, objectPtrBitmap(ci));
+    /* >64：模块级常量位图 + hao_object_new_map */
+    size_t nwords = ((size_t)n + 63u) / 64u;
+    std::vector<uint64_t> words(nwords, 0);
+    for (const auto& f : ci->fields) {
+        if (f.slot >= 0 && isGcPointerType(f.type)) {
+            size_t s = (size_t)f.slot;
+            words[s / 64u] |= (uint64_t(1) << (s % 64u));
+        }
+    }
+    static unsigned bmSeq = 0;
+    std::string gname = "@.gc.bm." + std::to_string(bmSeq++);
+    {
+        std::ostringstream os;
+        os << gname << " = private unnamed_addr constant [" << nwords
+           << " x i64] [";
+        for (size_t i = 0; i < nwords; ++i) {
+            if (i) os << ", ";
+            os << "i64 " << words[i];
+        }
+        os << "]";
+        em_.addGlobal(os.str());
+    }
+    return emitCall("ptr", "@hao_object_new_map",
+                    "i64 " + std::to_string(n) + ", ptr " + gname + ", i64 " +
+                        std::to_string(nwords));
 }
 
 // 将数组下标提升为 i64（语言侧 Int=i32）

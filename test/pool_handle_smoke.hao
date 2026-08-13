@@ -1,0 +1,48 @@
+// T01：ThreadPool NativeHandle 独立冒烟（禁全量套件）
+package main;
+
+import thread.*;
+import sync;
+import gc;
+
+func main() {
+    // 显式 shutdown 路径
+    val pool = newPool(2);
+    val cell = sync.hao_sync_cell_new();
+    var i = 0;
+    while (i < 20) {
+        pool.submit({
+            sync.atomicAdd(cell, 1);
+        });
+        i += 1;
+    }
+    pool.shutdown();
+    fmt.println(sync.atomicAdd(cell, 0) == 20); // true
+
+    // shutdown 后再丢引用 + collect
+    var pool2: ThreadPool? = newPool(2);
+    val cell2 = sync.hao_sync_cell_new();
+    pool2!!.submit({
+        sync.atomicAdd(cell2, 1);
+    });
+    pool2!!.submit({
+        sync.atomicAdd(cell2, 1);
+    });
+    pool2!!.shutdown();
+    pool2 = null;
+    gc.GC.collect();
+    fmt.println(sync.atomicAdd(cell2, 0) == 2); // true
+
+    // 纯 drop：submit 后丢引用，靠 finalizer destroy
+    var pool3: ThreadPool? = newPool(1);
+    val cell3 = sync.hao_sync_cell_new();
+    pool3!!.submit({
+        sync.atomicAdd(cell3, 1);
+        sleep(50);
+    });
+    pool3 = null;
+    sleep(200);
+    gc.GC.collect();
+    gc.GC.collect();
+    fmt.println(sync.atomicAdd(cell3, 0) >= 1); // true
+}

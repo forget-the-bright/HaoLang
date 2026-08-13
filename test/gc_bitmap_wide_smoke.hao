@@ -1,0 +1,64 @@
+// GC-ALIGN-3：>32 槽精确 BITMAP（禁止 FULL 保守）；末槽 GC 指针经 collect 仍可达
+package main;
+
+import gc;
+
+class Wide {
+    var p00: Object? = null;
+    var p01: Object? = null;
+    var p02: Object? = null;
+    var p03: Object? = null;
+    var p04: Object? = null;
+    var p05: Object? = null;
+    var p06: Object? = null;
+    var p07: Object? = null;
+    var p08: Object? = null;
+    var p09: Object? = null;
+    var p10: Object? = null;
+    var p11: Object? = null;
+    var p12: Object? = null;
+    var p13: Object? = null;
+    var p14: Object? = null;
+    var p15: Object? = null;
+    var p16: Object? = null;
+    var p17: Object? = null;
+    var p18: Object? = null;
+    var p19: Object? = null;
+    var p20: Object? = null;
+    var p21: Object? = null;
+    var p22: Object? = null;
+    var p23: Object? = null;
+    var p24: Object? = null;
+    var p25: Object? = null;
+    var p26: Object? = null;
+    var p27: Object? = null;
+    var p28: Object? = null;
+    var p29: Object? = null;
+    var p30: Object? = null;
+    var p31: Object? = null;
+    var p32: Object? = null;
+    var p33: Object? = null;
+    var p34: Object? = null;
+    var p35: Object? = null;
+    var p36: Object? = null;
+    var p37: Object? = null;
+    var p38: Object? = null;
+    var p39: Object? = null; /* slot ≥32：旧 FULL 路径会丢/假活 */
+    constructor() {}
+}
+
+class Tag {
+    var s: String = "";
+    constructor(x: String) { this.s = x; }
+}
+
+func main() {
+    var w = new Wide();
+    w.p39 = new Tag("wide-tail");
+    var junk: Tag? = new Tag("tmp");
+    junk = null;
+    gc.GC.collect();
+    gc.GC.collect();
+    val t = w.p39 as Tag?;
+    fmt.println(t != null && t!!.s == "wide-tail");
+}

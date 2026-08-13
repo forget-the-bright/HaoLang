@@ -1,0 +1,35 @@
+// T04：catch 内 when 语句 + 局部 GC 根存活
+package main;
+
+import exception.*;
+import gc;
+
+class Box {
+    var s: String = "";
+    constructor(x: String) { this.s = x; }
+}
+
+func boom(): Int {
+    throw new Exception("x");
+    return 0;
+}
+
+func main() {
+    var keep: Box? = null;
+    try {
+        boom();
+    } catch (e: Exception) {
+        val k = 1;
+        var b: Box? = null;
+        when (k) {
+            1 -> { b = new Box("w"); }
+            else -> { b = new Box("z"); }
+        }
+        keep = b;
+        gc.GC.collect();
+        fmt.println(keep!!.s == "w"); // true
+    }
+    gc.GC.collect();
+    fmt.println(keep!!.s == "w"); // true
+    fmt.println(gc.GC.markAbortCycles() == 0);
+}

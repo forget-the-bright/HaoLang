@@ -9,7 +9,7 @@ ABI兼容 ≠ 归属对方运行时。**
 2. 托管层：明确**哪一侧分配、哪一侧释放、谁拥有内存所有权**。
 结合你已有的《FFI与运行时分层隔离规范》配套使用。
 
-> **落地（v0.55.61）**：边界仅 **拷贝语义 | NativeHandle 代理**；fs/net/regex 已切 Handle；出桥 libc 经 `hao_ffi_dup_*`。索引见 [`README.md`](README.md)。
+> **落地（v0.55.61+）**：边界仅 **拷贝语义 | NativeHandle 代理**；fs/net/regex/**ThreadPool** 已切 Handle；藏针门禁 `handle_resource_gate`；出桥 libc 经 `hao_ffi_dup_*`。索引见 [`README.md`](README.md)。
 
 ## 1 基础概念厘清
 ### ABI包含什么

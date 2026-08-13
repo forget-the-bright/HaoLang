@@ -1,0 +1,35 @@
+// B2：exact-size freelist — spanSweepChunks 入队后，再 alloc 同尺寸应抬升 freelistHits
+package main;
+
+import gc;
+import collections.*;
+
+class Box {
+    var tag: String = "";
+    constructor(t: String) { this.tag = t; }
+}
+
+func main() {
+    var keep = new Box("alive");
+    var junk: ArrayList<Object>? = new ArrayList<Object>();
+    var i = 0;
+    while (i < 1500) {
+        junk!!.add(new Box("x"));
+        i += 1;
+    }
+    val beforeChunks = gc.GC.spanSweepChunks();
+    val beforeHits = gc.GC.freelistHits();
+    junk = null;
+    gc.GC.collect();
+    gc.GC.collect();
+    /* 复用同尺寸：应从 freelist 弹出 */
+    var reuse: ArrayList<Object>? = new ArrayList<Object>();
+    i = 0;
+    while (i < 800) {
+        reuse!!.add(new Box("y"));
+        i += 1;
+    }
+    fmt.println(keep.tag == "alive");
+    fmt.println(gc.GC.spanSweepChunks() > beforeChunks);
+    fmt.println(gc.GC.freelistHits() > beforeHits);
+}

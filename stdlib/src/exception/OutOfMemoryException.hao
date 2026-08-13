@@ -1,0 +1,14 @@
+// 语言级 OOM：分配在 major+soft 清仍失败时抛出（须先 GC.boot 注册单例）
+package exception;
+
+class OutOfMemoryException : Exception {
+    var needBytes: Long = 0;
+
+    constructor(message: String) {
+        this.message = message;
+    }
+
+    override func toString(): String {
+        return $"OutOfMemoryException: {this.message}";
+    }
+}

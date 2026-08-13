@@ -13,7 +13,8 @@
  *    - Windows：hao_win_*（kernel32.dll 惰性解析，5.12）
  *    - Linux：  pthread_create / pthread_join / nanosleep /
  *                pthread_mutex / pthread_cond
- *  Thread 句柄：NativeHandle（drop=关 OS 句柄；join 显式 Wait）。池内部仍用 OS 句柄数组。
+ *  Thread 句柄：NativeHandle（drop=关 OS 句柄；join 显式 Wait）。
+ *  ThreadPool：NativeHandle 代理 Pool*（drop=shutdown+join+free；禁 Long 藏针）。
  */
 #include "runtime_internal.h"
 
@@ -297,17 +298,49 @@ static void* pool_worker(void* arg) {
     return 0;
 }
 
-int64_t hao_pool_new(int32_t n) {
+/* shutdown+join+drain+释放 Pool（Handle drop 与显式 shutdown 共用） */
+static void pool_destroy(Pool* p) {
+    if (!p) return;
+#ifdef _WIN32
+    hao_win_crit_enter(p->mtx);
+    p->shutdown = 1;
+    hao_win_crit_leave(p->mtx);
+    hao_win_cond_wake_all(p->cv);
+#else
+    pthread_mutex_lock(&p->mtx);
+    p->shutdown = 1;
+    pthread_mutex_unlock(&p->mtx);
+    pthread_cond_broadcast(&p->cv);
+#endif
+    pool_join_workers(p);
+    pool_drain_tasks(p);
+#ifdef _WIN32
+    /* mtx/cv 无显式 destroy（dynload CRITICAL_SECTION 由进程回收） */
+#else
+    pthread_mutex_destroy(&p->mtx);
+    pthread_cond_destroy(&p->cv);
+#endif
+    free(p->threads);
+    p->threads = NULL;
+    free(p);
+}
+
+static void hao_pool_drop(void* raw) {
+    pool_destroy((Pool*)raw);
+}
+
+HaoNativeHandle* hao_pool_new(int32_t n) {
+    HaoNativeHandle* h = hao_handle_alloc();
     if (n < 1) n = 1;
     if (n > 256) n = 256; /* 防异常巨大 n 拖垮进程 */
     Pool* p = (Pool*)calloc(1, sizeof(Pool));
-    if (!p) return 0;
+    if (!p) return h;
 #ifdef _WIN32
     p->threads = (void**)calloc((size_t)n, sizeof(void*));
 #else
     p->threads = (pthread_t*)calloc((size_t)n, sizeof(pthread_t));
 #endif
-    if (!p->threads) { free(p); return 0; }
+    if (!p->threads) { free(p); return h; }
 #ifdef _WIN32
     hao_win_crit_init(p->mtx);
     hao_win_cond_init(p->cv);
@@ -318,9 +351,9 @@ int64_t hao_pool_new(int32_t n) {
     int ok = 1;
     for (int i = 0; i < n; ++i) {
 #ifdef _WIN32
-        void* h = hao_win_create_thread(pool_worker, p);
-        if (!h) { ok = 0; break; }
-        p->threads[i] = h;
+        void* th = hao_win_create_thread(pool_worker, p);
+        if (!th) { ok = 0; break; }
+        p->threads[i] = th;
 #else
         if (pthread_create(&p->threads[i], NULL, pool_worker, p) != 0) {
             ok = 0;
@@ -331,29 +364,15 @@ int64_t hao_pool_new(int32_t n) {
     }
     if (!ok) {
         /* 已跑的 worker 仍持 Pool*：须 shutdown+join 后再 free，否则 UAF */
-        p->shutdown = 1;
-#ifdef _WIN32
-        hao_win_cond_wake_all(p->cv);
-#else
-        pthread_cond_broadcast(&p->cv);
-#endif
-        pool_join_workers(p);
-        pool_drain_tasks(p);
-#ifdef _WIN32
-        /* mtx/cv 无显式 destroy（dynload CRITICAL_SECTION 由进程回收） */
-#else
-        pthread_mutex_destroy(&p->mtx);
-        pthread_cond_destroy(&p->cv);
-#endif
-        free(p->threads);
-        free(p);
-        return 0;
+        pool_destroy(p);
+        return h; /* closed empty */
     }
-    return (int64_t)(intptr_t)p;
+    hao_handle_attach(h, p, hao_pool_drop);
+    return h;
 }
 
-int32_t hao_pool_submit(int64_t pool, void* env) {
-    Pool* p = (Pool*)(intptr_t)pool;
+int32_t hao_pool_submit(HaoNativeHandle* handle, void* env) {
+    Pool* p = (Pool*)hao_handle_raw(handle);
     if (!p) return 1;
     Task* t = (Task*)calloc(1, sizeof(Task));
     if (!t) return 1;
@@ -388,21 +407,14 @@ int32_t hao_pool_submit(int64_t pool, void* env) {
     return 0;
 }
 
-void hao_pool_shutdown(int64_t pool) {
-    Pool* p = (Pool*)(intptr_t)pool;
-    if (!p) return;
-#ifdef _WIN32
-    hao_win_crit_enter(p->mtx);
-    p->shutdown = 1;
-    hao_win_crit_leave(p->mtx);
-    hao_win_cond_wake_all(p->cv);
-#else
-    pthread_mutex_lock(&p->mtx);
-    p->shutdown = 1;
-    pthread_mutex_unlock(&p->mtx);
-    pthread_cond_broadcast(&p->cv);
-#endif
-    /* 等待全部 worker 退出，保证已提交任务跑完后再返回（正测 pool 计数可靠） */
-    pool_join_workers(p);
-    pool_drain_tasks(p);
+void hao_pool_shutdown(HaoNativeHandle* handle) {
+    void* raw;
+    if (!handle || handle->closed) return;
+    raw = handle->raw;
+    /* 摘 drop，避免 shutdown 后再被 finalizer 二次 destroy */
+    handle->drop = NULL;
+    handle->raw = NULL;
+    handle->closed = 1;
+    hao_gc_clear_finalizer(handle);
+    if (raw) pool_destroy((Pool*)raw);
 }

@@ -5,12 +5,12 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.60.3**（强制 `new` 数组 + `Array` 基类 + `T...` + 自动属性增强；RFC-0005～0007）
-- 测试基线：`test/suite` **1049** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` 38 拒绝；`hao version` = 0.60.3
+- 当前版本：**v0.75.1**（全量 `/api/gc` + JsonBuf；废除 0.75 瘦默认治标）
+- 测试基线：`test/suite` **1049** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` **38** 拒绝；`hao version` = 0.75.1
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
-- **下一批（默认）**：发现残面 / 软 STW 债 / 功能轨续——见 [`记忆文档.md`](记忆文档.md) 第 10 章
-- **编辑器**：[`tools/vscode_plugin`](tools/vscode_plugin) **0.1.0**（语法高亮 + `hao` CLI；非 LSP）
-- **P5～P13 独立冒烟**：`powershell -File script/win/p5_smoke.ps1` → `…+P12+P13 OK`
+- **下一批（默认）**：**F 增量编译**——见 [`记忆文档.md`](记忆文档.md) 第 10 章
+- **编辑器**：[`tools/vscode_plugin`](tools/vscode_plugin) **0.1.4**（语法高亮 + `hao` CLI + Problems 诊断；非完整 LSP）
+- **门禁**：`sema_sym_gate` / `verify_nocrt_gate` / `lsp0_diag_gate` 等见 `script/win/`
 
 ---
 
@@ -122,7 +122,7 @@ powershell -ExecutionPolicy Bypass -File script\win\build_runtime.ps1
 
 ## 四、语言与语法（摘要）
 
-完整语法、语义、限制与 Go / Java / C# 对照见 **[`docs/hao语法.md`](docs/hao语法.md)**。反向门禁：`script\win\negcheck.ps1`（须 **28/28**）。
+完整语法、语义、限制与 Go / Java / C# 对照见 **[`docs/hao语法.md`](docs/hao语法.md)**。反向门禁：`script\win\negcheck.ps1`（须 **38/38**）。
 
 最小示例：
 
@@ -193,7 +193,7 @@ powershell -ExecutionPolicy Bypass -File script\win\build_runtime.ps1
 ```bash
 bash script/test.sh                 # 增量：源未变直接运行已编译 suite.exe
 bash script/test.sh --rebuild-all   # 强制全量重编（改编译器/运行时/stdlib 后）
-powershell -ExecutionPolicy Bypass -File script\win\negcheck.ps1   # 反向：须 28/28 编译拒绝
+powershell -ExecutionPolicy Bypass -File script\win\negcheck.ps1   # 反向：须 38/38 编译拒绝
 ```
 
 套件共 **1015** 行 stdout，全部通过。改 stdlib / 语法后务必 `--rebuild-all`（增量不查 stdlib `.hao` mtime）。
@@ -317,7 +317,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 ## 十一、已知限制
 
 
-- GC：可达性主路径已交付；concurrent sweep 为停顿排期。能力面见抬头版本；详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)。
+- GC：可达性主路径已交付；**页级 mspan + allocBits/markBits + VirtualFree scavenge**（v0.73；废 CRT 永囤 freelist）。能力面见抬头版本；详文 [`docs/IR与GC契约.md`](docs/IR与GC契约.md)。
 - **已交付指针**：OOP/where/自动属性/接口默认（v0.58）；装箱+`? extends`/`? super` PECS（v0.59）；crash `time=`/`where=`/`hao_stack` + 本地时区（v0.59.1）；数组业务上移 `Arrays`+List API（v0.60）——详 [`docs/项目时间线/`](docs/项目时间线/索引.md) / [`docs/hao语法.md`](docs/hao语法.md)。不做 C# 声明处 `in`/`out`。
 - 多文件/包是**整盘编译**（无 `.a`/增量编译）。
 - `new Int`/`new String` 会当成内建类型失败；禁 `Int→lang.Long` 拓宽+装箱链式。
@@ -352,8 +352,8 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | **v0.55.56** 文档全局治理；**v0.55.55** monitor 50RPS CRT；**v0.55.54** monitor AV 栈对齐；**v0.55.53** 定位十九期；**v0.55.52** 定位十八期；**v0.55.51** 定位十七期；**v0.55.50** 定位十六期 |
-| 🔥 **下一批（默认开干）** | 功能轨（具名实参）/ 发现残面 / 软 STW 债（记忆文档第 10 章） |
-| 其后 | I0/I3/I4 dbg（挂 IROps）→ Sema/作用域机（后置）→ select / sweep → 自举 |
+| ✅ 已完成 | **v0.75.1** 全量监控+JsonBuf；**v0.75** HTTP-LAT；**v0.74** LAT-2；插件 0.1.4 |
+| 🔥 **下一批（默认开干）** | **F 增量编译**——记忆文档第 10 章 |
+| 其后 | **F 增量编译** → NIO/MVC → 自举 |
 
 实现步骤见 [`记忆文档.md` 第 10 章](记忆文档.md)；历史见 [`docs/项目时间线/`](docs/项目时间线/索引.md)。

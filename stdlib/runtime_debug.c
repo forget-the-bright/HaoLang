@@ -467,6 +467,11 @@ static void hao_dbg_resolve_src(const char** file, int32_t* line, int32_t* col) 
     }
 }
 
+void hao_dbg_peek_src_loc(const char** file, int32_t* line, int32_t* col) {
+    if (!file || !line || !col) return;
+    hao_dbg_resolve_src(file, line, col);
+}
+
 void hao_dbg_fprint_where(FILE* f) {
     const HaoDbgFrame* fr;
     const char* file = NULL;

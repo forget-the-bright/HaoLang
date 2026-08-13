@@ -1,0 +1,87 @@
+// v0.60.4 DOC-STW：软 STW 握手门禁
+// 多线程密分配 + 强制 collect；断言不变量与 collect 进展。
+// 禁止把 stwIncomplete==0 当绿（协作税合法）。
+package main;
+
+import gc;
+import thread.*;
+import collections.*;
+
+func allocBurst(tag: String, n: Int) {
+    var junk = new ArrayList<Object>();
+    var i = 0;
+    while (i < n) {
+        junk.add(String.valueOf(tag + Integer.toStr(i)));
+        i += 1;
+    }
+}
+
+func main() {
+    val base = gc.GC.stats();
+
+    val w1 = new Thread();
+    val w2 = new Thread();
+    val w3 = new Thread();
+    val w4 = new Thread();
+    w1.start({
+        var r = 0;
+        while (r < 50) {
+            allocBurst("a-", 400);
+            if ((r % 7) == 0) { sleep(1); }
+            r += 1;
+        }
+    });
+    w2.start({
+        var r = 0;
+        while (r < 50) {
+            allocBurst("b-", 400);
+            if ((r % 5) == 0) { sleep(1); }
+            r += 1;
+        }
+    });
+    w3.start({
+        var r = 0;
+        while (r < 50) {
+            allocBurst("c-", 400);
+            r += 1;
+        }
+    });
+    w4.start({
+        var r = 0;
+        while (r < 40) {
+            sleep(2);
+            allocBurst("d-", 200);
+            r += 1;
+        }
+    });
+
+    var n = 0;
+    while (n < 80) {
+        allocBurst("m-", 350);
+        if ((n % 2) == 0) {
+            gc.GC.collect();
+        }
+        n += 1;
+    }
+    w1.join();
+    w2.join();
+    w3.join();
+    w4.join();
+    gc.GC.collect();
+    gc.GC.collect();
+
+    val s = gc.GC.stats();
+    val dCollect = s.collectCount - base.collectCount;
+    val invAbort = s.markAbortCycles == s.markAbortRoot + s.markAbortTerm + s.markAbortParkWd;
+    val invInc = s.stwIncomplete == s.stwIncompleteRoot + s.stwIncompleteTerm;
+    // 若有 abort：根握手税签名（abortRoot 占主导，或总量为 0）
+    val taxOk = s.markAbortCycles == 0 || s.markAbortRoot >= s.markAbortTerm;
+
+    fmt.println(dCollect >= 1);   // true：collect 必进展
+    fmt.println(invAbort);        // true：abort 三分相不变量
+    fmt.println(invInc);          // true：incomplete 两分相不变量
+    fmt.println(taxOk);           // true：abort 时 root 主导或无 abort
+    fmt.println(gc.GC.stwMarkAllFallbacks() == 0); // true：全标活已废
+    // 诊断行（门禁脚本可解析；不作为绿条件要求 incomplete==0）
+    fmt.println($"GATE collectDelta={dCollect} inc={s.stwIncomplete} abort={s.markAbortCycles} grace={gc.GC.stwGraceRescues()} lastOsBlock={s.lastStwOsBlockMissing}");
+}

@@ -29,13 +29,14 @@
 
 /* 扫描种类（存在 GCBlock.scan_kind） */
 #define GC_KIND_OPAQUE  0   /* 叶：值类型 box / 无堆指针载荷；String 头已改 SLOTS */
-#define GC_KIND_SLOTS   1   /* 对象/闭包：scan_meta 为最多 32 槽位图；>32 槽走 FULL */
+#define GC_KIND_SLOTS   1   /* 对象/闭包：scan_meta 为低 ≤32 槽位图 */
 #define GC_KIND_ARRAY   2   /* 数组：scan_meta 低位 is_ptr；扫元素区 */
-#define GC_KIND_FULL    3   /* 过渡：整块用户区保守扫 */
+#define GC_KIND_FULL    3   /* 禁止新建：遗留；VERIFY 遇活块 FATAL；扫作 OPAQUE */
+#define GC_KIND_BITMAP  4   /* 对象：scan_meta=nslots；位图挂槽区尾（u32 字） */
 
 /* typed 分配：返回 16 对齐、已清零的用户指针。kind/meta 写入块头。 */
 void* gc_alloc_ex(size_t n, uint8_t kind, uint64_t meta);
-/* 薄包装 → gc_alloc_ex(n, GC_KIND_FULL, 0) */
+/* 薄包装 → OPAQUE（禁止 FULL 保守堆） */
 void* gc_alloc(size_t n);
 
 /* 混合写屏障：dst 须为槽地址；MARK 期 shade(old)+shade(new)；old→young 记 remset。 */
@@ -94,6 +95,12 @@ int64_t hao_gc_stw_incomplete(void);
 int64_t hao_gc_stw_grace_rescues(void);
 /* 已进入并发标记窗口的回收轮次（v0.51+） */
 int64_t hao_gc_concurrent_mark_cycles(void);
+/* 成功 concurrent sweep 轮次（HAO_GC_STW_SWEEP=1 时不涨） */
+int64_t hao_gc_concurrent_sweep_cycles(void);
+/* exact-size freelist 入队次数（spanSweepChunks API 名保留） */
+int64_t hao_gc_span_sweep_chunks(void);
+/* exact-size freelist alloc 命中次数 */
+int64_t hao_gc_freelist_hits(void);
 /* 堆上用户区字节合计（alloc/sweep 维护；比 liveBytes 更能反映当前堆压） */
 int64_t hao_gc_heap_bytes(void);
 /* mark assist 累计推进的 grey 块数（v0.52+） */
@@ -181,13 +188,14 @@ void     hao_win_cond_init(void* cv);
 int      hao_win_cond_wait(void* cv, void* cs);
 void     hao_win_cond_wake(void* cv);
 void     hao_win_cond_wake_all(void* cv);
-/* 成功扫到返回 1；无法挂起/取上下文返回 0（调用方须放弃本轮回收）。 */
-int      hao_win_suspend_scan(uint32_t tid, char* stack_top,
-                              void (*scan)(char*, char*));
 int64_t  hao_win_now_ns(void);
 uint32_t hao_win_get_console_output_cp(void);
 void     hao_win_set_console_output_cp(uint32_t cp);
 void     hao_win_set_console_cp(uint32_t cp);
+
+/* GC-MSPAN：页级提交（Win VirtualAlloc / POSIX mmap） */
+void* hao_os_valloc(size_t n);
+void  hao_os_vfree(void* p, size_t n);
 #endif
 
 /* ============================================================
@@ -213,6 +221,8 @@ void hao_report_fatal(const char* kind, const char* msg);
 #define HAO_DBG_ARG_MAX  4
 void hao_dbg_set_src_loc(const char* file, int32_t line, int32_t col);
 void hao_dbg_clear_src_loc(void);
+/* 解析当前 TLS/栈上最近用户 .hao 位（供 safepoint 粘滞 / STW miss） */
+void hao_dbg_peek_src_loc(const char** file, int32_t* line, int32_t* col);
 void hao_dbg_push_frame(const char* file, int32_t line, int32_t col, const char* func);
 void hao_dbg_pop_frame(void);
 void hao_dbg_clear_frame_args(void);
@@ -359,6 +369,15 @@ int64_t hao_chan_recv(HaoNativeHandle* h);
 int32_t hao_chan_try_send(HaoNativeHandle* h, int64_t bits);
 int32_t hao_chan_try_recv(HaoNativeHandle* h, int64_t* out);
 void    hao_chan_close(HaoNativeHandle* h);
+/* select 真等待：mode 0=recv 1=send；返回 case 下标，has_default 且无人就绪 -1 */
+typedef struct HaoChanSelectOp {
+    int32_t mode;
+    int32_t _pad;
+    void*   handle; /* HaoNativeHandle* */
+    int64_t bits;
+    int64_t* out;
+} HaoChanSelectOp;
+int32_t hao_chan_select(HaoChanSelectOp* ops, int32_t nop, int32_t has_default);
 
 /* FFI 拷贝隔离：返回 malloc 缓冲（属 C），调用方 free */
 char* hao_ffi_dup_cstr(HaoString* s);
@@ -380,4 +399,28 @@ int32_t hao_unbox_i32(void* p);
  *  对象（runtime_object.c）
  * ============================================================ */
 /* bitmap：bit i=1 表示槽 i 为 GC 指针；vtable/fnptr 槽须为 0 */
+/* nfields≤32：SLOTS；33..64：BITMAP+尾 8B；>64：请用 hao_object_new_map */
 void* hao_object_new(int64_t nfields, int64_t bitmap);
+/* 任意槽数精确位图：words 为 nwords 个 u64（bit = 槽是否 GC 指针） */
+void* hao_object_new_map(int64_t nfields, const uint64_t* words, int64_t nwords);
+/* finalizer 回调被 SEH/隔离吞掉的次数 */
+int64_t hao_gc_finalizer_exceptions(void);
+
+/* ---- 弱/软引用（侧表；referent 不进强根）---- */
+void  hao_weak_register(void* weak_obj, void* referent, int32_t soft);
+void* hao_weak_get(void* weak_obj);
+void  hao_weak_clear(void* weak_obj);
+/* 预注册语言 OOM 异常对象（须常驻根；由 gc.GC.boot 安装） */
+void hao_gc_set_oom_exception(void* exc);
+/* Hao GC.boot/collect/stats/WeakRef 共用；单例须已由 set_oom 安装 */
+void hao_gc_ensure_oom_exc(void);
+/* 测试：粘滞强制下一次起 calloc 失败直至语言 OOM / fatal */
+void hao_gc_test_force_oom_once(void);
+/* STW miss 粘滞：最近未 park 线程的末次 Hao 源码位 */
+HaoString* hao_gc_last_miss_file(void);
+int64_t hao_gc_last_miss_line(void);
+int64_t hao_gc_last_miss_col(void);
+
+/* 异常：是否有 try 帧可接住 throw */
+int hao_exc_has_catcher(void);
+void hao_throw(void* obj);

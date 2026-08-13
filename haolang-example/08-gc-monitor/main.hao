@@ -8,6 +8,7 @@ import collections.*;
 import thread.*;
 import gc;
 import time;
+import os;
 
 func main() {
     val app = new net.HttpApp();
@@ -19,27 +20,44 @@ func main() {
     val n = app.scan("monitor");
     fmt.println($"GC Monitor routes ≈ {n}");
     fmt.println($"open: http://127.0.0.1:{port}/");
-    fmt.println("API: GET /api/gc  |  POST /api/gc/collect");
+    fmt.println("API: GET /api/gc (full) | GET /api/gc/lite | POST /api/gc/collect");
     fmt.println("Ctrl+C 结束");
 
-    // v0.50.4 验收：4000 次保活分配会反复打满 nursery → 协作 STW；
-    // 不得再靠把循环改回 40「假装修好」。/api/gc 应仍可在秒级响应。
-    // v0.55.11：STW 压力高时拉长休眠，避免并发 mark drain 活锁拖死 HTTP。
+    // v0.72：默认稀预热，不靠打满 nursery 折磨 /api/gc。
+    // 压测 STW：HAO_GC_MONITOR_WARM_BATCH=4000 HAO_GC_MONITOR_WARM_PAUSE_MS=500
+    // 禁止把 batch 改回 40 当「修好」。
+    var warmBatch = 1000;
+    var warmPause = 1500;
+    val batchEnv = os.getenv("HAO_GC_MONITOR_WARM_BATCH");
+    if (batchEnv != null) {
+        val p = Integer.parse(batchEnv!!);
+        // 允许 0：latency 门禁关预热，避免造压污染墙钟
+        if (p != null && p!! >= 0) { warmBatch = p!!; }
+    }
+    val pauseEnv = os.getenv("HAO_GC_MONITOR_WARM_PAUSE_MS");
+    if (pauseEnv != null) {
+        val p = Integer.parse(pauseEnv!!);
+        if (p != null && p!! > 0) { warmPause = p!!; }
+    }
+    fmt.println($"warmup batch={warmBatch} pauseMs={warmPause} (env override ok)");
+
     val th1 = new Thread();
     th1.start({
         while (true) {
             var timeBegin = time.now();
-            var junk = new ArrayList<Object>();
-            var i = 0;
-            while (i < 4000) {
-                junk.add(String.valueOf("warm-" + Integer.toStr(i)));
-                i += 1;
+            if (warmBatch > 0) {
+                var junk = new ArrayList<Object>();
+                var i = 0;
+                while (i < warmBatch) {
+                    junk.add(String.valueOf("warm-" + Integer.toStr(i)));
+                    i = i + 1;
+                }
             }
-            var pause = 500;
+            var pause = warmPause;
             val abort = gc.GC.markAbortCycles();
             val inc = gc.GC.stwIncomplete();
-            if (abort > 32 || inc > 64) { pause = 2000; }
-            if (abort > 128 || inc > 256) { pause = 5000; }
+            if (abort > 32 || inc > 64) { pause = warmPause * 4; }
+            if (abort > 128 || inc > 256) { pause = warmPause * 10; }
             sleep(pause);
             var timeEnd = time.now();
             fmt.println($"执行完一次循环造垃圾数据_pause:{pause}: 开始时间-{timeBegin.format("yyyy-MM-dd HH:mm:ss")}-结束时间-{timeEnd.format("yyyy-MM-dd HH:mm:ss")}");

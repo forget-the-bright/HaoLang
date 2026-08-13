@@ -2,7 +2,7 @@
 
 > **语言侧类型属性**（值 / 引用 / 裸指针 · GcManaged 等）见 [`../类型属性.md`](../类型属性.md)；本文只谈 FFI / 去 C 分层理想，**不**替代语言规范表。  
 > **配套 ABI / 托管权**：[`HaoLang ABI 设计方法论 + 内存托管权责规范.md`](HaoLang%20ABI%20设计方法论%20+%20内存托管权责规范.md)（**ABI ≠ 归属**）。  
-> **落地状态（v0.56.0+）**：边界**仅两种合法模式**——① **拷贝语义**（`hao_ffi_dup_*`）② **句柄代理**（`lang.NativeHandle`）。禁止把「借 GC 堆内 `cstr` 给 libc」写成与二者并列的长期合法模式；`hao_str_cstr`/`data` 为桥私有（审计清单见 `runtime_internal.h`）。fs / net / regex / channel / **sync 原子胞** / **reflect `Class.meta`** 已切 Handle。v0.55.62：`os.readFile/writeFile/exists` 业务已在 Hao。  
+> **落地状态（v0.56.0+）**：边界**仅两种合法模式**——① **拷贝语义**（`hao_ffi_dup_*`）② **句柄代理**（`lang.NativeHandle`）。禁止把「借 GC 堆内 `cstr` 给 libc」写成与二者并列的长期合法模式；`hao_str_cstr`/`data` 为桥私有（审计清单见 `runtime_internal.h`）。fs / net / regex / channel / **sync 原子胞** / **reflect `Class.meta`** / **`thread.ThreadPool`** 已切 Handle。藏针回归门禁：`script/win/handle_resource_gate.ps1`。v0.55.62：`os.readFile/writeFile/exists` 业务已在 Hao。  
 > **IR 同步铁律**：改 Handle/ABI/已删 C 符号时，必须同步 `src/irgen` 合成路径（例：v0.56.1 `TypeName.Class` 须 `hao_handle_wrap(@T.meta)` 再入 `classOfMeta`）。门禁见 `script/win/p5_smoke.ps1`。
 
 ## 0\. 前置核心设计哲学（全文总纲）

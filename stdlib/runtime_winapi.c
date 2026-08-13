@@ -15,16 +15,6 @@
 
 /* ---- 手写 ABI 常量 / 不透明缓冲 ---- */
 #define HAO_INFINITE              0xFFFFFFFFu
-#define HAO_THREAD_SUSPEND_RESUME 0x0002u
-#define HAO_THREAD_GET_CONTEXT    0x0008u
-#define HAO_CONTEXT_CONTROL       0x00100001u
-#define HAO_CONTEXT_INTEGER       0x00100002u
-#define HAO_CONTEXT_CONTROL_INTEGER (HAO_CONTEXT_CONTROL | HAO_CONTEXT_INTEGER)
-#define HAO_CONTEXT_RAX_OFF       0x78u  /* Rax..R15 连续 16×8 */
-#define HAO_CONTEXT_RSP_OFF       0x98u
-#define HAO_CONTEXT_FLAGS_OFF     0x30u
-#define HAO_CONTEXT_BUF           0x500u
-#define HAO_CONTEXT_GPRS_BYTES    (16 * 8)
 #define HAO_CRITSEC_BUF           64
 #define HAO_CONDVAR_BUF           8
 
@@ -34,10 +24,6 @@ typedef int      (__stdcall *Fn_CloseHandle)(void*);
 typedef void     (__stdcall *Fn_Sleep)(uint32_t);
 typedef int      (__stdcall *Fn_SwitchToThread)(void);
 typedef uint32_t (__stdcall *Fn_GetCurrentThreadId)(void);
-typedef void*    (__stdcall *Fn_OpenThread)(uint32_t, int, uint32_t);
-typedef uint32_t (__stdcall *Fn_SuspendThread)(void*);
-typedef uint32_t (__stdcall *Fn_ResumeThread)(void*);
-typedef int      (__stdcall *Fn_GetThreadContext)(void*, void*);
 typedef void     (__stdcall *Fn_InitializeCriticalSection)(void*);
 typedef void     (__stdcall *Fn_EnterCriticalSection)(void*);
 typedef void     (__stdcall *Fn_LeaveCriticalSection)(void*);
@@ -67,10 +53,6 @@ typedef struct {
     Fn_Sleep Sleep;
     Fn_SwitchToThread SwitchToThread;
     Fn_GetCurrentThreadId GetCurrentThreadId;
-    Fn_OpenThread OpenThread;
-    Fn_SuspendThread SuspendThread;
-    Fn_ResumeThread ResumeThread;
-    Fn_GetThreadContext GetThreadContext;
     Fn_InitializeCriticalSection InitializeCriticalSection;
     Fn_EnterCriticalSection EnterCriticalSection;
     Fn_LeaveCriticalSection LeaveCriticalSection;
@@ -99,6 +81,9 @@ static int g_crash_filter_installed = 0;
  *   +24 NumberParameters, +32 ExceptionInformation[]。
  * CONTEXT（x64）：Rax 起连续 16×8 @ HAO_CONTEXT_RAX_OFF；Rip @ +0xF8。
  */
+#define HAO_CONTEXT_RAX_OFF       0x78u
+#define HAO_CONTEXT_RSP_OFF       0x98u
+#define HAO_CONTEXT_GPRS_BYTES    (16 * 8)
 #define HAO_CONTEXT_RIP_OFF 0xF8u
 #define HAO_CRASH_STACK_MAX 48
 
@@ -230,10 +215,6 @@ static int hao_win_ensure(void) {
     BIND(Sleep);
     BIND(SwitchToThread);
     BIND(GetCurrentThreadId);
-    BIND(OpenThread);
-    BIND(SuspendThread);
-    BIND(ResumeThread);
-    BIND(GetThreadContext);
     BIND(InitializeCriticalSection);
     BIND(EnterCriticalSection);
     BIND(LeaveCriticalSection);
@@ -331,46 +312,6 @@ void hao_win_cond_wake_all(void* cv) {
     g_win.WakeAllConditionVariable(cv);
 }
 
-/* 挂起 tid：扫 GPR + 栈。失败返回 0（禁止静默当成功）。 */
-int hao_win_suspend_scan(uint32_t tid, char* stack_top,
-                         void (*scan)(char*, char*)) {
-    if (!hao_win_ensure() || !scan) return 0;
-    void* h = NULL;
-    for (int attempt = 0; attempt < 128 && !h; ++attempt) {
-        h = g_win.OpenThread(HAO_THREAD_SUSPEND_RESUME | HAO_THREAD_GET_CONTEXT,
-                             0, tid);
-        if (!h) hao_win_switch_to_thread();
-    }
-    if (!h) return 0;
-    uint32_t susp = (uint32_t)-1;
-    for (int attempt = 0; attempt < 128; ++attempt) {
-        susp = g_win.SuspendThread(h);
-        if (susp != (uint32_t)-1) break;
-        hao_win_switch_to_thread();
-    }
-    if (susp == (uint32_t)-1) {
-        g_win.CloseHandle(h);
-        return 0;
-    }
-    unsigned char ctx[HAO_CONTEXT_BUF];
-    memset(ctx, 0, sizeof ctx);
-    *(uint32_t*)(ctx + HAO_CONTEXT_FLAGS_OFF) = HAO_CONTEXT_CONTROL_INTEGER;
-    if (!g_win.GetThreadContext(h, ctx)) {
-        g_win.ResumeThread(h);
-        g_win.CloseHandle(h);
-        return 0;
-    }
-    char* gprs = (char*)(ctx + HAO_CONTEXT_RAX_OFF);
-    scan(gprs, gprs + HAO_CONTEXT_GPRS_BYTES);
-    char* sp = *(char**)(ctx + HAO_CONTEXT_RSP_OFF);
-    if (stack_top && sp && sp < stack_top &&
-        (size_t)(stack_top - sp) <= (size_t)8 * 1024 * 1024)
-        scan(sp, stack_top);
-    g_win.ResumeThread(h);
-    g_win.CloseHandle(h);
-    return 1;
-}
-
 /* FILETIME → Unix 纳秒（与旧 runtime_time 公式一致） */
 int64_t hao_win_now_ns(void) {
     if (!hao_win_ensure()) return 0;
@@ -391,6 +332,36 @@ void hao_win_set_console_output_cp(uint32_t cp) {
 void hao_win_set_console_cp(uint32_t cp) {
     if (!hao_win_ensure()) return;
     g_win.SetConsoleCP(cp);
+}
+
+/* ---- VirtualAlloc / VirtualFree（mspan 页堆）---- */
+typedef void* (__stdcall *Fn_VirtualAlloc)(void*, size_t, uint32_t, uint32_t);
+typedef int   (__stdcall *Fn_VirtualFree)(void*, size_t, uint32_t);
+static Fn_VirtualAlloc g_VirtualAlloc;
+static Fn_VirtualFree  g_VirtualFree;
+#define HAO_MEM_COMMIT     0x1000u
+#define HAO_MEM_RESERVE    0x2000u
+#define HAO_PAGE_READWRITE 0x04u
+#define HAO_MEM_RELEASE    0x8000u
+
+static void hao_win_vmem_ensure(void) {
+    if (g_VirtualAlloc) return;
+    if (!hao_win_ensure()) return;
+    g_VirtualAlloc = (Fn_VirtualAlloc)hao_dl_sym(g_win.lib, "VirtualAlloc");
+    g_VirtualFree = (Fn_VirtualFree)hao_dl_sym(g_win.lib, "VirtualFree");
+}
+
+void* hao_os_valloc(size_t n) {
+    hao_win_vmem_ensure();
+    if (!g_VirtualAlloc || n == 0) return NULL;
+    return g_VirtualAlloc(NULL, n, HAO_MEM_COMMIT | HAO_MEM_RESERVE, HAO_PAGE_READWRITE);
+}
+
+void hao_os_vfree(void* p, size_t n) {
+    (void)n;
+    hao_win_vmem_ensure();
+    if (!g_VirtualFree || !p) return;
+    g_VirtualFree(p, 0, HAO_MEM_RELEASE);
 }
 
 #endif /* _WIN32 */

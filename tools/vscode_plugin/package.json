@@ -1,8 +1,8 @@
 {
   "name": "haolang",
   "displayName": "HaoLang",
-  "description": "HaoLang 语言支持：语法高亮、snippets、hao CLI 集成（Phase 0+1）",
-  "version": "0.1.2",
+  "description": "HaoLang 语言支持：语法高亮、snippets、hao CLI、诊断→Problems（Phase 0+1+LSP0）",
+  "version": "0.1.4",
   "publisher": "haolang",
   "engines": {
     "vscode": "^1.85.0"
@@ -37,8 +37,8 @@
         "configuration": "./language-configuration.json",
         "firstLine": "^#!/.*\\bhao\\b",
         "icon": {
-          "light": "./icons/hao-light.svg",
-          "dark": "./icons/hao-dark.svg"
+          "light": "./icons/hao-mascot-256.png",
+          "dark": "./icons/hao-mascot-256.png"
         }
       }
     ],
@@ -95,6 +95,11 @@
       {
         "command": "haolang.version",
         "title": "HaoLang: Version",
+        "category": "HaoLang"
+      },
+      {
+        "command": "haolang.diagnose",
+        "title": "HaoLang: Diagnose（诊断→Problems）",
         "category": "HaoLang"
       }
     ],
@@ -183,5 +188,3 @@
     "typescript": "^5.3.3"
   }
 }
-
-

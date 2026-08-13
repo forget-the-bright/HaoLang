@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { registerCommands, createHaoTaskProvider } from "./commands";
 import { registerFormatting } from "./formatting";
+import { registerDiagnostics } from "./diagnostics";
 import { HaoStatusBar } from "./statusBar";
 
 export async function activate(
@@ -8,6 +9,7 @@ export async function activate(
 ): Promise<void> {
   registerCommands(context);
   registerFormatting(context);
+  registerDiagnostics(context);
   context.subscriptions.push(await createHaoTaskProvider());
 
   const status = new HaoStatusBar();

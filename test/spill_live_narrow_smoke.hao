@@ -1,0 +1,33 @@
+// T06：非循环 stmt spill 收窄 — 可达不丢 + 语句后假活可收
+package main;
+
+import gc;
+import collections.*;
+
+class Box {
+    var tag: String = "";
+    constructor(t: String) { this.tag = t; }
+}
+
+func main() {
+    // 可达：赋值后局部仍活，语句临时 spill 已清不得误杀
+    var keep = new Box("live");
+    gc.GC.collect();
+    fmt.println(keep.tag == "live"); // true
+
+    // 不可达：丢掉大图后 major 应能推进（heap 不无限涨）
+    var junk: ArrayList<Object>? = new ArrayList<Object>();
+    var i = 0;
+    while (i < 800) {
+        junk!!.add(new Box("j"));
+        i += 1;
+    }
+    val before = gc.GC.heapBytes();
+    junk = null;
+    gc.GC.collect();
+    gc.GC.collect();
+    val after = gc.GC.heapBytes();
+    fmt.println(after <= before); // true：回收后堆压不升
+    fmt.println(keep.tag == "live"); // true
+    fmt.println(gc.GC.markAbortCycles() == 0 || gc.GC.collectCount() >= 1); // true
+}

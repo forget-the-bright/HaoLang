@@ -26,7 +26,7 @@
 | 突然全 pending | 进程不退、`parkWd=0` | 查是否为旧 binary；须 **v0.55.12** term-drain 放锁 |
 | 运行时长 | `os.Process.uptimeMs` | 进程存活时间 |
 
-GC（v0.55+）：Hao 帧走 **shadow 精确根**；park 扫 GPR + 有界 C 叶（v0.55.18）；minor 扫栈上 old 的 young 子；晋升挂 remset。协作软 STW + **并发 mark**。`/api/*` 默认短连接。详文 [`docs/IR与GC契约.md`](../../docs/IR与GC契约.md)。
+GC（v0.55+）：Hao 帧走 **shadow 精确根**；park 扫 GPR + 有界 C 叶（v0.55.18）；minor 扫栈上 old 的 young 子；晋升挂 remset。协作软 STW + **并发 mark**。`/api/*` 默认 keep-alive（`HAO_HTTP_API_SHORT=1` 才短连）。**v0.75.1**：`GET /api/gc` 全量快照；计时读 `X-Hao-*` 头。详文 [`docs/IR与GC契约.md`](../../docs/IR与GC契约.md)。
 
 **压测注意**：进程仍在、内存很小、HTTP 一直不返回 → 优先查分相 `markAbortRoot`/`Term`/`ParkWd` 与 `lastStw*`（GC/STW 楔死），不是 OOM。**两格同步涨且仍在 collect ≠ 必修 bug**（根未齐 abort 是故意的）。须用**本机新编** `hao build` + 新 `libhaort.a`，勿用旧 `08-gc-monitor.exe`。
 
@@ -42,5 +42,19 @@ hao run haolang-example\08-gc-monitor\main.hao
 
 打开 <http://127.0.0.1:18090/>
 
-示例用 `serveBossWorkers(4)` + 后台 **4000** 次保活分配作验收：密集分配会触发 STW，但 `/api/gc` 应仍可响应。STW 压力高时预热自动拉长休眠（v0.55.11）。
+示例默认 **batch=1000 / pause=1500ms**（v0.72，稀预热）。压测 STW 时：
+
+```powershell
+$env:HAO_GC_MONITOR_WARM_BATCH="4000"
+$env:HAO_GC_MONITOR_WARM_PAUSE_MS="500"
+```
+
 **禁止**把预热改回 40 当作「修好了」。
+
+压测 / 延迟门禁：
+
+- [`script/win/压力测试monitor脚本.ps1`](../../script/win/压力测试monitor脚本.ps1) — p50/p95 + per-GC delta（含 `stwWaitMsTotal`）
+- [`script/win/gc_api_latency_gate.ps1`](../../script/win/gc_api_latency_gate.ps1) — p95 防回归百 ms
+- [`script/win/gc_stw_budget_gate.ps1`](../../script/win/gc_stw_budget_gate.ps1) — 源码预算上限（禁再加长 / 禁 HOT_GRACE）
+
+IWR 有噪声；看 **p95 + ΔstwWait**，勿追求绝对 0ms。

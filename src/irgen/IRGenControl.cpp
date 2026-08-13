@@ -99,11 +99,18 @@ void IRGen::genBlock(HaoLangParser::BlockContext* blk, bool newScope) {
 
 void IRGen::genStatement(HaoLangParser::StatementContext* st) {
     if (!st) return;
+    // 已终结的基本块后面的语句不可达：须先跳过，禁止再插 dbg_set_src_loc
+    // （throw 后 unreachable 再插 call → LLVM「expected instruction opcode」）
+    if (blockTerminated_) return;
+
     setDebugLoc(st);
     emitRuntimeSrcLoc(locFrom(st));
 
-    // 已终结的基本块后面的语句不可达，跳过以保证 IR 合法
-    if (blockTerminated_) return;
+    beginStmtGcTemps();
+    struct StmtGcTempsGuard {
+        IRGen* self;
+        ~StmtGcTempsGuard() { self->endStmtGcTemps(); }
+    } stmtGcGuard{this};
 
     if (auto* v = st->varDecl())      { genVarDecl(v);   return; }
     if (auto* i = st->ifStmt())       { genIf(i);        return; }
@@ -165,7 +172,7 @@ void IRGen::genHaoroutine(HaoLangParser::HaoroutineStmtContext* st) {
 }
 
 // select { case x = ch.recv(): ... case ch.send(v): ... default: ... }
-// 用 try_send/try_recv 轮询；无 default 时短 sleep + safepoint（协作等待）。
+// runtime hao_chan_select：有 default 非阻塞一轮；无 default 登记各 chan 后 park。
 void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
     if (!st) return;
     auto cases = st->selectCase();
@@ -183,12 +190,12 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         HaoLangParser::ExprContext* sendArg = nullptr;
         std::vector<HaoLangParser::StatementContext*> body;
         // 预求值
-        std::string hPtr;             // NativeHandle*（channel.h；非 Long? 藏针）
+        std::string hPtr;             // NativeHandle*
         std::string sendBits;         // i64
         std::string outAlloca;        // recv 用 i64 alloca
         TypePtr bindType;
         std::string bodyLabel;
-        std::string nextTryLabel;
+        int commIndex = -1;           // 通信 case 在 ops 表中的下标
     };
 
     std::vector<CaseInfo> infos;
@@ -208,7 +215,6 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
             return;
         }
         if (comm->ASSIGN()) {
-            // x = ch.method()
             ci.isRecv = true;
             ci.bindName = comm->IDENT(0)->getText();
             ci.method = comm->IDENT(1)->getText();
@@ -243,10 +249,14 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         return;
     }
 
-    // 预求值各 case 的 channel / send 载荷（在循环外，避免重复副作用）
     std::vector<std::string> selSpillSlots;
-    for (auto& ci : infos) {
+    std::vector<int> commIdx;
+    for (int i = 0; i < (int)infos.size(); ++i) {
+        auto& ci = infos[i];
         if (ci.isDefault) continue;
+        ci.commIndex = (int)commIdx.size();
+        commIdx.push_back(i);
+
         Value ch = genExpr(ci.chExpr);
         if (!ch.valid()) return;
         if (!ch.type || ch.type->kind != TypeKind::Class) {
@@ -269,7 +279,6 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         if (!ensureNonNullOperand(ch, ci.chExpr, "select channel")) return;
         std::string fp = fieldPtr(ch.ir, hSlot);
         std::string hLoaded = emitLoad("ptr", fp);
-        // 句柄盒跨 select 循环 safepoint：spill 进 shadow
         std::string hSlotAddr = emitSpillGcRoot("sel.h", hLoaded);
         selSpillSlots.push_back(hSlotAddr);
         ci.hPtr = emitLoad("ptr", hSlotAddr);
@@ -277,6 +286,7 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
         if (ci.isRecv) {
             ci.outAlloca = em_.nextNamed("sel.out");
             emitAllocaAt(ci.outAlloca, "i64");
+            ci.sendBits = "0";
         } else {
             Value arg = genExpr(ci.sendArg);
             if (!arg.valid()) return;
@@ -286,11 +296,9 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
                     return;
                 }
                 if (!ensureNonNullOperand(arg, ci.sendArg, "sendStr")) return;
-                // String 跨循环 safepoint：先 spill 再 ptrtoint
                 std::string strSlot = emitSpillGcRoot("sel.sstr", arg.ir);
                 selSpillSlots.push_back(strSlot);
                 std::string sp = emitLoad("ptr", strSlot);
-                ci.sendBits = em_.nextTemp();
                 ci.sendBits = emitPtrToInt("i64", sp);
             } else if (ci.method == "sendInt") {
                 if (!arg.type || arg.type->kind != TypeKind::Int) {
@@ -302,7 +310,6 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
                              ci.sendArg->getStart()->getCharPositionInLine());
                 ci.sendBits = arg.ir;
             } else {
-                // send(Long)
                 if (!arg.type ||
                     (arg.type->kind != TypeKind::Long && arg.type->kind != TypeKind::Int)) {
                     error(ci.sendArg, "send 需要 Long 或 Int");
@@ -314,117 +321,69 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
                                  ci.sendArg->getStart()->getCharPositionInLine());
                 ci.sendBits = arg.ir;
             }
+            ci.outAlloca = "null";
         }
     }
 
-    std::string rot = em_.nextNamed("sel.rot");
-    emitAllocaAt(rot, "i32");
-    emitStore("i32", "0", rot);
-
-    std::string loopL = em_.nextLabel("sel.loop");
+    int nComm = (int)commIdx.size();
     std::string endL = em_.nextLabel("sel.end");
-    int nComm = 0;
-    for (auto& ci : infos) if (!ci.isDefault) ++nComm;
-    for (size_t i = 0; i < infos.size(); ++i) {
+    for (size_t i = 0; i < infos.size(); ++i)
         infos[i].bodyLabel = em_.nextLabel("sel.body" + std::to_string(i));
-        infos[i].nextTryLabel = em_.nextLabel("sel.try" + std::to_string(i));
-    }
     std::string defaultL;
     for (auto& ci : infos)
         if (ci.isDefault) { defaultL = ci.bodyLabel; break; }
-    std::string sleepL = em_.nextLabel("sel.sleep");
 
-    emitBr(loopL);
-    em_.emitLabel(loopL);
-    blockTerminated_ = false;
-    emitSafepoint();
-
-    // 公平轮转起点
-    std::string startV = emitLoad("i32", rot);
-    if (nComm > 0) {
-        std::string startMod = emitBinOp("srem", "i32", startV, std::to_string(nComm));
-        // 更新 rot
-        std::string nextRot = emitBinOp("add", "i32", startV, "1");
-        emitStore("i32", nextRot, rot);
-
-        // 按 (start+k)%nComm 顺序尝试通信 case（跳过 default）
-        std::vector<int> commIdx;
-        for (int i = 0; i < (int)infos.size(); ++i)
-            if (!infos[i].isDefault) commIdx.push_back(i);
-
-        // 展开：对每个 offset 生成比较链太重；直接固定顺序尝试但用 rot 选第一个检查的
-        // 简化：顺序尝试所有 comm，rot 仅作扰动记录；仍保证有进展
-        (void)startMod;
-        std::string firstTry = infos[commIdx[0]].nextTryLabel;
-        // 用 switch on startMod 跳到不同起点（L5：整条 switch 附 !dbg）
-        std::string swDef = em_.nextLabel("sel.sw.def");
-        std::string sw = "switch i32 " + startMod + ", label %" + swDef + " [";
-        for (int k = 0; k < (int)commIdx.size(); ++k) {
-            sw += " i32 " + std::to_string(k) + ", label %" +
-                  infos[commIdx[k]].nextTryLabel;
-        }
-        sw += " ]" + ops_.dbgSuffix();
-        em_.emit(sw);
-        em_.emitLabel(swDef);
-        emitBr(firstTry);
-
-        for (int k = 0; k < (int)commIdx.size(); ++k) {
-            int idx = commIdx[k];
-            int nextK = (k + 1) % (int)commIdx.size();
-            bool last = (k + 1 == (int)commIdx.size());
-            auto& ci = infos[idx];
-            em_.emitLabel(ci.nextTryLabel);
-            blockTerminated_ = false;
-            std::string ok;
-            if (ci.isRecv) {
-                ok = emitCall("i32", "@hao_chan_try_recv",
-                              "ptr " + ci.hPtr + ", ptr " + ci.outAlloca);
-            } else {
-                ok = emitCall("i32", "@hao_chan_try_send",
-                              "ptr " + ci.hPtr + ", i64 " + ci.sendBits);
-                // try_send: 0 成功，非 0 失败 —— 与 recv 相反！
-                // recv: 1 成功 0 失败；send: 0 成功 1 失败
-            }
-            std::string ready;
-            if (ci.isRecv) {
-                ready = emitICmp("ne", "i32", ok, "0");
-            } else {
-                ready = emitICmp("eq", "i32", ok, "0");
-            }
-            std::string failL = last
-                ? (defaultL.empty() ? sleepL : defaultL)
-                : infos[commIdx[nextK]].nextTryLabel;
-            // last 失败时：若有 default 走 default，否则 sleep 重试
-            // 但 nextK 在 last 时绕回 0 —— 不能绕回，应去 sleep/default
-            if (last)
-                failL = defaultL.empty() ? sleepL : defaultL;
-            else
-                failL = infos[commIdx[k + 1]].nextTryLabel;
-
-            emitCondBr(ready, ci.bodyLabel, failL);
-        }
-    } else {
-        // 只有 default
+    if (nComm == 0) {
         if (defaultL.empty()) {
             error(st, "select 没有可通信的 case");
             return;
         }
         emitBr(defaultL);
-    }
-
-    if (!defaultL.empty() && nComm > 0) {
-        // default 标签在 infos 里，下面统一生成 body；sleep 用于无 default
-    }
-    em_.emitLabel(sleepL);
-    blockTerminated_ = false;
-    if (defaultL.empty()) {
-        emitCallVoid("@hao_thread_sleep_ms", "i32 1");
-        emitBr(loopL);
-    } else if (nComm == 0) {
-        emitBr(defaultL);
     } else {
-        // 有 default 时失败路径已直接进 default，sleep 不可达；占位
-        emitBr(endL);
+        emitSafepoint();
+        /* HaoChanSelectOp = { i32 mode, i32 pad, ptr handle, i64 bits, ptr out } */
+        const std::string opTy = "{ i32, i32, ptr, i64, ptr }";
+        std::string opsArr = em_.nextNamed("sel.ops");
+        emitAllocaAt(opsArr, "[" + std::to_string(nComm) + " x " + opTy + "]");
+
+        for (int k = 0; k < nComm; ++k) {
+            auto& ci = infos[commIdx[k]];
+            std::string opPtr = em_.nextTemp();
+            em_.emit("  " + opPtr + " = getelementptr [" + std::to_string(nComm) +
+                     " x " + opTy + "], ptr " + opsArr + ", i64 0, i64 " +
+                     std::to_string(k) + ops_.dbgSuffix());
+            auto field = [&](int fi) {
+                std::string p = em_.nextTemp();
+                em_.emit("  " + p + " = getelementptr " + opTy + ", ptr " + opPtr +
+                         ", i32 0, i32 " + std::to_string(fi) + ops_.dbgSuffix());
+                return p;
+            };
+            emitStore("i32", ci.isRecv ? "0" : "1", field(0));
+            emitStore("i32", "0", field(1));
+            emitStore("ptr", ci.hPtr, field(2));
+            emitStore("i64", ci.sendBits, field(3));
+            emitStore("ptr", ci.isRecv ? ci.outAlloca : "null", field(4));
+        }
+
+        std::string picked = emitCall(
+            "i32", "@hao_chan_select",
+            "ptr " + opsArr + ", i32 " + std::to_string(nComm) + ", i32 " +
+                (defaultL.empty() ? "0" : "1"));
+
+        std::string swDef = em_.nextLabel("sel.sw.def");
+        std::string sw = "switch i32 " + picked + ", label %" + swDef + " [";
+        if (!defaultL.empty())
+            sw += " i32 -1, label %" + defaultL;
+        for (int k = 0; k < nComm; ++k) {
+            sw += " i32 " + std::to_string(k) + ", label %" +
+                  infos[commIdx[k]].bodyLabel;
+        }
+        sw += " ]" + ops_.dbgSuffix();
+        em_.emit(sw);
+        em_.emitLabel(swDef);
+        blockTerminated_ = false;
+        /* 不应到达：无 default 时 runtime 总返回合法下标 */
+        emitBr(defaultL.empty() ? infos[commIdx[0]].bodyLabel : defaultL);
     }
 
     // ---- 各 case 体 ----
@@ -456,7 +415,6 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
                 dbgTy = "i32";
                 dbgVal = tr;
             } else {
-                // recvStr → String?
                 std::string p = emitIntToPtr("i64", bits);
                 emitStore("ptr", p, addr);
                 dbgTy = "ptr";
@@ -466,7 +424,6 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
                 emitGcRootPush(addr);
                 noteBlockGcSlot(addr);
             }
-            /* poolBind：池槽勿 noteBlock */
             auto sym = std::make_shared<Symbol>();
             sym->kind = SymbolKind::Variable;
             sym->name = ci.bindName;
@@ -474,8 +431,7 @@ void IRGen::genSelect(HaoLangParser::SelectStmtContext* st) {
             sym->isMutable = true;
             sym->irAddr = addr;
             sym->line = st->getStart()->getLine();
-            syms_.declare(sym);
-            /* D14：select 接收绑定薄 DI */
+            hao::symDeclare(syms_, sym);
             {
                 int bl = static_cast<int>(sym->line);
                 emitDbgDeclareIf(addr, ci.bindName, bl, 0);
@@ -572,7 +528,7 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
         sym->irAddr = h.addr;
         sym->boxed = h.boxed;
         sym->line = vd->getStart()->getLine();
-        syms_.declare(sym);
+        hao::symDeclare(syms_, sym);
         emitDbgDeclareIf(h.addr, name, sym->line, 0);
         if (hasInit)
             emitDbgValueIf(type->llvmType(), init.ir, name, sym->line, 0);
@@ -596,7 +552,7 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
         sym->irAddr = addr;
         sym->boxed = false;
         sym->line = vd->getStart()->getLine();
-        syms_.declare(sym);
+        hao::symDeclare(syms_, sym);
         emitDbgDeclareIf(addr, name, sym->line, 0);
         if (hasInit)
             emitDbgValueIf(type->llvmType(), init.ir, name, sym->line, 0);
@@ -635,7 +591,7 @@ void IRGen::genVarDecl(HaoLangParser::VarDeclContext* vd) {
     sym->irAddr = addr;
     sym->boxed = boxed;
     sym->line = vd->getStart()->getLine();
-    syms_.declare(sym);
+    hao::symDeclare(syms_, sym);
     emitDbgDeclareIf(addr, name, sym->line, 0);
     if (hasInit && !boxed)
         emitDbgValueIf(type->llvmType(), init.ir, name, sym->line, 0);
@@ -990,7 +946,7 @@ void IRGen::genForArray(HaoLangParser::ForStmtContext* st, const std::string& va
         sym->type = elemType;
         sym->isMutable = false;    // 循环变量不可赋值
         sym->irAddr = varAddr;
-        syms_.declare(sym);
+        hao::symDeclare(syms_, sym);
         int forLine = st->getStart() ? static_cast<int>(st->getStart()->getLine()) : 1;
         emitDbgDeclareIf(varAddr, varName, forLine, 0);
         /* D11：每轮迭代写回薄 dbg.value */
@@ -1121,7 +1077,7 @@ void IRGen::genForIterable(HaoLangParser::ForStmtContext* st, const std::string&
         sym->type = elemType;
         sym->isMutable = false;    // 循环变量不可赋值
         sym->irAddr = varAddr;
-        syms_.declare(sym);
+        hao::symDeclare(syms_, sym);
         int forLine = st->getStart() ? static_cast<int>(st->getStart()->getLine()) : 1;
         emitDbgDeclareIf(varAddr, varName, forLine, 0);
         /* D11：每轮迭代写回薄 dbg.value */

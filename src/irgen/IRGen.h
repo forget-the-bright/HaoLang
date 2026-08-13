@@ -16,7 +16,9 @@
 #include "irgen/SourceLoc.h"
 #include "sema/Diagnostic.h"
 #include "sema/SymbolTable.h"
+#include "sema/SymBind.h"
 #include "sema/Type.h"
+#include "sema/TypeResolve.h"
 
 #include <map>
 #include <set>
@@ -646,7 +648,7 @@ private:
     // GC v3：引用 / 装箱可空视为堆指针
 /** 与 Type::isGcManaged 同义（docs/类型属性.md）；历史名保留。 */
     static bool isGcPointerType(const TypePtr& t);
-    // 类实例字段位图（slot i 为 GC 指针则 bit i=1；vtable 槽不在 fields 中）
+    // 类实例字段位图（slot i 为 GC 指针则 bit i=1；≤64 槽打包 i64）
     static int64_t objectPtrBitmap(const ClassInfo* ci);
     // 堆 store + 可选写屏障（barrierBase 非空则对 **addr 槽** 调混合屏障）
     void emitHeapStore(const std::string& addr, const std::string& valIr,
@@ -658,6 +660,8 @@ private:
     void emitVarStore(const SymbolPtr& sym, const TypePtr& ty,
                       const std::string& valIr);
     std::string emitObjectNew(int64_t nfields, int64_t bitmap);
+    /* >64 槽走 hao_object_new_map；≤64 走 hao_object_new */
+    std::string emitObjectNewForClass(const ClassInfo* ci);
     // v0.54/v0.55.7：Hao 精确根（shadow；循环提升/spill 池；块尾清槽）
     void emitGcRootPush(const std::string& slotAddr);
     void emitGcRootUnwind();
@@ -769,11 +773,18 @@ private:
     std::string emitSpillGcRoot(const std::string& nameHint, const std::string& ptrIr);
     /* 块/分支作用域：只 store null，不 root_unwind（曾 unwind 致套件 AV）
      * G1 口径（v0.55.33）：本机 + loop spill 即为作用域临时根机；
-     * 语句级 expr 清槽曾误杀 new/构造期根，禁止盲目开启。 */
+     * 语句级「求完就清」曾误杀 new/构造期根 —— 禁止中途清。
+     * T06：语句结束后清 **非池** stmt 临时 spill（支配/最后 use 首刀）。 */
     std::vector<std::vector<std::string>> blockGcSlots_;
     void beginBlockGcScope();
     void endBlockGcScope();
     void noteBlockGcSlot(const std::string& slotAddr);
+    std::vector<std::vector<std::string>> stmtGcTemps_;
+    std::vector<int> stmtGcTempFnDepth_; /* 与 stmtGcTemps_ 平行：所属 emit 函数深度 */
+    int emitFnDepth_ = 0;                /* pushFunctionState 嵌套深度 */
+    void beginStmtGcTemps();
+    void endStmtGcTemps();
+    void noteStmtGcTemp(const std::string& slotAddr);
     // 循环 spill 池：整段嵌套 while/for 共用一层；acquire 复用槽，禁止每轮 root_push
     struct LoopSpillPool {
         std::vector<std::string> slots;
@@ -863,6 +874,12 @@ private:
     // 报错
     void error(antlr4::ParserRuleContext* ctx, const std::string& msg);
     void error(antlr4::Token* tok, const std::string& msg);
+
+    // TRACE 统一入口（HAO_IRGEN_TRACE）；禁业务散落 fprintf
+    static bool irgenTraceEnabled();
+    static void traceIrgen(const char* fmt, ...);
+    // 不变量告警：始终打固定前缀（如 clear_spill_underflow）
+    static void traceIrgenAlways(const char* fmt, ...);
 
     // 当前基本块是否已被终结（ret/br 之后不应再发射指令）
     bool blockTerminated_ = false;
@@ -1078,8 +1095,10 @@ static std::string overloadSuffix(const TypePtr& t);
 
     // 把限定类型名（如 "Circle" / "shapes.Circle"）解析为内部全限定名
     // （如 "shapes$Circle"），找不到返回空串。isIface 输出是否为接口。
+    // G2：实现体在 sema/TypeResolve.cpp；此处仅组装只读环境。
     std::string resolveTypeQualifiedName(HaoLangParser::QualifiedNameContext* qn,
                                          bool* isIface = nullptr);
+    TypeResolveEnv typeResolveEnv(std::vector<TypeResolveImport>* importsOut);
 
     // 已登记的类信息，按名字索引
     std::map<std::string, ClassInfoPtr> classes_;

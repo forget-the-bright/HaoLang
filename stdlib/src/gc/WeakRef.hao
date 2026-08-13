@@ -1,0 +1,37 @@
+// 弱引用：referent 不进强可达；仅强可达消失后 get()→null
+package gc;
+
+extern func hao_weak_register(wr: Object, referent: Object?, soft: Int): Unit = "hao_weak_register";
+extern func hao_weak_get(wr: Object): Object? = "hao_weak_get";
+extern func hao_weak_clear(wr: Object): Unit = "hao_weak_clear";
+
+class WeakRef {
+    constructor(referent: Object?) {
+        GC.boot();
+        hao_weak_register(this, referent, 0);
+    }
+
+    func get(): Object? {
+        return hao_weak_get(this);
+    }
+
+    func clear() {
+        hao_weak_clear(this);
+    }
+}
+
+// 软引用：平常 collect 同弱（仅未强标置空）；OOM 前可清 soft 边（即使曾强标）
+class SoftRef {
+    constructor(referent: Object?) {
+        GC.boot();
+        hao_weak_register(this, referent, 1);
+    }
+
+    func get(): Object? {
+        return hao_weak_get(this);
+    }
+
+    func clear() {
+        hao_weak_clear(this);
+    }
+}

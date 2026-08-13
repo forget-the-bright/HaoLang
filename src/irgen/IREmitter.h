@@ -370,9 +370,10 @@ public:
             "declare i64  @hao_array_pop(ptr)",
             "declare ptr  @hao_array_clone(ptr)",
             "declare ptr  @hao_object_new(i64, i64)",
+            "declare ptr  @hao_object_new_map(i64, ptr, i64)",
             "declare ptr  @hao_handle_wrap(ptr)",  // 永生/外部 raw → NativeHandle（drop=NULL）
-            "declare void @hao_gc_barrier(ptr, ptr)",
-            "declare void @hao_gc_shade(ptr)",
+            "declare void @hao_gc_barrier(ptr, ptr) #1",
+            "declare void @hao_gc_shade(ptr) #1",
             "declare void @hao_gc_add_root_slot(ptr)",
             "declare i64  @hao_gc_root_watermark()",
             "declare void @hao_gc_root_push(ptr)",
@@ -385,6 +386,7 @@ public:
             "declare i32  @hao_chan_try_send(ptr, i64)",
             "declare i32  @hao_chan_try_recv(ptr, ptr)",
             "declare void @hao_chan_close(ptr)",
+            "declare i32  @hao_chan_select(ptr, i32, i32)",
             "declare void @hao_thread_sleep_ms(i32)",
             "declare i8   @hao_type_is(ptr, ptr)",
             "declare void @hao_panic_cast(ptr)",
@@ -413,10 +415,11 @@ public:
         return decls;
     }
 
-    // 属性组：#0 = { returns_twice }，供 hao_try_begin 使用
+    // 属性组：#0 = returns_twice（setjmp）；#1 = GC 写屏障（方法论：noinline + 内存语义）
     static const std::vector<std::string>& attributeGroups() {
         static const std::vector<std::string> groups = {
             "attributes #0 = { returns_twice }",
+            "attributes #1 = { noinline nounwind memory(readwrite) }",
         };
         return groups;
     }

@@ -1,0 +1,27 @@
+// C01：exact-size freelist — 入队可观测；复用后堆仍正确
+package main;
+
+import gc;
+import collections.*;
+
+class Box {
+    var tag: String = "";
+    constructor(t: String) { this.tag = t; }
+}
+
+func main() {
+    var keep = new Box("alive");
+    var junk: ArrayList<Object>? = new ArrayList<Object>();
+    var i = 0;
+    while (i < 1500) {
+        junk!!.add(new Box("x"));
+        i += 1;
+    }
+    val beforeChunks = gc.GC.spanSweepChunks();
+    junk = null;
+    gc.GC.collect();
+    gc.GC.collect();
+    fmt.println(keep.tag == "alive");
+    fmt.println(gc.GC.concurrentSweepCycles() >= 1);
+    fmt.println(gc.GC.spanSweepChunks() > beforeChunks);
+}

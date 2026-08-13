@@ -11,7 +11,7 @@ import reflect;
 //  与语言关键字 haoroutine / select 配套；关闭后 send 失败；recv 在排空后返回 0。
 //  recvStr：关闭且空时返回 null（String?）；勿再假装非空 String。
 //  select { case x = ch.recv(): ... case ch.send(v): ... default: ... }
-//  trySend/tryRecv：非阻塞；select 内部亦走 try_* 轮询（无 default 时短 sleep）。
+//  trySend/tryRecv：非阻塞。select：runtime hao_chan_select 真多路等待（有 default 不 park）。
 //  字符串编组：reflect.ptrOfStr / strOfInt（禁 channel 再 declare ptrtoint 别名）。
 // ============================================================
 
@@ -46,7 +46,7 @@ class Channel {
     func recvInt(): Int { return this.recv(); }
 
     // 非阻塞发送。缓冲满 / 无缓冲槽已占用 / 已关闭 → false。
-    // 无缓冲且槽空：占槽即成功（select 轮询语义；载荷须随后被 recv/tryRecv 取走）。
+    // 无缓冲且槽空：占槽即成功（select 首轮 try 可命中；载荷须随后被 recv/tryRecv 取走）。
     // @return true=已入队或已占会合槽；false=此刻不可发送
     func trySend(bits: Long): Bool {
         return hao_chan_try_send(this.h, bits) == 0;

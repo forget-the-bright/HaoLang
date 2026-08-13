@@ -1,0 +1,22 @@
+// SoftRef：强根仍在时 collect 后 get()!=null；仅软可达 → null
+package main;
+
+import gc;
+
+class Box {
+    var tag: String = "";
+    constructor(t: String) { this.tag = t; }
+}
+
+func main() {
+    gc.GC.boot();
+    var keep = new Box("strong");
+    var srKeep = new gc.SoftRef(keep);
+    var onlySoft: Box? = new Box("soft-only");
+    var srDrop = new gc.SoftRef(onlySoft);
+    onlySoft = null;
+    gc.GC.collect();
+    gc.GC.collect();
+    fmt.println(srKeep.get() != null);
+    fmt.println(srDrop.get() == null);
+}

@@ -1,0 +1,71 @@
+// v0.71：STW 所有权 — mutator 不 leave；不变量仍成立；collect 进展
+package main;
+
+import gc;
+import thread.*;
+import collections.*;
+
+func allocBurst(tag: String, n: Int) {
+    var junk = new ArrayList<Object>();
+    var i = 0;
+    while (i < n) {
+        junk.add(String.valueOf(tag + Integer.toStr(i)));
+        i += 1;
+    }
+}
+
+func main() {
+    val base = gc.GC.stats();
+
+    val w1 = new Thread();
+    val w2 = new Thread();
+    val w3 = new Thread();
+    w1.start({
+        var r = 0;
+        while (r < 40) {
+            allocBurst("a-", 300);
+            r += 1;
+        }
+    });
+    w2.start({
+        var r = 0;
+        while (r < 40) {
+            allocBurst("b-", 300);
+            if ((r % 6) == 0) { sleep(1); }
+            r += 1;
+        }
+    });
+    w3.start({
+        var r = 0;
+        while (r < 30) {
+            sleep(1);
+            allocBurst("c-", 200);
+            r += 1;
+        }
+    });
+
+    var n = 0;
+    while (n < 60) {
+        allocBurst("m-", 280);
+        if ((n % 2) == 0) { gc.GC.collect(); }
+        n += 1;
+    }
+    w1.join();
+    w2.join();
+    w3.join();
+    gc.GC.collect();
+
+    val s = gc.GC.stats();
+    val dCollect = s.collectCount - base.collectCount;
+    val invAbort = s.markAbortCycles == s.markAbortRoot + s.markAbortTerm + s.markAbortParkWd;
+    val invInc = s.stwIncomplete == s.stwIncompleteRoot + s.stwIncompleteTerm;
+    /* parkTrip 可 >= parkWd abort（trip 后由收集者 abort 才涨 parkWd） */
+    val tripOk = s.parkWatchdogTrips >= 0 && s.markAbortParkWd <= s.parkWatchdogTrips + 8;
+
+    fmt.println(dCollect >= 1);
+    fmt.println(invAbort);
+    fmt.println(invInc);
+    fmt.println(tripOk);
+    fmt.println(gc.GC.stwMarkAllFallbacks() == 0);
+    fmt.println($"GATE collectDelta={dCollect} inc={s.stwIncomplete} abort={s.markAbortCycles} parkTrip={s.parkWatchdogTrips} abortPwd={s.markAbortParkWd} thr={s.threshold}");
+}

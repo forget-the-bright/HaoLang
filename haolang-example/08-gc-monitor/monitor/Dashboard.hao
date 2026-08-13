@@ -1,39 +1,73 @@
-// GC / 进程资源监控控制器（指标对齐 .NET Process + GC）
+// GC / 进程资源监控控制器（v0.75.1：全量 /api/gc + 单次 stringify；计时以 X-Hao-* 为准）
 package monitor;
 
 import gc;
+import json;
 import net.*;
 import os;
+import time;
 
-// JSON 快照：字段供前端展示；中文含义见模板标签
+func monoNs(): Long {
+    val t = time.now();
+    return t.ts;
+}
+
+// 可选瘦响应：仅压测 /api/gc/lite（不得作默认）
+class GcLatencyView {
+    var heapBytes: Long = 0;
+    var liveBytes: Long = 0;
+    var freelistBytes: Long = 0;
+    var spanCommitBytes: Long = 0;
+    var privateBytes: Long = 0;
+    var workingSetBytes: Long = 0;
+    var collectCount: Long = 0;
+    var stwIncomplete: Long = 0;
+    var stwIncompleteRoot: Long = 0;
+    var stwIncompleteTerm: Long = 0;
+    var markAbortCycles: Long = 0;
+    var stwWaitMsTotal: Long = 0;
+    var lastCollectHoldMs: Long = 0;
+    var lastUnlinkMs: Long = 0;
+    var lastDrainMs: Long = 0;
+    var lastStatsLockWaitMs: Long = 0;
+    var lastStatsSafepointMs: Long = 0;
+    var lastPublishMs: Long = 0;
+    var statsPublishCount: Long = 0;
+    var gcThreads: Long = 0;
+    var scavengeBytes: Long = 0;
+    var spanCount: Long = 0;
+    var procMs: Long = 0;
+    var gcStatsMs: Long = 0;
+    var handlerMs: Long = 0;
+    var jsonMs: Long = 0;
+    var serverTotalMs: Long = 0;
+    var summary: String = "";
+    var engine: String = "HaoLang GC v0.75.1 HTTP-LAT";
+}
+
+// 全量快照：面板 + 默认 GET /api/gc
 class GcSnapshot {
-    // ---- 进程内存（对标 .NET Process）----
-    var workingSetBytes: Long = 0;   // 工作集：占用的物理内存
-    var privateBytes: Long = 0;      // 专用内存：进程独占提交
-
-    // ---- GC 托管堆（对标 GC 堆，非 OS 工作集）----
-    var liveBytes: Long = 0;         // 上次成功 major 后存活（可能为 0）
-    var heapBytes: Long = 0;         // 当前堆用户区合计（看堆压用这个）
-    var nurseryBytes: Long = 0;      // 新生代已分配压力
+    var workingSetBytes: Long = 0;
+    var privateBytes: Long = 0;
+    var liveBytes: Long = 0;
+    var heapBytes: Long = 0;
+    var nurseryBytes: Long = 0;
     var threshold: Long = 0;
     var allocatedSinceGc: Long = 0;
     var blockCount: Long = 0;
-
-    // ---- 回收次数（二分代：minor≈Gen0，major≈Gen2；无 Gen1）----
-    var minorCount: Long = 0;        // ≈ Gen0
-    var majorCount: Long = 0;        // ≈ Gen2
+    var minorCount: Long = 0;
+    var majorCount: Long = 0;
     var collectCount: Long = 0;
     var finalizerRuns: Long = 0;
     var finalizerSets: Long = 0;
-    var stwIncomplete: Long = 0;     // STW 未齐次数（v0.53 终止未齐则 abort）
-    var stwMarkAllFallbacks: Long = 0; // 已废除全标活，恒 0
-    var concurrentMarkCycles: Long = 0; // 并发标记轮次
-    var markAssistSteps: Long = 0;   // mark assist 推进量
-    var markAbortCycles: Long = 0;   // 终止失败 abort MARK（v0.53.3）
-    var markWorkerSteps: Long = 0;   // GC 私有 mark worker（v0.54）
-    var remsetCount: Long = 0;       // 分代 remset 条目（v0.55.2；仅 minor）
-    var parkWatchdogTrips: Long = 0; // park 超时强行放行（v0.55.11）
-    // v0.55.52：分相定位
+    var stwIncomplete: Long = 0;
+    var stwMarkAllFallbacks: Long = 0;
+    var concurrentMarkCycles: Long = 0;
+    var markAssistSteps: Long = 0;
+    var markAbortCycles: Long = 0;
+    var markWorkerSteps: Long = 0;
+    var remsetCount: Long = 0;
+    var parkWatchdogTrips: Long = 0;
     var stwIncompleteRoot: Long = 0;
     var stwIncompleteTerm: Long = 0;
     var markAbortRoot: Long = 0;
@@ -45,7 +79,6 @@ class GcSnapshot {
     var lastStwParked: Long = 0;
     var lastStwMissing: Long = 0;
     var lastStwOsBlockMissing: Long = 0;
-    // v0.55.53：缺 park 身份 + finalizer 发现
     var lastMissTidCount: Long = 0;
     var lastMissTid0: Long = 0;
     var lastMissTid1: Long = 0;
@@ -53,29 +86,77 @@ class GcSnapshot {
     var finalizerSkipAbort: Long = 0;
     var finalizerLiveAtSweep: Long = 0;
     var lastFinalizerDiag: Long = 0;
-
-    // ---- CPU / 线程 / 句柄 / 运行时长 ----
-    var cpuPercent: Int = 0;         // 0～100；首次采样可能为 0
-    var cpuReady: Bool = false;      // false=尚在采样
-    var threadCount: Long = 0;       // OS 线程数
-    var gcThreads: Long = 0;         // 已注册进 GC STW 的线程
+    var concurrentSweepCycles: Long = 0;
+    var spanSweepChunks: Long = 0;
+    var freelistHits: Long = 0;
+    var stwWaitMsTotal: Long = 0;
+    var spanCommitBytes: Long = 0;
+    var freelistBytes: Long = 0;
+    var scavengeBytes: Long = 0;
+    var scavengeCycles: Long = 0;
+    var spanCount: Long = 0;
+    var lastCollectHoldMs: Long = 0;
+    var lastUnlinkMs: Long = 0;
+    var lastDrainMs: Long = 0;
+    var lastScavengeMs: Long = 0;
+    var lastStatsLockWaitMs: Long = 0;
+    var lastPublishMs: Long = 0;
+    var statsPublishCount: Long = 0;
+    var lastStatsSafepointMs: Long = 0;
+    var cpuPercent: Int = 0;
+    var cpuReady: Bool = false;
+    var threadCount: Long = 0;
+    var gcThreads: Long = 0;
     var handleCount: Long = 0;
     var uptimeMs: Long = 0;
-
     var usagePct: Int = 0;
     var summary: String = "";
     var note: String = "";
-    var engine: String = "HaoLang GC v3（v0.55.53 缺 park tid/龄）+ os.Process";
+    var engine: String = "HaoLang GC v0.75.1 HTTP-LAT";
+    var procMs: Long = 0;
+    var gcStatsMs: Long = 0;
+    var handlerMs: Long = 0;
+    var jsonMs: Long = 0;
+    var serverTotalMs: Long = 0;
+
+    static var procCacheMs: Long = 0;
+    static var cachedWs: Long = 0;
+    static var cachedPrivate: Long = 0;
+    static var cachedHandles: Long = 0;
+    static var cachedThreads: Long = 0;
+    static var cachedUptime: Long = 0;
+    static var cachedCpu: Int = 0;
+    static var cachedCpuReady: Bool = false;
+    static var threadCacheMs: Long = 0;
 
     constructor() {
-        this.refresh();
+        this.note = "v0.75.1：/api/gc 全量 GcSnapshot；jsonMs/serverTotal 以 X-Hao-* 头为准；lite 见 /api/gc/lite。";
     }
 
-    func refresh() {
+    static func nsToMs(deltaNs: Long): Long {
+        if (deltaNs <= 0) return 0;
+        return deltaNs / 1000000;
+    }
+
+    // lean=true：不调 threadCount（禁 Toolhelp）；WS/private 250ms 缓存
+    func refreshProcLean() {
+        val t0 = monoNs();
+        val now = os.Process.uptimeMs();
+        val age = now - GcSnapshot.procCacheMs;
+        if (GcSnapshot.procCacheMs != 0 && age >= 0 && age < 250) {
+            this.workingSetBytes = GcSnapshot.cachedWs;
+            this.privateBytes = GcSnapshot.cachedPrivate;
+            this.handleCount = GcSnapshot.cachedHandles;
+            this.uptimeMs = GcSnapshot.cachedUptime;
+            this.cpuPercent = GcSnapshot.cachedCpu;
+            this.cpuReady = GcSnapshot.cachedCpuReady;
+            this.threadCount = GcSnapshot.cachedThreads;
+            this.procMs = GcSnapshot.nsToMs(monoNs() - t0);
+            return;
+        }
         this.workingSetBytes = os.Process.workingSetBytes();
         this.privateBytes = os.Process.privateBytes();
         this.handleCount = os.Process.handleCount();
-        this.threadCount = os.Process.threadCount();
         this.uptimeMs = os.Process.uptimeMs();
         val cpu = os.Process.cpuPercent();
         if (cpu < 0) {
@@ -85,9 +166,26 @@ class GcSnapshot {
             this.cpuReady = true;
             this.cpuPercent = cpu;
         }
+        // 线程数：≥2s 才刷 Toolhelp；热路径复用缓存（可 0）
+        val tage = now - GcSnapshot.threadCacheMs;
+        if (GcSnapshot.threadCacheMs == 0 || tage < 0 || tage >= 2000) {
+            this.threadCount = os.Process.threadCount();
+            GcSnapshot.threadCacheMs = now;
+            GcSnapshot.cachedThreads = this.threadCount;
+        } else {
+            this.threadCount = GcSnapshot.cachedThreads;
+        }
+        GcSnapshot.procCacheMs = this.uptimeMs;
+        GcSnapshot.cachedWs = this.workingSetBytes;
+        GcSnapshot.cachedPrivate = this.privateBytes;
+        GcSnapshot.cachedHandles = this.handleCount;
+        GcSnapshot.cachedUptime = this.uptimeMs;
+        GcSnapshot.cachedCpu = this.cpuPercent;
+        GcSnapshot.cachedCpuReady = this.cpuReady;
+        this.procMs = GcSnapshot.nsToMs(monoNs() - t0);
+    }
 
-        // v0.53：一次持锁快照，避免十几次 gc_lock_coop
-        val g = gc.GC.stats();
+    func applyGcStats(g: gc.GcStats) {
         this.liveBytes = g.liveBytes;
         this.heapBytes = g.heapBytes;
         this.nurseryBytes = g.nurseryBytes;
@@ -125,26 +223,26 @@ class GcSnapshot {
         this.finalizerSkipAbort = g.finalizerSkipAbort;
         this.finalizerLiveAtSweep = g.finalizerLiveAtSweep;
         this.lastFinalizerDiag = g.lastFinalizerDiag;
+        this.concurrentSweepCycles = g.concurrentSweepCycles;
+        this.spanSweepChunks = g.spanSweepChunks;
+        this.freelistHits = g.freelistHits;
+        this.stwWaitMsTotal = g.stwWaitMsTotal;
+        this.spanCommitBytes = g.spanCommitBytes;
+        this.freelistBytes = g.freelistBytes;
+        this.scavengeBytes = g.scavengeBytes;
+        this.scavengeCycles = g.scavengeCycles;
+        this.spanCount = g.spanCount;
+        this.lastCollectHoldMs = g.lastCollectHoldMs;
+        this.lastUnlinkMs = g.lastUnlinkMs;
+        this.lastDrainMs = g.lastDrainMs;
+        this.lastScavengeMs = g.lastScavengeMs;
+        this.lastStatsLockWaitMs = g.lastStatsLockWaitMs;
+        this.lastPublishMs = g.lastPublishMs;
+        this.statsPublishCount = g.statsPublishCount;
+        this.lastStatsSafepointMs = g.lastStatsSafepointMs;
         this.gcThreads = g.registeredThreads;
-        this.summary = $"GC[v3] live={this.liveBytes}B heap={this.heapBytes}B threshold={this.threshold}B"
-            + $" allocatedSince={this.allocatedSinceGc}B blocks={this.blockCount}"
-            + $" collects={this.collectCount} minor={this.minorCount} major={this.majorCount}"
-            + $" stwIncomplete={this.stwIncomplete}(root={this.stwIncompleteRoot},term={this.stwIncompleteTerm})"
-            + $" concurrentMark={this.concurrentMarkCycles}"
-            + $" markAssist={this.markAssistSteps}"
-            + $" markAbort={this.markAbortCycles}(root={this.markAbortRoot},term={this.markAbortTerm},parkWd={this.markAbortParkWd})"
-            + $" markWorker={this.markWorkerSteps} remset={this.remsetCount}"
-            + $" parkWd={this.parkWatchdogTrips}"
-            + $" lastStw=phase{this.lastStwPhase}/miss{this.lastStwMissing}/{this.lastStwTargets}/os{this.lastStwOsBlockMissing}"
-            + $" missTid0={this.lastMissTid0} missAgeMs={this.lastMissMaxAgeMs}"
-            + $" finDiag={this.lastFinalizerDiag}(skipAbort={this.finalizerSkipAbort},liveFin={this.finalizerLiveAtSweep})";
-        if (this.note.length == 0) {
-            this.note = "对标说明：工作集/专用内存来自 os.Process；"
-                + "heapBytes=当前堆压；liveBytes=上次成功 major 后存活；"
-                + "stwIncomplete/markAbort 同步涨且 abortRoot≈总量 ⇒ 根握手税；"
-                + "missTid0/missAgeMs 定位缺 park 线程；finDiag 1=对象仍活 2=abort 跳过；"
-                + "详文 docs/IR与GC契约.md。";
-        }
+        this.summary = $"heap={this.heapBytes} hold={this.lastCollectHoldMs}"
+            + $" sp={this.lastStatsSafepointMs} collect={this.collectCount}";
         var pct: Int = 0;
         if (this.threshold > 0) {
             val thr = this.threshold;
@@ -154,6 +252,143 @@ class GcSnapshot {
         }
         this.usagePct = pct;
     }
+
+    func refreshFull(withProc: Bool) {
+        val tAll = monoNs();
+        if (withProc) {
+            this.refreshProcLean();
+        }
+        val tGc = monoNs();
+        val g = gc.GC.stats();
+        this.gcStatsMs = GcSnapshot.nsToMs(monoNs() - tGc);
+        this.applyGcStats(g);
+        this.handlerMs = GcSnapshot.nsToMs(monoNs() - tAll);
+    }
+
+    // 手写全量 JSON（禁反射字段税；与面板字段同集合）
+    func toJson(): String {
+        val b = new json.JsonBuf();
+        b.append("{");
+        b.append("\"workingSetBytes\":"); b.append(Long.toStr(this.workingSetBytes));
+        b.append(",\"privateBytes\":"); b.append(Long.toStr(this.privateBytes));
+        b.append(",\"liveBytes\":"); b.append(Long.toStr(this.liveBytes));
+        b.append(",\"heapBytes\":"); b.append(Long.toStr(this.heapBytes));
+        b.append(",\"nurseryBytes\":"); b.append(Long.toStr(this.nurseryBytes));
+        b.append(",\"threshold\":"); b.append(Long.toStr(this.threshold));
+        b.append(",\"allocatedSinceGc\":"); b.append(Long.toStr(this.allocatedSinceGc));
+        b.append(",\"blockCount\":"); b.append(Long.toStr(this.blockCount));
+        b.append(",\"minorCount\":"); b.append(Long.toStr(this.minorCount));
+        b.append(",\"majorCount\":"); b.append(Long.toStr(this.majorCount));
+        b.append(",\"collectCount\":"); b.append(Long.toStr(this.collectCount));
+        b.append(",\"finalizerRuns\":"); b.append(Long.toStr(this.finalizerRuns));
+        b.append(",\"finalizerSets\":"); b.append(Long.toStr(this.finalizerSets));
+        b.append(",\"stwIncomplete\":"); b.append(Long.toStr(this.stwIncomplete));
+        b.append(",\"stwMarkAllFallbacks\":"); b.append(Long.toStr(this.stwMarkAllFallbacks));
+        b.append(",\"concurrentMarkCycles\":"); b.append(Long.toStr(this.concurrentMarkCycles));
+        b.append(",\"markAssistSteps\":"); b.append(Long.toStr(this.markAssistSteps));
+        b.append(",\"markAbortCycles\":"); b.append(Long.toStr(this.markAbortCycles));
+        b.append(",\"markWorkerSteps\":"); b.append(Long.toStr(this.markWorkerSteps));
+        b.append(",\"remsetCount\":"); b.append(Long.toStr(this.remsetCount));
+        b.append(",\"parkWatchdogTrips\":"); b.append(Long.toStr(this.parkWatchdogTrips));
+        b.append(",\"stwIncompleteRoot\":"); b.append(Long.toStr(this.stwIncompleteRoot));
+        b.append(",\"stwIncompleteTerm\":"); b.append(Long.toStr(this.stwIncompleteTerm));
+        b.append(",\"markAbortRoot\":"); b.append(Long.toStr(this.markAbortRoot));
+        b.append(",\"markAbortTerm\":"); b.append(Long.toStr(this.markAbortTerm));
+        b.append(",\"markAbortParkWd\":"); b.append(Long.toStr(this.markAbortParkWd));
+        b.append(",\"lastStwPhase\":"); b.append(Long.toStr(this.lastStwPhase));
+        b.append(",\"lastStwAttempt\":"); b.append(Long.toStr(this.lastStwAttempt));
+        b.append(",\"lastStwTargets\":"); b.append(Long.toStr(this.lastStwTargets));
+        b.append(",\"lastStwParked\":"); b.append(Long.toStr(this.lastStwParked));
+        b.append(",\"lastStwMissing\":"); b.append(Long.toStr(this.lastStwMissing));
+        b.append(",\"lastStwOsBlockMissing\":"); b.append(Long.toStr(this.lastStwOsBlockMissing));
+        b.append(",\"lastMissTidCount\":"); b.append(Long.toStr(this.lastMissTidCount));
+        b.append(",\"lastMissTid0\":"); b.append(Long.toStr(this.lastMissTid0));
+        b.append(",\"lastMissTid1\":"); b.append(Long.toStr(this.lastMissTid1));
+        b.append(",\"lastMissMaxAgeMs\":"); b.append(Long.toStr(this.lastMissMaxAgeMs));
+        b.append(",\"finalizerSkipAbort\":"); b.append(Long.toStr(this.finalizerSkipAbort));
+        b.append(",\"finalizerLiveAtSweep\":"); b.append(Long.toStr(this.finalizerLiveAtSweep));
+        b.append(",\"lastFinalizerDiag\":"); b.append(Long.toStr(this.lastFinalizerDiag));
+        b.append(",\"concurrentSweepCycles\":"); b.append(Long.toStr(this.concurrentSweepCycles));
+        b.append(",\"spanSweepChunks\":"); b.append(Long.toStr(this.spanSweepChunks));
+        b.append(",\"freelistHits\":"); b.append(Long.toStr(this.freelistHits));
+        b.append(",\"stwWaitMsTotal\":"); b.append(Long.toStr(this.stwWaitMsTotal));
+        b.append(",\"spanCommitBytes\":"); b.append(Long.toStr(this.spanCommitBytes));
+        b.append(",\"freelistBytes\":"); b.append(Long.toStr(this.freelistBytes));
+        b.append(",\"scavengeBytes\":"); b.append(Long.toStr(this.scavengeBytes));
+        b.append(",\"scavengeCycles\":"); b.append(Long.toStr(this.scavengeCycles));
+        b.append(",\"spanCount\":"); b.append(Long.toStr(this.spanCount));
+        b.append(",\"lastCollectHoldMs\":"); b.append(Long.toStr(this.lastCollectHoldMs));
+        b.append(",\"lastUnlinkMs\":"); b.append(Long.toStr(this.lastUnlinkMs));
+        b.append(",\"lastDrainMs\":"); b.append(Long.toStr(this.lastDrainMs));
+        b.append(",\"lastScavengeMs\":"); b.append(Long.toStr(this.lastScavengeMs));
+        b.append(",\"lastStatsLockWaitMs\":"); b.append(Long.toStr(this.lastStatsLockWaitMs));
+        b.append(",\"lastPublishMs\":"); b.append(Long.toStr(this.lastPublishMs));
+        b.append(",\"statsPublishCount\":"); b.append(Long.toStr(this.statsPublishCount));
+        b.append(",\"lastStatsSafepointMs\":"); b.append(Long.toStr(this.lastStatsSafepointMs));
+        b.append(",\"cpuPercent\":"); b.append(Integer.toStr(this.cpuPercent));
+        b.append(",\"cpuReady\":");
+        if (this.cpuReady) { b.append("true"); } else { b.append("false"); }
+        b.append(",\"threadCount\":"); b.append(Long.toStr(this.threadCount));
+        b.append(",\"gcThreads\":"); b.append(Long.toStr(this.gcThreads));
+        b.append(",\"handleCount\":"); b.append(Long.toStr(this.handleCount));
+        b.append(",\"uptimeMs\":"); b.append(Long.toStr(this.uptimeMs));
+        b.append(",\"usagePct\":"); b.append(Integer.toStr(this.usagePct));
+        b.append(",\"summary\":"); b.append(json.JSON.quote(this.summary));
+        b.append(",\"note\":"); b.append(json.JSON.quote(this.note));
+        b.append(",\"engine\":"); b.append(json.JSON.quote(this.engine));
+        b.append(",\"procMs\":"); b.append(Long.toStr(this.procMs));
+        b.append(",\"gcStatsMs\":"); b.append(Long.toStr(this.gcStatsMs));
+        b.append(",\"handlerMs\":"); b.append(Long.toStr(this.handlerMs));
+        b.append(",\"jsonMs\":"); b.append(Long.toStr(this.jsonMs));
+        b.append(",\"serverTotalMs\":"); b.append(Long.toStr(this.serverTotalMs));
+        b.append("}");
+        return b.finish();
+    }
+
+    func toLatencyView(): GcLatencyView {
+        val v = new GcLatencyView();
+        v.heapBytes = this.heapBytes;
+        v.liveBytes = this.liveBytes;
+        v.freelistBytes = this.freelistBytes;
+        v.spanCommitBytes = this.spanCommitBytes;
+        v.privateBytes = this.privateBytes;
+        v.workingSetBytes = this.workingSetBytes;
+        v.collectCount = this.collectCount;
+        v.stwIncomplete = this.stwIncomplete;
+        v.stwIncompleteRoot = this.stwIncompleteRoot;
+        v.stwIncompleteTerm = this.stwIncompleteTerm;
+        v.markAbortCycles = this.markAbortCycles;
+        v.stwWaitMsTotal = this.stwWaitMsTotal;
+        v.lastCollectHoldMs = this.lastCollectHoldMs;
+        v.lastUnlinkMs = this.lastUnlinkMs;
+        v.lastDrainMs = this.lastDrainMs;
+        v.lastStatsLockWaitMs = this.lastStatsLockWaitMs;
+        v.lastStatsSafepointMs = this.lastStatsSafepointMs;
+        v.lastPublishMs = this.lastPublishMs;
+        v.statsPublishCount = this.statsPublishCount;
+        v.gcThreads = this.gcThreads;
+        v.scavengeBytes = this.scavengeBytes;
+        v.spanCount = this.spanCount;
+        v.procMs = this.procMs;
+        v.gcStatsMs = this.gcStatsMs;
+        v.handlerMs = this.handlerMs;
+        v.jsonMs = this.jsonMs;
+        v.serverTotalMs = this.serverTotalMs;
+        v.summary = $"srv={this.serverTotalMs} gc={this.gcStatsMs} json={this.jsonMs}"
+            + $" proc={this.procMs} hold={this.lastCollectHoldMs} sp={this.lastStatsSafepointMs}";
+        return v;
+    }
+}
+
+class ProcSnapshot {
+    var workingSetBytes: Long = 0;
+    var privateBytes: Long = 0;
+    var handleCount: Long = 0;
+    var threadCount: Long = 0;
+    var uptimeMs: Long = 0;
+    var cpuPercent: Int = 0;
+    var cpuReady: Bool = false;
+    var procMs: Long = 0;
 }
 
 class CollectResult {
@@ -173,22 +408,82 @@ class DashboardController {
     @GetMapping(path = "/")
     func index(req: HttpRequest): HttpResponse {
         Html.setTemplateRoot("haolang-example/08-gc-monitor/templates");
-        // 预热 CPU 采样（首次 -1）
         os.Process.cpuPercent();
         val snap = new GcSnapshot();
+        snap.refreshFull(true);
         val html = Html.renderFile("dashboard.html", snap);
         return HttpResponse.html(html);
     }
 
+    // 全量 GcSnapshot；单次 stringify；jsonMs/serverTotal 权威在 X-Hao-* 头（body 内为 0 占位）
     @GetMapping(path = "/api/gc")
-    func apiGc(req: HttpRequest): GcSnapshot {
-        return new GcSnapshot();
+    func apiGc(req: HttpRequest): HttpResponse {
+        val t0 = monoNs();
+        val snap = new GcSnapshot();
+        snap.refreshFull(true);
+        snap.jsonMs = 0;
+        snap.serverTotalMs = 0;
+        snap.summary = $"gc={snap.gcStatsMs} proc={snap.procMs} hold={snap.lastCollectHoldMs}"
+            + $" sp={snap.lastStatsSafepointMs} collect={snap.collectCount}";
+        val tJson = monoNs();
+        val body = snap.toJson();
+        val jsonMs = GcSnapshot.nsToMs(monoNs() - tJson);
+        val serverMs = GcSnapshot.nsToMs(monoNs() - t0);
+        val r = HttpResponse.json(200, body);
+        r.headers = "X-Hao-Server-Ms: " + Long.toStr(serverMs) + "\r\n"
+            + "X-Hao-GcStats-Ms: " + Long.toStr(snap.gcStatsMs) + "\r\n"
+            + "X-Hao-Json-Ms: " + Long.toStr(jsonMs) + "\r\n"
+            + "X-Hao-Proc-Ms: " + Long.toStr(snap.procMs) + "\r\n";
+        return r;
+    }
+
+    // 可选瘦路径（压测）；默认面板勿依赖
+    @GetMapping(path = "/api/gc/lite")
+    func apiGcLite(req: HttpRequest): HttpResponse {
+        val t0 = monoNs();
+        val full = new GcSnapshot();
+        full.refreshFull(true);
+        val view = full.toLatencyView();
+        view.jsonMs = 0;
+        view.serverTotalMs = 0;
+        view.summary = $"gc={view.gcStatsMs} proc={view.procMs} hold={view.lastCollectHoldMs}"
+            + $" sp={view.lastStatsSafepointMs}";
+        val tJson = monoNs();
+        val body = json.JSON.toJSONString(view);
+        val jsonMs = GcSnapshot.nsToMs(monoNs() - tJson);
+        val serverMs = GcSnapshot.nsToMs(monoNs() - t0);
+        val r = HttpResponse.json(200, body);
+        r.headers = "X-Hao-Server-Ms: " + Long.toStr(serverMs) + "\r\n"
+            + "X-Hao-Json-Ms: " + Long.toStr(jsonMs) + "\r\n";
+        return r;
+    }
+
+    @GetMapping(path = "/api/proc")
+    func apiProc(req: HttpRequest): ProcSnapshot {
+        val t0 = monoNs();
+        val p = new ProcSnapshot();
+        p.workingSetBytes = os.Process.workingSetBytes();
+        p.privateBytes = os.Process.privateBytes();
+        p.handleCount = os.Process.handleCount();
+        p.threadCount = os.Process.threadCount();
+        p.uptimeMs = os.Process.uptimeMs();
+        val cpu = os.Process.cpuPercent();
+        if (cpu < 0) {
+            p.cpuReady = false;
+            p.cpuPercent = 0;
+        } else {
+            p.cpuReady = true;
+            p.cpuPercent = cpu;
+        }
+        p.procMs = GcSnapshot.nsToMs(monoNs() - t0);
+        return p;
     }
 
     @PostMapping(path = "/api/gc/collect")
     func apiCollect(req: HttpRequest): CollectResult {
         gc.GC.collect();
-        val snap = new GcSnapshot();
-        return new CollectResult("major collect done", snap);
+        val full = new GcSnapshot();
+        full.refreshFull(true);
+        return new CollectResult("major collect done", full);
     }
 }
