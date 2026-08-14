@@ -64,8 +64,11 @@ typedef struct {
     const char* const* ctorParamTypes;
     int64_t isAnnotation; /* v0.50：@interface 注解类型 */
     void* classMirror;    /* v0.50.1：reflect.Class 单例（可变；meta 为 global） */
+    void* jsonWrite;      /* v0.76：$jsonWrite(sb,self,features,indent,stack,depth)；无则 NULL */
 } HaoClassMeta;
 
+typedef void (*HaoJsonWriteFn)(void* sb, void* self, int32_t features, int32_t indent,
+                               void* stack, int32_t depth);
 typedef void* (*HaoFactoryFn)(void*);
 
 /* 全局元数据注册表（编译器生成的各 <cls>_meta 指针，NULL 结尾） */
@@ -87,9 +90,13 @@ HaoNativeHandle* hao_reflect_getclass(void* obj) {
     if (!obj) return wrap_meta(NULL);
     /* 与 field_get 对齐：非堆/已回收 → 清晰 panic，避免错位 CRT AV 被 loc 读成神秘 UAF */
     if (!hao_gc_expect_heap_object(obj)) {
-        fprintf(stderr, "panic: reflect getclass 非对象/已回收 obj=%p\n", obj);
-        fflush(stderr);
-        abort();
+        char buf[96];
+        int n = 0;
+        const char* a = "reflect getclass 非对象/已回收 obj=";
+        while (*a && n < (int)sizeof(buf) - 1) buf[n++] = *a++;
+        n = n + hao_fmt_ptr_angle(buf + n, (int)sizeof(buf) - n, obj);
+        if (n < (int)sizeof(buf)) buf[n] = '\0';
+        hao_panic_msg(buf);
     }
     void* vt = *(void**)obj;
     for (const HaoClassMeta** m = g_metas; m && *m; ++m)
@@ -392,11 +399,13 @@ static HaoString* field_value_to_str(void* obj, const HaoFieldMeta* f) {
     } else if (type_is_base(t, "String")) {
         HaoString* s = *(HaoString**)base;
         if (s && !hao_gc_expect_heap_ptr(s)) {
-            fprintf(stderr,
-                    "panic: reflect String 字段悬空/脏指针 field=%s s=%p obj=%p\n",
-                    f->name ? f->name : "?", (void*)s, obj);
-            fflush(stderr);
-            abort();
+            char buf[160];
+            int n = 0;
+            const char* a = "reflect String 字段悬空/脏指针 s=";
+            while (*a && n < (int)sizeof(buf) - 1) buf[n++] = *a++;
+            n = n + hao_fmt_ptr_angle(buf + n, (int)sizeof(buf) - n, s);
+            if (n < (int)sizeof(buf)) buf[n] = '\0';
+            hao_panic_msg(buf);
         }
         return s;
     } else {
@@ -414,9 +423,13 @@ HaoString* hao_reflect_field_get_at(HaoNativeHandle* h, void* obj, int32_t i) {
     if (!obj || !m || i < 0 || i >= m->fieldCount) return NULL;
     hao_gc_add_root(obj);
     if (!hao_gc_expect_heap_object(obj)) {
-        fprintf(stderr, "panic: reflect field_get_at 非对象/已回收 obj=%p\n", obj);
-        fflush(stderr);
-        abort();
+        char buf[96];
+        int n = 0;
+        const char* a = "reflect field_get_at 非对象/已回收 obj=";
+        while (*a && n < (int)sizeof(buf) - 1) buf[n++] = *a++;
+        n = n + hao_fmt_ptr_angle(buf + n, (int)sizeof(buf) - n, obj);
+        if (n < (int)sizeof(buf)) buf[n] = '\0';
+        hao_panic_msg(buf);
     }
     f = &m->fields[i];
     r = field_value_to_str(obj, f);
@@ -461,9 +474,13 @@ HaoString* hao_reflect_field_get(HaoNativeHandle* h, void* obj, HaoString* fname
     hao_gc_add_root(obj);
     hao_gc_add_root(fname);
     if (!hao_gc_expect_heap_object(obj)) {
-        fprintf(stderr, "panic: reflect field_get 非对象/已回收 obj=%p\n", obj);
-        fflush(stderr);
-        abort();
+        char buf[96];
+        int n = 0;
+        const char* a = "reflect field_get 非对象/已回收 obj=";
+        while (*a && n < (int)sizeof(buf) - 1) buf[n++] = *a++;
+        n = n + hao_fmt_ptr_angle(buf + n, (int)sizeof(buf) - n, obj);
+        if (n < (int)sizeof(buf)) buf[n] = '\0';
+        hao_panic_msg(buf);
     }
     name_c = hao_ffi_dup_cstr(fname);
     f = find_field(m, name_c);
@@ -819,3 +836,25 @@ float hao_reflect_bits_flt(int64_t i) {
 }
 int64_t hao_reflect_bool_val(int8_t b) { return b ? 1 : 0; }
 int8_t  hao_reflect_val_bool(int64_t i) { return i ? 1 : 0; }
+/* v0.76：若类有 $jsonWrite 则调用并返回 1；否则 0（回落反射 Bean） */
+int32_t hao_json_try_write(void* obj, void* sb, int32_t features, int32_t indent,
+                           void* stack, int32_t depth) {
+    void* vt;
+    const HaoClassMeta* m;
+    if (!obj || !sb) return 0;
+    if (!hao_gc_expect_heap_object(obj)) return 0;
+    vt = *(void**)obj;
+    m = NULL;
+    for (const HaoClassMeta** p = g_metas; p && *p; ++p) {
+        if ((*p)->vtablePtr == vt) { m = *p; break; }
+    }
+    if (!m || !m->jsonWrite) return 0;
+    hao_gc_add_root(obj);
+    hao_gc_add_root(sb);
+    if (stack) hao_gc_add_root(stack);
+    ((HaoJsonWriteFn)m->jsonWrite)(sb, obj, features, indent, stack, depth);
+    if (stack) hao_gc_remove_root(stack);
+    hao_gc_remove_root(sb);
+    hao_gc_remove_root(obj);
+    return 1;
+}

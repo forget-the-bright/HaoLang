@@ -245,23 +245,22 @@ val s = when (k) { 1 -> "一"; else -> "多" };
 
 ```hao
 val a = new [Int]{ 1, 2, 3 };   // 必须 new（v0.60.3）
-var xs: [Int] = new [Int]{};
-xs += 10;                       // 动态 push
-fmt.println(xs.pop());
-val b = new [Int](n);           // 定长
+val b = new [Int](n);           // 定长（对齐 Java/C#）
 val c = new [Int](n, fill);
 val d = new [Int]{ ...a, ...b }; // 展开须在 new [T]{…} 内
 Array arr = a;                  // [T] <: Array <: Object
 fmt.println(arr.length);
-fmt.println(arr.capacity);
 val e = a.clone();
+// 可增长序列：collections.ArrayList / lang.StringBuilder（禁数组 += / pop）
 ```
 
-**规则（RFC-0005）**
+**规则（RFC-0005 + v0.77/v0.78）**
 
 - 裸 `[1,2,3]` / `[]` **非法**；实例必须经 `new`。
-- `[T] → Array → Object`；`Array` 无下标/`pop`；索引仅 `[T]`。
-- 算法工具：`collections.*`（泛型 `[T]`）；布局与扩容仍为运行时 C。
+- `[T] → Array → Object`；`Array` 无下标；索引仅 `[T]`。
+- **定长**：创建后 `.length` 只读；**无公开 `.capacity`**（容量在 List/StringBuilder）。
+- 块拷贝：`collections.arraycopy`（≡ System.arraycopy / Array.Copy）。
+- 算法工具：`collections.Arrays`；**数组 `+=` / `.pop()` 已废**（v0.78；对齐 Java/C#）。
 
 可变参数见 [RFC-0006](RFC/0006-可变参数.md)：`func Sum(values: Int...)`。
 

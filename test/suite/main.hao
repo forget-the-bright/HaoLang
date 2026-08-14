@@ -9,7 +9,7 @@ package main;
 func main() {
     featuresTest();      // 基础/变量/算术/字符串/if/while/Unicode
     functionsTest();     // 函数/递归/重载/函数作值
-    arraysTest();        // 数组/when/动态扩容 + v0.32 定长/展开
+    arraysTest();        // 数组/when/ArrayList + v0.32 定长/展开
     classesTest();       // 类/字段/构造/方法
     oopTest();           // 继承/接口/多态/super/is-as
     genericsTest();      // 泛型
@@ -17,7 +17,7 @@ func main() {
     lambdasTest();       // 闭包/高阶函数
     collectionsTest();   // List/Map/Set/Queue/Stack + for-in + 对象key
     collectionsExtraTest(); // v0.34：LinkedList/LHM/树/CHM/Map新API
-    langFixTest();       // v0.34.1：!! 赋值 + 数组形参 +=
+    langFixTest();       // v0.34.1：!! 赋值 + ArrayList 形参
     gcApiTest();         // v0.34：gc.GC（中途 collect 应安全）
     gcv3Test();          // v0.35.1：remset/静态根/by-ref 屏障
     objectTest();        // Object 根/hashCode/equals/toString

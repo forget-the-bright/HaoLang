@@ -50,6 +50,7 @@
 - C 基础类型 → 转换为 HaoLang 原生类型（String/Int/数组）
 
 - 禁止原生指针、C 结构体、C 字符串直接暴露到上层
+- **数组 / 字符串缓冲（v0.77/v0.78）**：`[T]` 定长（对齐 Java/C#）；块拷贝仅 `hao_arraycopy`；`lang.StringBuilder` / `ArrayList` 在 Hao 自管 count。禁止 `hao_array_append_*` / `ensure_cap` / `set_len` / `push`/`pop`、公开 `array.capacity`、数组 `+=`、`hao_str_byte_arr` 内部别名、用 `hao_str_concat` 冒充 Builder。故意 fatal 须 `hao_report_fatal` 落 `hao-crash.log`。
 
 - 统一 FFI 调用前后 GC 根状态、安全点状态维护
 

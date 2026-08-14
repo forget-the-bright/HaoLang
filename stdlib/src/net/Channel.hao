@@ -8,6 +8,7 @@
 // ============================================================
 package net;
 
+import collections;
 import thread;
 
 public class ChannelHandlerContext {
@@ -40,29 +41,29 @@ public class ChannelHandler {
 }
 
 public class ChannelPipeline {
-    var handlers: [ChannelHandler];
+    var handlers: collections.ArrayList<ChannelHandler>;
     var channel: Channel?;
 
     constructor() {
-        this.handlers = new [ChannelHandler]{};
+        this.handlers = new collections.ArrayList<ChannelHandler>();
         this.channel = null;
     }
 
     func addLast(h: ChannelHandler): ChannelPipeline {
-        this.handlers += h;
+        this.handlers.add(h);
         return this;
     }
 
     func invokeFrom(start: Int, msg: Object): Object? {
         var cur: Object? = msg;
         var i = start;
-        while (i < this.handlers.length) {
+        while (i < this.handlers.size()) {
             if (cur == null) { return null; }
             val ctx = new ChannelHandlerContext();
             ctx.channel = this.channel;
             ctx.pipeline = this;
             ctx.index = i;
-            cur = this.handlers[i].channelRead(ctx, cur!!);
+            cur = this.handlers.get(i).channelRead(ctx, cur!!);
             i += 1;
         }
         return cur;

@@ -5,6 +5,8 @@
 // ============================================================
 package main;
 
+import collections;
+
 class Node {
     var value: Int = 0;
     var next: Node? = null;
@@ -60,15 +62,15 @@ func main() {
     fmt.println(big != null);       // true
     fmt.println(sumList(big));      // 0+1+...+99999 = 4999950000
 
-    // 4. 数组反复扩容：产生大量旧数组垃圾
-    var arr: [Int] = new [Int]{};
+    // 4. ArrayList 反复扩容：产生大量旧底层数组垃圾
+    var arr = new collections.ArrayList<Int>();
     i = 0;
     while (i < 20000) {
-        arr += i;
+        arr.add(i);
         i += 1;
     }
-    fmt.println(arr.length);        // 20000
-    fmt.println(arr[19999]);        // 19999
+    fmt.println(arr.size());        // 20000
+    fmt.println(arr.get(19999));    // 19999
 
     // 5. 装箱值类型 Int? 大量分配
     i = 0;

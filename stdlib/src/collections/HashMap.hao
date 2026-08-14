@@ -35,12 +35,7 @@ class HashMap<K, V> : Map<K, V> {
         this.capacity = 16;
         this.count = 0;
         this.growthEnabled = true;
-        this.table = new [HashMapBucket<K,V>?]{};
-        var i = 0;
-        while (i < 16) {
-            this.table += null;
-            i += 1;
-        }
+        this.table = new [HashMapBucket<K,V>?](16);
     }
 
     func size(): Int { return this.count; }
@@ -52,13 +47,8 @@ class HashMap<K, V> : Map<K, V> {
         if (this.capacity <= 0 || this.capacity > 1073741823) { return; }
         val old = this.table;
         this.capacity = this.capacity * 2;
-        this.table = new [HashMapBucket<K,V>?]{};
+        this.table = new [HashMapBucket<K,V>?](this.capacity);
         this.count = 0;
-        var i = 0;
-        while (i < this.capacity) {
-            this.table += null;
-            i += 1;
-        }
         var j = 0;
         while (j < old.length) {
             val e = old[j];
@@ -176,12 +166,7 @@ class HashMap<K, V> : Map<K, V> {
     func clear() {
         this.capacity = 16;
         this.count = 0;
-        this.table = new [HashMapBucket<K,V>?]{};
-        var i = 0;
-        while (i < 16) {
-            this.table += null;
-            i += 1;
-        }
+        this.table = new [HashMapBucket<K,V>?](16);
     }
 
     func putIfAbsent(key: K, value: V): V? {
@@ -211,12 +196,15 @@ class HashMap<K, V> : Map<K, V> {
 
     // 便利：键数组快照（非 Map 接口；套件/内部用）
     func keys(): [K] {
-        var out: [K] = new [K]{};
+        if (this.count <= 0) { return new [K]{}; }
+        var out: [K] = new [K](this.count);
+        var oi = 0;
         var i = 0;
         while (i < this.table.length) {
             val e = this.table[i];
             if (e != null && e!!.occupied) {
-                out += e!!.key;
+                out[oi] = e!!.key;
+                oi = oi + 1;
             }
             i += 1;
         }
@@ -224,12 +212,15 @@ class HashMap<K, V> : Map<K, V> {
     }
 
     func valueArray(): [V] {
-        var out: [V] = new [V]{};
+        if (this.count <= 0) { return new [V]{}; }
+        var out: [V] = new [V](this.count);
+        var oi = 0;
         var i = 0;
         while (i < this.table.length) {
             val e = this.table[i];
             if (e != null && e!!.occupied) {
-                out += e!!.value;
+                out[oi] = e!!.value;
+                oi = oi + 1;
             }
             i += 1;
         }
@@ -245,13 +236,18 @@ class HashMap<K, V> : Map<K, V> {
     }
 
     func entrySet(): Iterable<MapEntry<K, V>> {
-        var out: [MapEntry<K, V>] = new [MapEntry<K, V>]{};
+        if (this.count <= 0) {
+            return new ArrayIterable<MapEntry<K, V>>(new [MapEntry<K, V>]{});
+        }
+        var out: [MapEntry<K, V>] = new [MapEntry<K, V>](this.count);
+        var oi = 0;
         var i = 0;
         while (i < this.table.length) {
             val e = this.table[i];
             if (e != null && e!!.occupied) {
                 val ent: MapEntry<K, V> = new SimpleMapEntry<K, V>(e!!.key, e!!.value);
-                out += ent;
+                out[oi] = ent;
+                oi = oi + 1;
             }
             i += 1;
         }

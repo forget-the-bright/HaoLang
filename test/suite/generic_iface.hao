@@ -3,6 +3,8 @@
 //        接口类型变量接收泛型类实例、for-in 走 Iterable 接口路径。
 package main;
 
+import collections;
+
 // 自定义泛型接口：可迭代 + 迭代器
 interface gi_Iterable<T> {
     func iterator(): gi_Iterator<T>;
@@ -12,13 +14,13 @@ interface gi_Iterator<T> {
     func next(): T;
 }
 
-// 自定义泛型类实现泛型接口
+// 自定义泛型类实现泛型接口（内部用 ArrayList）
 class gi_List<T> : gi_Iterable<T> {
-    var items: [T];
-    constructor() { this.items = new [T]{}; }
-    func add(x: T) { this.items += x; }
-    func size(): Int { return this.items.length; }
-    func get(i: Int): T { return this.items[i]; }
+    var items: collections.ArrayList<T>;
+    constructor() { this.items = new collections.ArrayList<T>(); }
+    func add(x: T) { this.items.add(x); }
+    func size(): Int { return this.items.size(); }
+    func get(i: Int): T { return this.items.get(i); }
     func iterator(): gi_Iterator<T> {
         return new gi_ListIter<T>(this);
     }

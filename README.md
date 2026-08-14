@@ -5,8 +5,8 @@
 - 源码后缀：`.hao`
 - 编译器命令：`hao`（对标 `go` 命令行）
 - 目标：原生机器码、静态链接、单文件绿色分发、可自举
-- 当前版本：**v0.75.2**（JSON-BEAN：BeanInfo 缓存 + 索引读；废除手写 toJson 旁路）
-- 测试基线：`test/suite` **1049** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` **38** 拒绝；`hao version` = 0.75.2
+- 当前版本：**v0.77.0**（数组对齐 Java/C#：定长 + `arraycopy`；SB/ArrayList 真模型；废 C append）
+- 测试基线：`test/suite` **1052** 行 stdout + 退出码 0（`test.sh` 含 loc/spill 冒烟）；反向 `script/win/negcheck.ps1` **38** 拒绝；`hao version` = 0.77.0
 - **包仓**：`HAO_REGISTRY`=源，`HAO_REPO`=本地仓（默认 `~/.hao/repo`）；测试规范：私服 HTTP + `HAO_REPO=repo/LocalRepo`——见 [`docs/hao命令.md`](docs/hao命令.md) §4
 - **下一批（默认）**：**F 增量编译**——见 [`记忆文档.md`](记忆文档.md) 第 10 章
 - **编辑器**：[`tools/vscode_plugin`](tools/vscode_plugin) **0.1.4**（语法高亮 + `hao` CLI + Problems 诊断；非完整 LSP）
@@ -352,7 +352,7 @@ powershell -ExecutionPolicy Bypass -File script\win\package.ps1 -Zip
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | **v0.75.2** JSON-BEAN；**v0.75.1** 全量监控；**v0.75** HTTP-LAT；插件 0.1.4 |
+| ✅ 已完成 | **v0.77** 数组 Java/C#；**v0.76** `$jsonWrite`；插件 0.1.4 |
 | 🔥 **下一批（默认开干）** | **F 增量编译**——记忆文档第 10 章 |
 | 其后 | **F 增量编译** → NIO/MVC → 自举 |
 

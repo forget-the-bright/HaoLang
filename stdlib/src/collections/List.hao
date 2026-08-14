@@ -1,11 +1,11 @@
 // HaoLang 标准库 —— collections 包
 // ----------------------------------------------
 //  List<T>：序列接口（对标 Java java.util.List）。
-//  ArrayList<T>：基于动态数组的实现（对标 Java ArrayList 语义）。
-//  底层复用语言内建 [T]（自动 2 倍扩容、GC 回收）。
+//  ArrayList<T>：对标 Java ArrayList / C# List —— elementData + size。
 //  线程安全：否。随机访问 O(1)，中部删除 O(n)。
-//  不是：LinkedList（链表）；也不是不可变列表。
 package collections;
+
+import exception;
 
 interface List<T> : Iterable<T> {
     func size(): Int;
@@ -23,88 +23,94 @@ interface List<T> : Iterable<T> {
 }
 
 class ArrayList<T> : List<T> {
-    var items: [T];
+    var elementData: [T];
+    var count: Int;
 
-    // 构造空列表。
-    // 复杂度：O(1)
     constructor() {
-        this.items = new [T]{};
+        this.elementData = new [T](10);
+        this.count = 0;
     }
 
-    // Iterable：返回迭代器（toArray 不拷贝，O(1)）。
-    // @return ArrayIterator，与内部数组共享存储——迭代时勿结构性修改
-    // 复杂度：O(1)
+    static func withCapacity(capacity: Int): ArrayList<T> {
+        val list = new ArrayList<T>();
+        var c = capacity;
+        if (c < 0) { c = 0; }
+        if (c < 10) { c = 10; }
+        list.elementData = new [T](c);
+        list.count = 0;
+        return list;
+    }
+
     func iterator(): Iterator<T> {
         return new ArrayIterator<T>(this.toArray());
     }
 
-    // @return 元素个数
-    // 复杂度：O(1)
     func size(): Int {
-        return this.items.length;
+        return this.count;
     }
 
-    // 尾部追加。
-    // @param item 元素
-    // 复杂度：摊销 O(1)
-    func add(item: T) {
-        this.items += item;
-    }
-
-    // 按下标取值。
-    // @param index 0-based
-    // @return 元素
-    // 异常：越界由运行时数组下标检查触发
-    // 复杂度：O(1)
-    func get(index: Int): T {
-        return this.items[index];
-    }
-
-    // 按下标改值。
-    // @param index 0-based
-    // @param item  新值
-    // 复杂度：O(1)
-    func set(index: Int, item: T) {
-        this.items[index] = item;
-    }
-
-    // 删除指定位置元素，后续元素前移。
-    // @param index 0-based
-    // @return 被删除的元素
-    // 复杂度：O(n)
-    func removeAt(index: Int): T {
-        val removed = this.items[index];
-        var i = index;
-        while (i < this.items.length - 1) {
-            this.items[i] = this.items[i + 1];
-            i += 1;
+    func ensureCapacity(minCapacity: Int) {
+        if (this.elementData.length >= minCapacity) { return; }
+        var nc = this.elementData.length * 2;
+        if (nc < minCapacity) { nc = minCapacity; }
+        if (nc < 10) { nc = 10; }
+        val old = this.elementData;
+        val neu = new [T](nc);
+        if (this.count > 0) {
+            val n: Long = this.count;
+            _arraycopy(neu, 0, old, 0, n);
         }
-        this.items.pop();
+        this.elementData = neu;
+    }
+
+    func add(item: T) {
+        this.ensureCapacity(this.count + 1);
+        this.elementData[this.count] = item;
+        this.count = this.count + 1;
+    }
+
+    func get(index: Int): T {
+        if (index < 0 || index >= this.count) {
+            throw new exception.Exception("ArrayList.get：越界");
+        }
+        return this.elementData[index];
+    }
+
+    func set(index: Int, item: T) {
+        if (index < 0 || index >= this.count) {
+            throw new exception.Exception("ArrayList.set：越界");
+        }
+        this.elementData[index] = item;
+    }
+
+    func removeAt(index: Int): T {
+        if (index < 0 || index >= this.count) {
+            throw new exception.Exception("ArrayList.removeAt：越界");
+        }
+        val removed = this.elementData[index];
+        val moved = this.count - index - 1;
+        if (moved > 0) {
+            val m: Long = moved;
+            val ip1: Long = index + 1;
+            val ix: Long = index;
+            _arraycopy(this.elementData, ix, this.elementData, ip1, m);
+        }
+        this.count = this.count - 1;
         return removed;
     }
 
-    // @return 是否为空
-    // 复杂度：O(1)
     func isEmpty(): Bool {
-        return this.items.length == 0;
+        return this.count == 0;
     }
 
-    // 线性查找元素是否存在（相等用语言 ==）。
-    // @param item 目标元素
-    // @return 是否存在
-    // 复杂度：O(n)
     func contains(item: T): Bool {
         return this.indexOf(item) >= 0;
     }
 
-    // 返回首次出现下标；未找到返回 -1。
-    // @param item 目标元素
-    // @return 0-based 下标或 -1
-    // 复杂度：O(n)
     func indexOf(item: T): Int {
         var i = 0;
-        while (i < this.items.length) {
-            if (this.items[i] == item) {
+        while (i < this.count) {
+            if (this.elementData[i] == item) {
                 return i;
             }
             i += 1;
@@ -112,14 +118,10 @@ class ArrayList<T> : List<T> {
         return -1;
     }
 
-    // 返回末次出现下标；未找到返回 -1。
-    // @param item 目标元素
-    // @return 0-based 下标或 -1
-    // 复杂度：O(n)
     func lastIndexOf(item: T): Int {
-        var i = this.items.length - 1;
+        var i = this.count - 1;
         while (i >= 0) {
-            if (this.items[i] == item) {
+            if (this.elementData[i] == item) {
                 return i;
             }
             i -= 1;
@@ -127,10 +129,6 @@ class ArrayList<T> : List<T> {
         return -1;
     }
 
-    // 删除首次匹配元素。
-    // @param item 目标
-    // @return 是否删除成功
-    // 复杂度：O(n)
     func remove(item: T): Bool {
         val idx = this.indexOf(item);
         if (idx < 0) {
@@ -140,9 +138,6 @@ class ArrayList<T> : List<T> {
         return true;
     }
 
-    // 追加另一数组的全部元素。
-    // @param items 源数组
-    // 复杂度：O(n)
     func addAll(items: [T]) {
         var i = 0;
         while (i < items.length) {
@@ -151,58 +146,46 @@ class ArrayList<T> : List<T> {
         }
     }
 
-    // 清空列表（重建空底层数组）。
-    // 复杂度：O(1)
     func clear() {
-        this.items = new [T]{};
+        this.elementData = new [T](10);
+        this.count = 0;
     }
 
-    // 返回底层数组引用（不拷贝）。
-    // @return 内部 [T]；修改会影响 List
-    // 复杂度：O(1)
     func toArray(): [T] {
-        return this.items;
+        val out = new [T](this.count);
+        if (this.count > 0) {
+            val n: Long = this.count;
+            _arraycopy(out, 0, this.elementData, 0, n);
+        }
+        return out;
     }
 
-    // ---------- 函数式 API（v0.9.0 起为泛型方法；ArrayList 专有）----------
-
-    // 把每个元素经 f 转换，返回新 List<R>。
-    // @param f 映射函数；R 由 lambda 返回类型推断
-    // @return 新列表，不修改 this
-    // 复杂度：O(n)
     func map<R>(f: (T) -> R): List<R> {
         val result = new ArrayList<R>();
         var i = 0;
-        while (i < this.items.length) {
-            result.add(f(this.items[i]));
+        while (i < this.count) {
+            result.add(f(this.elementData[i]));
             i += 1;
         }
         return result;
     }
 
-    // 保留谓词为 true 的元素。
-    // @param f 谓词
-    // @return 新列表
-    // 复杂度：O(n)
     func filter(f: (T) -> Bool): List<T> {
         val result = new ArrayList<T>();
         var i = 0;
-        while (i < this.items.length) {
-            if (f(this.items[i])) {
-                result.add(this.items[i]);
+        while (i < this.count) {
+            if (f(this.elementData[i])) {
+                result.add(this.elementData[i]);
             }
             i += 1;
         }
         return result;
     }
 
-    // 对每个元素执行副作用。
-    // @param f 回调
-    // 复杂度：O(n)
     func forEach(f: (T) -> Unit) {
         var i = 0;
-        while (i < this.items.length) {
-            f(this.items[i]);
+        while (i < this.count) {
+            f(this.elementData[i]);
             i += 1;
         }
     }

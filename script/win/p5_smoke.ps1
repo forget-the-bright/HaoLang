@@ -233,7 +233,7 @@ Write-Host "OK   reflect ptrOf whitelist"
 
 # ---- 13) 业务 .hao 禁 hao_array_*（布局 C 仅 runtime；JSON 已去 array 桥）----
 $haoArrHits = Get-ChildItem -Path (Join-Path $root "stdlib\src") -Recurse -Filter "*.hao" |
-    Select-String -Pattern 'hao_array_len|hao_array_get_obj|hao_array_get_ptr|hao_array_new|hao_array_push|hao_array_pop'
+    Select-String -Pattern 'hao_array_len|hao_array_get_obj|hao_array_get_ptr|hao_array_new|hao_arraycopy'
 if ($haoArrHits) {
     $haoArrHits | Select-Object -First 8 | ForEach-Object {
         Write-Host "  $($_.Path):$($_.LineNumber) $($_.Line.Trim())"

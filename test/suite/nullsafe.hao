@@ -73,13 +73,15 @@ func nullsafeTest() {
     // 9. try/finally 返回 Int?（unwind 槽须按 ptr 存，勿 sext i32）
     fmt.println(nsTryRet()!!);   // 7
 
-    // 10. [Int?] 装箱数组：esz=8、push/pop/下标
-    var na: [Int?] = new [Int?]{ 1, null };
-    na += 3;
+    // 10. [Int?] 装箱数组：esz=8、定长下标（禁 array += / pop）
+    var na: [Int?] = new [Int?](3);
+    na[0] = 1;
+    na[1] = null;
+    na[2] = 3;
     fmt.println(na[0]!!);        // 1
     fmt.println(na[1] == null);  // true
     fmt.println(na[2]!!);        // 3
-    fmt.println(na.pop()!!);     // 3
+    fmt.println(na[2]!!);        // 3（原 pop 末尾值）
 
     // 11. 可空静态字段默认 null
     fmt.println(NsBox.slot == null);  // true

@@ -267,10 +267,13 @@ class LinkedList<T> : List<T> {
     // @return 新数组快照
     // 复杂度：O(n)
     func toArray(): [T] {
-        var out: [T] = new [T]{};
+        if (this.count <= 0) { return new [T]{}; }
+        var out: [T] = new [T](this.count);
+        var oi = 0;
         var cur = this.head;
         while (cur != null) {
-            out += cur!!.value;
+            out[oi] = cur!!.value;
+            oi = oi + 1;
             cur = cur!!.next;
         }
         return out;

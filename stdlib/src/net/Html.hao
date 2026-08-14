@@ -166,8 +166,7 @@ public class Html {
             var out = "";
             var i = 0;
             while (i < sz) {
-                var args: [Long] = new [Long]{};
-                args += i;
+                var args: [Long] = new [Long]{ i };
                 val item = t.invokeObj(obj, "get", args);
                 if (item != null) {
                     out = out + Html.renderInner(inner, item!!, root);
@@ -258,8 +257,7 @@ public class Html {
         // Map：get(key)
         val t = reflect.typeOf(ctx);
         if (t.methodParamCount("keys") == 0 && t.methodParamCount("get") == 1) {
-            var args: [Long] = new [Long]{};
-            args += reflect.ptrOfStr(key);
+            var args: [Long] = new [Long]{ reflect.ptrOfStr(key) };
             return t.invokeObj(ctx, "get", args);
         }
         // Bean 字段

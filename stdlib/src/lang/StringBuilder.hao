@@ -1,0 +1,234 @@
+// ============================================================
+//  lang.StringBuilder / StringBuffer —— 对标 Java AbstractStringBuilder
+// ------------------------------------------------------------
+//  value.length = 容量；count = 已用字节。全 Hao + Arrays.arraycopy。
+//  禁 C append_*/ensure_cap/set_len。
+// ============================================================
+package lang;
+
+import collections;
+import sync;
+
+class StringBuilder {
+    var value: [Byte];
+    var count: Int;
+
+    constructor() {
+        this.value = new [Byte](16);
+        this.count = 0;
+    }
+
+    static func withCapacity(capacity: Int): StringBuilder {
+        val sb = new StringBuilder();
+        var c = capacity;
+        if (c < 16) { c = 16; }
+        sb.value = new [Byte](c);
+        sb.count = 0;
+        return sb;
+    }
+
+    func byteLength(): Int {
+        return this.count;
+    }
+
+    func length(): Int {
+        return this.count;
+    }
+
+    func capacity(): Int {
+        return this.value.length;
+    }
+
+    func ensureCapacity(minimumCapacity: Int) {
+        var m = minimumCapacity;
+        if (m < 0) { m = 0; }
+        if (this.value.length >= m) { return; }
+        var nc = this.value.length * 2;
+        if (nc < m) { nc = m; }
+        if (nc < 16) { nc = 16; }
+        val old = this.value;
+        val neu = new [Byte](nc);
+        if (this.count > 0) {
+            collections.arraycopy(old, 0, neu, 0, this.count);
+        }
+        this.value = neu;
+    }
+
+    func clear() {
+        this.count = 0;
+    }
+
+    func setLength(newLength: Int) {
+        var n = newLength;
+        if (n < 0) { n = 0; }
+        if (n > this.count) {
+            this.ensureCapacity(n);
+            var i = this.count;
+            while (i < n) {
+                this.value[i] = 0;
+                i += 1;
+            }
+        }
+        this.count = n;
+    }
+
+    // 对齐 Java getChars：先独立拷贝字节，再 ensureCapacity（禁内部别名跨 GC）
+    func append(s: String): StringBuilder {
+        val src = hao_str_get_bytes(s);
+        val n = src.length;
+        if (n <= 0) { return this; }
+        this.ensureCapacity(this.count + n);
+        collections.arraycopy(src, 0, this.value, this.count, n);
+        this.count = this.count + n;
+        return this;
+    }
+
+    func append(n: Long): StringBuilder {
+        if (n == 0) {
+            this.ensureCapacity(this.count + 1);
+            this.value[this.count] = 48;
+            this.count = this.count + 1;
+            return this;
+        }
+        if (n == Long.MIN_VALUE) {
+            return this.append("-9223372036854775808");
+        }
+        var x = n;
+        var neg = false;
+        if (x < 0) {
+            neg = true;
+            x = 0 - x;
+        }
+        val tmp = new [Byte](20);
+        var ti = 0;
+        while (x > 0) {
+            val d: Int = x % 10;
+            val b: Byte = 48 + d;
+            tmp[ti] = b;
+            ti += 1;
+            x = x / 10;
+        }
+        var need = ti;
+        if (neg) { need = need + 1; }
+        this.ensureCapacity(this.count + need);
+        if (neg) {
+            this.value[this.count] = 45;
+            this.count = this.count + 1;
+        }
+        var j = ti - 1;
+        while (j >= 0) {
+            this.value[this.count] = tmp[j];
+            this.count = this.count + 1;
+            j -= 1;
+        }
+        return this;
+    }
+
+    func append(n: Int): StringBuilder {
+        val nl: Long = n;
+        return this.append(nl);
+    }
+
+    func append(b: Bool): StringBuilder {
+        if (b) { return this.append("true"); }
+        return this.append("false");
+    }
+
+    func append(c: Char): StringBuilder {
+        var cp: Int = c;
+        if (cp < 0) { cp = 0xFFFD; }
+        if (cp > 0x10FFFF) { cp = 0xFFFD; }
+        if (cp <= 0x7F) {
+            this.ensureCapacity(this.count + 1);
+            val b: Byte = cp;
+            this.value[this.count] = b;
+            this.count = this.count + 1;
+        } else if (cp <= 0x7FF) {
+            this.ensureCapacity(this.count + 2);
+            val b0: Byte = 0xC0 | (cp >> 6);
+            val b1: Byte = 0x80 | (cp & 0x3F);
+            this.value[this.count] = b0;
+            this.value[this.count + 1] = b1;
+            this.count = this.count + 2;
+        } else if (cp <= 0xFFFF) {
+            this.ensureCapacity(this.count + 3);
+            val b0: Byte = 0xE0 | (cp >> 12);
+            val b1: Byte = 0x80 | ((cp >> 6) & 0x3F);
+            val b2: Byte = 0x80 | (cp & 0x3F);
+            this.value[this.count] = b0;
+            this.value[this.count + 1] = b1;
+            this.value[this.count + 2] = b2;
+            this.count = this.count + 3;
+        } else {
+            this.ensureCapacity(this.count + 4);
+            val b0: Byte = 0xF0 | (cp >> 18);
+            val b1: Byte = 0x80 | ((cp >> 12) & 0x3F);
+            val b2: Byte = 0x80 | ((cp >> 6) & 0x3F);
+            val b3: Byte = 0x80 | (cp & 0x3F);
+            this.value[this.count] = b0;
+            this.value[this.count + 1] = b1;
+            this.value[this.count + 2] = b2;
+            this.value[this.count + 3] = b3;
+            this.count = this.count + 4;
+        }
+        return this;
+    }
+
+    func appendNull(): StringBuilder {
+        return this.append("null");
+    }
+
+    override func toString(): String {
+        if (this.count <= 0) {
+            return "";
+        }
+        val exact = new [Byte](this.count);
+        collections.arraycopy(this.value, 0, exact, 0, this.count);
+        return hao_str_from_byte_arr(exact);
+    }
+}
+
+class StringBuffer {
+    var inner: StringBuilder;
+    var lock: sync.Mutex;
+
+    constructor() {
+        this.inner = new StringBuilder();
+        this.lock = new sync.Mutex();
+    }
+
+    static func withCapacity(capacity: Int): StringBuffer {
+        val sb = new StringBuffer();
+        sb.inner = StringBuilder.withCapacity(capacity);
+        return sb;
+    }
+
+    func append(s: String): StringBuffer {
+        this.lock.lock();
+        this.inner.append(s);
+        this.lock.unlock();
+        return this;
+    }
+
+    func append(n: Long): StringBuffer {
+        this.lock.lock();
+        this.inner.append(n);
+        this.lock.unlock();
+        return this;
+    }
+
+    func clear() {
+        this.lock.lock();
+        this.inner.clear();
+        this.lock.unlock();
+    }
+
+    override func toString(): String {
+        this.lock.lock();
+        val r = this.inner.toString();
+        this.lock.unlock();
+        return r;
+    }
+}
+
+// hao_str_* 见 lang/native.hao

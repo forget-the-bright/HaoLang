@@ -181,15 +181,15 @@ func mvcTest() {
     fmt.println(mt.ctorParamType(0));                    // Int
     fmt.println(mt.ctorParamType(1));                    // String
     fmt.println(mt.newInstance() == null);               // true（无参路径拒绝）
-    var margs: [Long] = new [Long]{};
-    margs += 3;
-    margs += reflect.ptrOfStr("ab");
+    var margs: [Long] = new [Long](2);
+    margs[0] = 3;
+    margs[1] = reflect.ptrOfStr("ab");
     val mo = mt.newInstanceArgs(margs);
     fmt.println(mo != null);                             // true
     val box = mo!! as SuiteMultiCtor;
     fmt.println(box.sumLen());                           // 5（3+2）
-    var badArity: [Long] = new [Long]{};
-    badArity += 1;
+    var badArity: [Long] = new [Long](1);
+    badArity[0] = 1;
     fmt.println(mt.newInstanceArgs(badArity) == null);   // true
 
     // 静态构造：反射 new 后字段来自 staticinit
@@ -223,8 +223,8 @@ func mvcTest() {
     fmt.println(it.canNewInstance());                    // false
     fmt.println(it.hasFactory());                        // true
     val dep = new SuiteMvcDep("dep-ok");
-    var iargs: [Long] = new [Long]{};
-    iargs += reflect.ptrOf(dep);
+    var iargs: [Long] = new [Long](1);
+    iargs[0] = reflect.ptrOf(dep);
     fmt.println(app.registerNewArgs(it, iargs));         // true
     val th5 = new thread.Thread();
     th5.start({ app.serveOnce(); });

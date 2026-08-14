@@ -13,21 +13,23 @@ interface MyIterator<T> {
     func next(): T;
 }
 
-// 自定义泛型类实现泛型接口
+// 自定义泛型类实现泛型接口（内部用 ArrayList）
 class MyList<T> : MyIterable<T> {
-    var items: [T];
-    constructor() { this.items = new [T]{}; }
-    func add(x: T) { this.items += x; }
+    var items: collections.ArrayList<T>;
+    constructor() { this.items = new collections.ArrayList<T>(); }
+    func add(x: T) { this.items.add(x); }
+    func size(): Int { return this.items.size(); }
+    func get(i: Int): T { return this.items.get(i); }
     func iterator(): MyIterator<T> {
-        return new MyListIter<T>(this.items);
+        return new MyListIter<T>(this);
     }
 }
 class MyListIter<T> : MyIterator<T> {
-    var arr: [T];
+    var list: MyList<T>;
     var index: Int;
-    constructor(arr: [T]) { this.arr = arr; this.index = 0; }
-    func hasNext(): Bool { return this.index < this.arr.length; }
-    func next(): T { val i = this.index; this.index += 1; return this.arr[i]; }
+    constructor(list: MyList<T>) { this.list = list; this.index = 0; }
+    func hasNext(): Bool { return this.index < this.list.size(); }
+    func next(): T { val i = this.index; this.index += 1; return this.list.get(i); }
 }
 
 func main() {

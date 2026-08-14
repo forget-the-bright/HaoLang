@@ -619,6 +619,7 @@ void IRGen::genPendingInstantiations() {
                 }
             }
             genSyntheticPropMethods(inst);
+            emitJsonWrite(inst);
 
             currentSubst_      = savedSubst;
             currentTypeParams_ = savedParams;
@@ -985,7 +986,7 @@ void IRGen::emitClassMeta() {
         // ClassMeta：+ factory + ctorParamCount + ctorParamTypes + isAnnotation（v0.50）
         // + classMirror（v0.50.1 Class 单例；meta 须为 global 方可写入）
         em_.addGlobal("%r.HaoClassMeta = type { ptr, ptr, ptr, i64, ptr, i64, ptr, "
-                      "i64, ptr, i64, ptr, i64, i64, ptr, i64, ptr, i64, ptr }");
+                      "i64, ptr, i64, ptr, i64, i64, ptr, i64, ptr, i64, ptr, ptr }");
     }
 
     auto visStrM = [](MethodInfo::Vis v, bool isStatic) {
@@ -1191,7 +1192,11 @@ void IRGen::emitClassMeta() {
             ", i64 " + std::to_string(ci->ctorParamTypes.size()) +
             ", ptr @" + cname + ".meta_ctor_params" +
             ", i64 " + (ci->isAnnotation ? "1" : "0") +
-            ", ptr null }");
+            ", ptr null, ptr " +
+            (jsonWriteFns_.count(cname) && !jsonWriteFns_[cname].empty()
+                 ? jsonWriteFns_[cname]
+                 : std::string("null")) +
+            " }");
         metaRefs.push_back(metaName);
     }
 
@@ -2755,11 +2760,215 @@ void IRGen::genClass(HaoLangParser::ClassDeclContext* cls) {
         // 字段与属性无需生成代码（合成访问器另发）
     }
     genSyntheticPropMethods(ci);
+    emitJsonWrite(ci);
 }
 
-// 生成枚举类代码。成员在 collectClassMembers 中已合成（见 collectEnumMembers）；
-// 这里手工发射构造器、name/ordinal/toString 方法，并委托 genStaticConstructor
-// 创建各常量实例（isEnum 分支）。
+// v0.76：@Class.$jsonWrite(ptr sb, ptr this, i32 features, i32 indent, ptr stack, i32 depth)
+// 写入 lang.StringBuilder；对标 Fastjson ASM / STJ source-gen。
+std::string IRGen::emitJsonWrite(const ClassInfoPtr& ci) {
+    if (!ci || ci->isAbstract || ci->isEnum || ci->isGenericTemplate() ||
+        !ci->hasVTable) {
+        if (ci) jsonWriteFns_[ci->name] = "";
+        return "null";
+    }
+    // 依赖 json.JSON.quoteIntoSb；未链入 json 包时不生成（meta 留 null）
+    if (!lookupClass("json$JSON")) {
+        jsonWriteFns_[ci->name] = "";
+        return "null";
+    }
+    const std::string& cname = ci->name;
+    // 缓冲类自身不生成（避免元循环）
+    if (cname == "lang$StringBuilder" || cname == "lang$StringBuffer" ||
+        cname == "json$JsonBuf" || cname == "json$JSON") {
+        jsonWriteFns_[cname] = "";
+        return "null";
+    }
+
+    std::string fn = "@" + cname + ".$jsonWrite";
+    jsonWriteFns_[cname] = fn;
+
+    em_.resetFunctionState();
+    currentReturn_ = Type::makeUnit();
+    sawReturn_ = false;
+    blockTerminated_ = false;
+    inMain_ = false;
+    currentClass_ = ci;
+    inConstructor_ = false;
+    thisAddr_.clear();
+
+    em_.emitBlank();
+    em_.emitRaw("; $jsonWrite " + cname);
+    em_.emitRaw(
+        "define void " + fn +
+        "(ptr %sb.arg, ptr %this.arg, i32 %features.arg, i32 %indent.arg, "
+        "ptr %stack.arg, i32 %depth.arg) {");
+    em_.emitLabel("entry");
+    beginFunctionGcRoots();
+
+    auto appendStr = [&](const std::string& lit) {
+        std::string c = em_.internString(lit);
+        std::string p = emitCall("ptr", "@hao_str_from_cstr", "ptr " + c);
+        (void)emitCall("ptr", "@lang$StringBuilder.append",
+                       "ptr %sb.arg, ptr " + p);
+    };
+    auto appendLongReg = [&](const std::string& reg) {
+        (void)emitCall("ptr", "@lang$StringBuilder.append$Long",
+                       "ptr %sb.arg, i64 " + reg);
+    };
+    auto appendIntReg = [&](const std::string& reg) {
+        (void)emitCall("ptr", "@lang$StringBuilder.append$Int",
+                       "ptr %sb.arg, i32 " + reg);
+    };
+    auto appendBoolReg = [&](const std::string& reg) {
+        (void)emitCall("ptr", "@lang$StringBuilder.append$Bool",
+                       "ptr %sb.arg, i8 " + reg);
+    };
+
+    appendStr("{");
+    bool first = true;
+    for (const auto& f : ci->fields) {
+        if (f.isStatic) continue;
+        if (f.name.empty() || f.name[0] == '_') continue;
+        if (!f.type) continue;
+
+        if (!first) appendStr(",");
+        first = false;
+        appendStr("\"" + f.name + "\":");
+
+        std::string fp = fieldPtr("%this.arg", f.slot);
+        TypeKind k = f.type->kind;
+
+        auto emitNullElse = [&](const std::string& ptrReg,
+                                const std::function<void()>& onNonNull) {
+            std::string isNull = em_.nextTemp();
+            em_.emitRaw("  " + isNull + " = icmp eq ptr " + ptrReg + ", null");
+            std::string thenL = em_.nextLabel("jw.then");
+            std::string elseL = em_.nextLabel("jw.else");
+            std::string joinL = em_.nextLabel("jw.join");
+            em_.emitRaw("  br i1 " + isNull + ", label %" + thenL +
+                        ", label %" + elseL);
+            em_.emitLabel(thenL);
+            (void)emitCall("ptr", "@lang$StringBuilder.appendNull",
+                           "ptr %sb.arg");
+            em_.emitRaw("  br label %" + joinL);
+            em_.emitLabel(elseL);
+            onNonNull();
+            em_.emitRaw("  br label %" + joinL);
+            em_.emitLabel(joinL);
+        };
+
+        if (f.type->isBoxedNullable()) {
+            // Int?/Long?/Bool?/…：装箱 ptr
+            std::string box = emitLoad("ptr", fp);
+            emitNullElse(box, [&]() {
+                if (k == TypeKind::Long || k == TypeKind::ULong ||
+                    k == TypeKind::UIntPtr) {
+                    std::string v =
+                        emitCall("i64", "@hao_unbox_i64", "ptr " + box);
+                    appendLongReg(v);
+                } else if (k == TypeKind::Float) {
+                    std::string v =
+                        emitCall("float", "@hao_unbox_f32", "ptr " + box);
+                    std::string sreg =
+                        emitCall("ptr", "@hao_float_to_str", "float " + v);
+                    (void)emitCall("ptr", "@lang$StringBuilder.append",
+                                   "ptr %sb.arg, ptr " + sreg);
+                } else if (k == TypeKind::Double) {
+                    std::string v =
+                        emitCall("double", "@hao_unbox_f64", "ptr " + box);
+                    std::string sreg =
+                        emitCall("ptr", "@hao_double_to_str", "double " + v);
+                    (void)emitCall("ptr", "@lang$StringBuilder.append",
+                                   "ptr %sb.arg, ptr " + sreg);
+                } else if (k == TypeKind::Bool) {
+                    std::string wide =
+                        emitCall("i32", "@hao_unbox_i32", "ptr " + box);
+                    std::string b = em_.nextTemp();
+                    em_.emitRaw("  " + b + " = trunc i32 " + wide + " to i8");
+                    appendBoolReg(b);
+                } else {
+                    // 其余整型 / Char → append$Int
+                    std::string wide =
+                        emitCall("i32", "@hao_unbox_i32", "ptr " + box);
+                    appendIntReg(wide);
+                }
+            });
+        } else if (k == TypeKind::Long || k == TypeKind::ULong ||
+            k == TypeKind::UIntPtr) {
+            std::string v = emitLoad("i64", fp);
+            appendLongReg(v);
+        } else if (k == TypeKind::Int || k == TypeKind::UInt ||
+                   k == TypeKind::Short || k == TypeKind::UShort ||
+                   k == TypeKind::Byte || k == TypeKind::SByte ||
+                   k == TypeKind::Char) {
+            std::string lt = f.type->llvmType();
+            std::string v = emitLoad(lt, fp);
+            if (lt != "i32") {
+                // sext/zext to i32 for append$Int
+                std::string w = em_.nextTemp();
+                if (k == TypeKind::Byte || k == TypeKind::UShort ||
+                    k == TypeKind::UInt)
+                    em_.emitRaw("  " + w + " = zext " + lt + " " + v + " to i32");
+                else
+                    em_.emitRaw("  " + w + " = sext " + lt + " " + v + " to i32");
+                v = w;
+            }
+            appendIntReg(v);
+        } else if (k == TypeKind::Bool) {
+            std::string v = emitLoad("i8", fp);
+            appendBoolReg(v);
+        } else if (k == TypeKind::String) {
+            std::string v = emitLoad("ptr", fp);
+            emitNullElse(v, [&]() {
+                emitCallVoid("@json$JSON.quoteIntoSb",
+                             "ptr %sb.arg, ptr " + v);
+            });
+        } else if (k == TypeKind::Class ||
+                   (f.type->isReferenceType() && k != TypeKind::String &&
+                    k != TypeKind::Array)) {
+            // 引用：null 或 try_write；无生成则 null
+            std::string v = emitLoad("ptr", fp);
+            emitNullElse(v, [&]() {
+                std::string wr = emitCall(
+                    "i32", "@hao_json_try_write",
+                    "ptr " + v +
+                        ", ptr %sb.arg, i32 %features.arg, i32 %indent.arg, "
+                        "ptr %stack.arg, i32 %depth.arg");
+                std::string ok = em_.nextTemp();
+                em_.emitRaw("  " + ok + " = icmp ne i32 " + wr + ", 0");
+                std::string okL = em_.nextLabel("jw.ok");
+                std::string failL = em_.nextLabel("jw.fail");
+                em_.emitRaw("  br i1 " + ok + ", label %" + okL + ", label %" +
+                            failL);
+                em_.emitLabel(failL);
+                (void)emitCall("ptr", "@lang$StringBuilder.appendNull",
+                               "ptr %sb.arg");
+                em_.emitRaw("  br label %" + okL);
+                em_.emitLabel(okL);
+            });
+        } else if (k == TypeKind::Float || k == TypeKind::Double) {
+            // 冷路径：toStr 再 append（少见）
+            std::string lt = f.type->llvmType();
+            std::string v = emitLoad(lt, fp);
+            std::string sreg;
+            if (k == TypeKind::Double)
+                sreg = emitCall("ptr", "@hao_double_to_str", lt + " " + v);
+            else
+                sreg = emitCall("ptr", "@hao_float_to_str", lt + " " + v);
+            (void)emitCall("ptr", "@lang$StringBuilder.append",
+                           "ptr %sb.arg, ptr " + sreg);
+        } else {
+            appendStr("null");
+        }
+    }
+    appendStr("}");
+    emitRetVoid();
+    em_.emitRaw("}");
+
+    currentClass_ = nullptr;
+    return fn;
+}
+
 void IRGen::genEnum(HaoLangParser::EnumDeclContext* ed, const ClassInfoPtr& ci) {
     (void)ed;
     em_.emitBlank();

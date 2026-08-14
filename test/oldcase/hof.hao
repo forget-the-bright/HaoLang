@@ -2,22 +2,30 @@ package main;
 
 // map：把 [T] 通过 (T)->R 转换成 [R]。T 从数组推断，R 从 lambda 返回推断
 func map<T, R>(arr: [T], f: (T) -> R): [R] {
-    var out: [R] = new [R]{};
+    var out: [R] = new [R](arr.length);
     var i = 0;
     while (i < arr.length) {
-        out += f(arr[i]);
+        out[i] = f(arr[i]);
         i += 1;
     }
     return out;
 }
 
-// filter：保留谓词为 true 的元素
+// filter：保留谓词为 true 的元素（两遍定长）
 func filter<T>(arr: [T], pred: (T) -> Bool): [T] {
-    var out: [T] = new [T]{};
+    var n = 0;
     var i = 0;
     while (i < arr.length) {
+        if (pred(arr[i])) { n += 1; }
+        i += 1;
+    }
+    var out: [T] = new [T](n);
+    var j = 0;
+    i = 0;
+    while (i < arr.length) {
         if (pred(arr[i])) {
-            out += arr[i];
+            out[j] = arr[i];
+            j += 1;
         }
         i += 1;
     }

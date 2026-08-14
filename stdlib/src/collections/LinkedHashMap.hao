@@ -43,12 +43,7 @@ class LinkedHashMap<K, V> : Map<K, V> {
         this.count = 0;
         this.head = null;
         this.tail = null;
-        this.table = new [LinkedHashMapEntry<K,V>?]{};
-        var i = 0;
-        while (i < 16) {
-            this.table += null;
-            i += 1;
-        }
+        this.table = new [LinkedHashMapEntry<K,V>?](16);
     }
 
     // @return 有效映射数
@@ -102,24 +97,25 @@ class LinkedHashMap<K, V> : Map<K, V> {
         // 先按插入序抽出
         var keys: [K] = new [K]{};
         var vals: [V] = new [V]{};
-        var cur = this.head;
-        while (cur != null) {
-            if (cur!!.occupied) {
-                keys += cur!!.key;
-                vals += cur!!.value;
+        if (this.count > 0) {
+            keys = new [K](this.count);
+            vals = new [V](this.count);
+            var oi = 0;
+            var cur = this.head;
+            while (cur != null) {
+                if (cur!!.occupied) {
+                    keys[oi] = cur!!.key;
+                    vals[oi] = cur!!.value;
+                    oi = oi + 1;
+                }
+                cur = cur!!.after;
             }
-            cur = cur!!.after;
         }
         this.capacity = this.capacity * 2;
-        this.table = new [LinkedHashMapEntry<K,V>?]{};
+        this.table = new [LinkedHashMapEntry<K,V>?](this.capacity);
         this.count = 0;
         this.head = null;
         this.tail = null;
-        var i = 0;
-        while (i < this.capacity) {
-            this.table += null;
-            i += 1;
-        }
         var j = 0;
         while (j < keys.length) {
             this.insertUnchecked(keys[j], vals[j]);
@@ -258,32 +254,33 @@ class LinkedHashMap<K, V> : Map<K, V> {
         this.count = 0;
         this.head = null;
         this.tail = null;
-        this.table = new [LinkedHashMapEntry<K,V>?]{};
-        var i = 0;
-        while (i < 16) {
-            this.table += null;
-            i += 1;
-        }
+        this.table = new [LinkedHashMapEntry<K,V>?](16);
     }
 
     // 按插入序收集键（数组快照；非接口方法）
     // @return 新数组
     // 复杂度：O(n)
     func keys(): [K] {
-        var out: [K] = new [K]{};
+        if (this.count <= 0) { return new [K]{}; }
+        var out: [K] = new [K](this.count);
+        var oi = 0;
         var cur = this.head;
         while (cur != null) {
-            out += cur!!.key;
+            out[oi] = cur!!.key;
+            oi = oi + 1;
             cur = cur!!.after;
         }
         return out;
     }
 
     func valueArray(): [V] {
-        var out: [V] = new [V]{};
+        if (this.count <= 0) { return new [V]{}; }
+        var out: [V] = new [V](this.count);
+        var oi = 0;
         var cur = this.head;
         while (cur != null) {
-            out += cur!!.value;
+            out[oi] = cur!!.value;
+            oi = oi + 1;
             cur = cur!!.after;
         }
         return out;
@@ -298,11 +295,16 @@ class LinkedHashMap<K, V> : Map<K, V> {
     }
 
     func entrySet(): Iterable<MapEntry<K, V>> {
-        var out: [MapEntry<K, V>] = new [MapEntry<K, V>]{};
+        if (this.count <= 0) {
+            return new ArrayIterable<MapEntry<K, V>>(new [MapEntry<K, V>]{});
+        }
+        var out: [MapEntry<K, V>] = new [MapEntry<K, V>](this.count);
+        var oi = 0;
         var cur = this.head;
         while (cur != null) {
             val ent: MapEntry<K, V> = new SimpleMapEntry<K, V>(cur!!.key, cur!!.value);
-            out += ent;
+            out[oi] = ent;
+            oi = oi + 1;
             cur = cur!!.after;
         }
         return new ArrayIterable<MapEntry<K, V>>(out);

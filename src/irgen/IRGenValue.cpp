@@ -1129,7 +1129,8 @@ TypePtr IRGen::inferNodeType(antlr4::tree::ParseTree* start) {
                 }
                 if (auto* mem = dynamic_cast<HaoLangParser::MemberAccessContext*>(ops[0])) {
                     std::string fname = mem->IDENT()->getText();
-                    if (fname == "length" || fname == "capacity") return Type::makeInt();
+                    if (fname == "length") return Type::makeInt();
+                    if (fname == "capacity") return Type::makeUnknown(); /* 已废：数组无公开 capacity */
                     // 单字段：obj.field → 字段类型（供 when 推断）
                     TypePtr recvTy = inferNodeType(pf->primary());
                     if (recvTy && recvTy->kind == TypeKind::Class) {

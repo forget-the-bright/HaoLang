@@ -400,17 +400,18 @@ class RedBlackTree<K, V> {
     // 中序键列表（升序）。
     // @return 新数组
     // 复杂度：O(n)
-    // 数组形参按引用传递：walk 内 out += 扩容会写回调用方。
     func inorderKeys(): [K] {
-        var out: [K] = new [K]{};
-        this.walk(this.root, out);
+        if (this.count <= 0) { return new [K]{}; }
+        var out: [K] = new [K](this.count);
+        this.walkFill(this.root, out, 0);
         return out;
     }
 
-    func walk(n: RBNode<K, V>?, out: [K]) {
-        if (n == null) { return; }
-        this.walk(n!!.left, out);
-        out += n!!.key;
-        this.walk(n!!.right, out);
+    func walkFill(n: RBNode<K, V>?, out: [K], i: Int): Int {
+        if (n == null) { return i; }
+        var idx = this.walkFill(n!!.left, out, i);
+        out[idx] = n!!.key;
+        idx = idx + 1;
+        return this.walkFill(n!!.right, out, idx);
     }
 }

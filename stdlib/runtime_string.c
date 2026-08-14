@@ -211,8 +211,7 @@ HaoString* hao_str_concat(HaoString* a, HaoString* b) {
     if (lb < 0) lb = 0;
     /* 有符号相加溢出会变成负数，hao_str_alloc 夹成 0 后仍 memcpy → 堆破坏 */
     if ((uint64_t)(uint32_t)la + (uint64_t)(uint32_t)lb > (uint64_t)(INT32_MAX - 1)) {
-        fprintf(stderr, "panic: string concat length overflow\n");
-        abort();
+        hao_panic_msg("string concat length overflow");
     }
     /* alloc 可触发 GC：形参直接挂根（禁先 is_heap_ptr，其内 safepoint） */
     if (a) hao_gc_add_root(a);
@@ -249,9 +248,13 @@ int64_t hao_str_len(HaoString* s) {
         v > (uintptr_t)0x00007FFFFFFFFFFFULL ||
 #endif
         !hao_gc_expect_heap_ptr(s)) {
-        fprintf(stderr, "panic: hao_str_len 非法指针 %p\n", (void*)s);
-        fflush(stderr);
-        abort();
+        char buf[96];
+        int n = 0;
+        const char* a = "hao_str_len 非法指针 ";
+        while (*a && n < (int)sizeof(buf) - 1) buf[n++] = *a++;
+        n = n + hao_fmt_ptr_angle(buf + n, (int)sizeof(buf) - n, s);
+        if (n < (int)sizeof(buf)) buf[n] = '\0';
+        hao_panic_msg(buf);
     }
     if (s->cp_len >= 0) return s->cp_len;
     char* d = sdata(s);

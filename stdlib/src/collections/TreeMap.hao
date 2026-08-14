@@ -30,10 +30,11 @@ class TreeMap<K, V> : Map<K, V> {
 
     func valueArray(): [V] {
         val ks = this.keys();
-        var out: [V] = new [V]{};
+        if (ks.length <= 0) { return new [V]{}; }
+        var out: [V] = new [V](ks.length);
         var i = 0;
         while (i < ks.length) {
-            out += this.get(ks[i])!!;
+            out[i] = this.get(ks[i])!!;
             i += 1;
         }
         return out;
@@ -49,12 +50,15 @@ class TreeMap<K, V> : Map<K, V> {
 
     func entrySet(): Iterable<MapEntry<K, V>> {
         val ks = this.keys();
-        var out: [MapEntry<K, V>] = new [MapEntry<K, V>]{};
+        if (ks.length <= 0) {
+            return new ArrayIterable<MapEntry<K, V>>(new [MapEntry<K, V>]{});
+        }
+        var out: [MapEntry<K, V>] = new [MapEntry<K, V>](ks.length);
         var i = 0;
         while (i < ks.length) {
             val k = ks[i];
             val ent: MapEntry<K, V> = new SimpleMapEntry<K, V>(k, this.get(k)!!);
-            out += ent;
+            out[i] = ent;
             i += 1;
         }
         return new ArrayIterable<MapEntry<K, V>>(out);

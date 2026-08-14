@@ -14,6 +14,7 @@
 // ============================================================
 package regex;
 
+import collections;
 import exception;
 
 class RegexException : exception.Exception {
@@ -79,15 +80,15 @@ class Pattern {
     }
 
     func split(input: String): [String] {
-        var out: [String] = new [String]{};
+        val out = new collections.ArrayList<String>();
         val m = this.matcher(input);
         var last = 0;
         while (m.find()) {
-            out += _byteSlice(input, last, m.start());
+            out.add(_byteSlice(input, last, m.start()));
             last = m.end();
         }
-        out += _byteSlice(input, last, _byteLen(input));
-        return out;
+        out.add(_byteSlice(input, last, _byteLen(input)));
+        return out.toArray();
     }
 
     func replaceAll(input: String, replacement: String): String {

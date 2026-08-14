@@ -43,7 +43,7 @@ func main() {
 
     val th1 = new Thread();
     th1.start({
-        while (true) {
+        while (false) {
             var timeBegin = time.now();
             if (warmBatch > 0) {
                 var junk = new ArrayList<Object>();

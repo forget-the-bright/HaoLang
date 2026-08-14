@@ -22,7 +22,10 @@ Need $dash "/api/gc/lite" "missing /api/gc/lite"
 Need $dash "threadCacheMs" "missing Toolhelp long TTL"
 Need $dash "X-Hao-Json-Ms" "missing X-Hao-Json-Ms header"
 Need $json "class JsonBuf" "missing JsonBuf"
-Need $json "buf\.append" "stringifyBean must use JsonBuf.append"
+Need $json "lang\.StringBuilder" "JsonBuf must use StringBuilder"
+Need $json "quoteIntoSb" "missing quoteIntoSb"
+Need $json "_jsonTryWrite|hao_json_try_write" "missing json try_write"
+Need $json "buf\.append|stringifyBeanInto" "stringifyBean must use JsonBuf"
 
 # 默认 /api/gc 必须全量 GcSnapshot（禁 toLatencyView 作默认）
 $apiGc = [regex]::Match($dash, '(?s)func apiGc\(req: HttpRequest\): HttpResponse \{.*?return r;\s*\}')
@@ -39,11 +42,28 @@ if (-not $apiGc.Success) {
     Write-Host "FAIL GC_HTTP_LAT default /api/gc must use JSON.toJSONString(snap)"
     $fail++
 } else {
-    Write-Host "OK   default /api/gc uses reflect toJSONString (BeanInfo path)"
+    Write-Host "OK   default /api/gc uses toJSONString (Bean / `$jsonWrite)"
 }
 Need $json "class JsonBeanInfo" "missing JsonBeanInfo cache"
 Need $json "getFieldAt" "stringifyBean must use getFieldAt"
 Need $json "beanInfoOf" "missing beanInfoOf"
+Need $json "stringifyAtInto" "missing stringifyAtInto for `$jsonWrite dispatch"
+
+$bb = Get-Content -Raw (Join-Path $Root "stdlib\src\net\ByteBuf.hao")
+$bbCode = [regex]::Replace($bb, '(?m)//.*$', '')
+if ($bbCode -match 'data\s*=\s*data\s*\+') {
+    Write-Host "FAIL GC_HTTP_LAT ByteBuf still fake buffer data=data+"
+    $fail++
+} else {
+    Write-Host "OK   ByteBuf not data=data+"
+}
+$sbPath = Join-Path $Root "stdlib\src\lang\StringBuilder.hao"
+if (-not (Test-Path $sbPath)) {
+    Write-Host "FAIL GC_HTTP_LAT missing lang.StringBuilder"
+    $fail++
+} else {
+    Write-Host "OK   lang.StringBuilder present"
+}
 
 # stringifyBean 热路径禁 r = r +
 $m = [regex]::Match($json, '(?s)static func stringifyBean\(.*?return buf\.finish\(\);\s*\}')

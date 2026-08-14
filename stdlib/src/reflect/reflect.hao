@@ -3,6 +3,7 @@
 // invoke 槽位仍用 [Long]（8 字节位型），非资源指针。
 package reflect;
 
+import collections;
 import exception;
 
 class Class {
@@ -434,7 +435,7 @@ func normalizePackagePath(path: String): String {
 // nested=true：含嵌套子包（demo/web 含 demo/web/api）；false：仅精确包。
 // 隐患：未 import 的包不会进二进制，扫不到；谓词勿假定所有类可 new。
 func findTypes(packagePath: String, nested: Bool, pred: Func<Class, Bool>): [Class] {
-    var out: [Class] = new [Class]{};
+    val out = new collections.ArrayList<Class>();
     var i = 0;
     val total = typeCount();
     while (i < total) {
@@ -443,11 +444,11 @@ func findTypes(packagePath: String, nested: Bool, pred: Func<Class, Bool>): [Cla
         if (nested) { inPkg = t.inPackage(packagePath); }
         else { inPkg = t.inPackageExact(packagePath); }
         if (inPkg && pred(t)) {
-            out += t;
+            out.add(t);
         }
         i += 1;
     }
-    return out;
+    return out.toArray();
 }
 
 // 便捷：嵌套扫描（最常见）

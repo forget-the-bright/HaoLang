@@ -42,7 +42,9 @@ $cases = @(
     @{ name = "bare array lit"; code = "package main;`nfunc main() { val a = [1, 2, 3]; }" },
     @{ name = "Array index"; code = "package main;`nfunc main() { val a: Array = new [Int]{ 1 }; fmt.println(a[0]); }" },
     @{ name = "vararg mid"; code = "package main;`nfunc Bad(a: Int..., b: Int) { }`nfunc main() {}" },
-    @{ name = "new Array"; code = "package main;`nfunc main() { val a = new Array(); }" }
+    @{ name = "new Array"; code = "package main;`nfunc main() { val a = new Array(); }" },
+    @{ name = "array +="; code = "package main;`nfunc main() { var a: [Int] = new [Int]{}; a += 1; }" },
+    @{ name = "array pop"; code = "package main;`nfunc main() { var a: [Int] = new [Int]{ 1 }; fmt.println(a.pop()); }" }
 )
 
 $dir = "target\test\negcheck"

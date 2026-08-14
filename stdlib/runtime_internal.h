@@ -275,16 +275,18 @@ void hao_gc_fprint_debug_snapshot(FILE* f);
 #define HAO_ARR_LEN_OFF_BASE (2 * (int64_t)sizeof(int64_t))
 #define HAO_ARR_ESZ_OFF_BASE (3 * (int64_t)sizeof(int64_t))
 
-/* is_ptr≠0：元素为 GC 指针，精确堆扫扫 [0..len)；写屏障在 push 时触发 */
+/* is_ptr≠0：元素为 GC 指针，精确堆扫扫 [0..len)；写屏障在 set/arraycopy 时触发 */
 void*   hao_array_new(int64_t len, int64_t esz, int64_t is_ptr);
 int64_t hao_array_len(void* arr);
+/* 运行时内部（字符串尾 NUL 槽）；非语言公开 API */
 int64_t hao_array_cap(void* arr);
 int64_t hao_array_check(void* arr, int64_t idx);
 void*   hao_array_get_obj(void* arr, int64_t idx); /* 指针宽元素 → 托管引用；禁 i64 藏针 */
-void*   hao_array_push(void* arr, int64_t value);
-int64_t hao_array_pop(void* arr);
 /* 浅拷贝：新数组独立实例，元素位型复制（指针元素共享对象） */
 void*   hao_array_clone(void* arr);
+/* v0.77：对标 System.arraycopy / Array.Copy（永久 C） */
+void    hao_arraycopy(void* dst, int64_t dstPos, void* src, int64_t srcPos,
+                      int64_t n);
 
 /* ============================================================
  *  字符串（runtime_string.c）—— 语言 String = HaoString*
@@ -313,7 +315,7 @@ int32_t hao_str_byte_len(HaoString* s);
 int32_t hao_str_byte_of_cp(HaoString* s, int32_t cp_idx);
 /* 在 cap 内调整内容长度并写 NUL；供 recv/read 截断 */
 void    hao_str_set_byte_len(HaoString* s, int32_t n);
-/* 公开 API：拷贝为 [Byte]；从 [Byte] 建串 */
+/* 公开 API：拷贝为 [Byte]；从 [Byte] 建串；只读内部载荷 */
 void*      hao_str_get_bytes(HaoString* s);
 HaoString* hao_str_from_byte_arr(void* arr);
 
@@ -424,3 +426,7 @@ int64_t hao_gc_last_miss_col(void);
 /* 异常：是否有 try 帧可接住 throw */
 int hao_exc_has_catcher(void);
 void hao_throw(void* obj);
+
+/* v0.76 */
+int32_t hao_json_try_write(void* obj, void* sb, int32_t features, int32_t indent, void* stack, int32_t depth);
+

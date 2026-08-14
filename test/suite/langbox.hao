@@ -3,6 +3,8 @@
 // ============================================================
 package main;
 
+import collections;
+
 func langBoxTest() {
     // Integer 装箱 / 拆箱（显式 + v0.59 隐式）
     val bi = Integer.valueOf(42);
@@ -96,12 +98,15 @@ func langBoxTest() {
     val bu = UInt.valueOf(10);
     fmt.println(bu.uintValue());
 
-    // ---- v0.26.1：Bool=i8 / [Bool] esz=1 / Boolean.compare / MIN_VALUE / 无符号 toStr ----
-    var ba: [Bool] = new [Bool]{ true, false, true };
-    fmt.println(ba[0]);
-    fmt.println(ba[1]);
-    ba += false;
-    fmt.println(ba.length);
+    // ---- v0.26.1：Bool=i8 / ArrayList<Bool> / Boolean.compare / MIN_VALUE / 无符号 toStr ----
+    var ba = new collections.ArrayList<Bool>();
+    ba.add(true);
+    ba.add(false);
+    ba.add(true);
+    fmt.println(ba.get(0));
+    fmt.println(ba.get(1));
+    ba.add(false);
+    fmt.println(ba.size());
     var bn: Bool? = null;
     bn = true;
     fmt.println(bn!!);
@@ -112,11 +117,11 @@ func langBoxTest() {
     fmt.println(UInt.toStr(4000000000));
     fmt.println(Bit.getBit(0, 99) == false); // true（越界→false）
     if (Bit.getBit(1, 0)) { fmt.println(true); } else { fmt.println(false); } // true
-    // [Bool] 扩容后读写不错位
-    ba += true;
-    ba += false;
-    fmt.println(ba[0] == true);
-    fmt.println(ba[ba.length - 1] == false);
+    // ArrayList<Bool> 扩容后读写不错位
+    ba.add(true);
+    ba.add(false);
+    fmt.println(ba.get(0) == true);
+    fmt.println(ba.get(ba.size() - 1) == false);
     val pb = Byte.parse("200");
     fmt.println(pb!!);
     val pbad = Byte.parse("300");

@@ -6,6 +6,8 @@
 // ============================================================
 package os;
 
+import collections;
+
 class Path {
     static func separator(): String {
         return "/";
@@ -92,39 +94,33 @@ class Path {
             i += 1;
         }
         val parts = pathSplitSlash(unified);
-        var stack: [String] = new [String]{};
+        val stack = new collections.ArrayList<String>();
         var j = 0;
         while (j < parts.length) {
             val seg = parts[j];
             if (seg == "" || seg == ".") {
                 // skip
             } else if (seg == "..") {
-                if (stack.length > 0) {
-                    val top = stack[stack.length - 1];
+                if (stack.size() > 0) {
+                    val top = stack.get(stack.size() - 1);
                     if (top != "..") {
-                        var ns: [String] = new [String]{};
-                        var k = 0;
-                        while (k < stack.length - 1) {
-                            ns += stack[k];
-                            k += 1;
-                        }
-                        stack = ns;
+                        stack.removeAt(stack.size() - 1);
                     } else {
-                        stack += "..";
+                        stack.add("..");
                     }
                 } else if (!abs) {
-                    stack += "..";
+                    stack.add("..");
                 }
             } else {
-                stack += seg;
+                stack.add(seg);
             }
             j += 1;
         }
         var out = "";
         var n = 0;
-        while (n < stack.length) {
+        while (n < stack.size()) {
             if (n > 0) { out = out + "/"; }
-            out = out + stack[n];
+            out = out + stack.get(n);
             n += 1;
         }
         if (abs) {
@@ -144,24 +140,24 @@ private func pathIsSep(c: Int): Bool {
 }
 
 private func pathSplitSlash(p: String): [String] {
-    var r: [String] = new [String]{};
-    if (p.length == 0) { return r; }
+    val r = new collections.ArrayList<String>();
+    if (p.length == 0) { return r.toArray(); }
     val s = String.valueOf(p);
     var start = 0;
     var i = 0;
     while (i < p.length) {
         if (s.charAt(i) == 47) {
             if (i > start) {
-                r += s.substring(start, i);
+                r.add(s.substring(start, i));
             } else {
-                r += "";
+                r.add("");
             }
             start = i + 1;
         }
         i += 1;
     }
     if (start <= p.length) {
-        r += s.substring(start, p.length);
+        r.add(s.substring(start, p.length));
     }
-    return r;
+    return r.toArray();
 }

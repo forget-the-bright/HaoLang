@@ -35,17 +35,22 @@ func byteTest() {
     buf[0] += 10;
     fmt.println(buf[0]);         // 10
 
-    // ---------- push / pop ----------
-    buf += 77;
-    fmt.println(buf.length);     // 5
-    fmt.println(buf[4]);         // 77
-    val last = buf.pop();
+    // ---------- ArrayList add / removeAt（对标原 push/pop）----------
+    val dyn = new collections.ArrayList<Byte>();
+    dyn.add(buf[0]);
+    dyn.add(buf[1]);
+    dyn.add(buf[2]);
+    dyn.add(buf[3]);
+    dyn.add(77);
+    fmt.println(dyn.size());     // 5
+    fmt.println(dyn.get(4));     // 77
+    val last = dyn.removeAt(dyn.size() - 1);
     fmt.println(last);           // 77
-    fmt.println(buf.length);     // 4
+    fmt.println(dyn.size());     // 4
 
     // ---------- for-in（含 0 与 255）----------
     var sum: Int = 0;
-    for (x in buf) {
+    for (x in dyn) {
         sum = sum + x;
     }
     // 10 + 200 + 255 + 128 = 593

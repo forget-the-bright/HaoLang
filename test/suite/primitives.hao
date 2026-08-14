@@ -4,6 +4,8 @@
 // ============================================================
 package main;
 
+import collections;
+
 func primitivesTest() {
     // ---- 有符号 / 无符号成对 ----
     val sb: SByte = 0 - 1;
@@ -58,23 +60,31 @@ func primitivesTest() {
     val zl: Long = 0;
     fmt.println(~zl);                  // -1
 
-    // ---- 紧凑数组 esz + push/pop（boxToI64 全类型）----
+    // ---- 紧凑数组 esz + ArrayList add/removeAt（boxToI64 全类型）----
     var sbytes: [SByte] = new [SByte]{ 0 - 1, 1 };
     fmt.println(sbytes[0]);            // -1
-    sbytes += 0 - 2;
-    fmt.println(sbytes.pop());         // -2
+    val sbDyn = new collections.ArrayList<SByte>();
+    sbDyn.addAll(sbytes);
+    sbDyn.add(0 - 2);
+    fmt.println(sbDyn.removeAt(sbDyn.size() - 1)); // -2
     var ushorts: [UShort] = new [UShort]{ 1, 2 };
     fmt.println(ushorts[1]);           // 2
-    ushorts += 3;
-    fmt.println(ushorts.pop());        // 3
+    val usDyn = new collections.ArrayList<UShort>();
+    usDyn.addAll(ushorts);
+    usDyn.add(3);
+    fmt.println(usDyn.removeAt(usDyn.size() - 1)); // 3
     var uints: [UInt] = new [UInt]{ 1, 2 };
     fmt.println(uints[0]);             // 1
-    uints += 9;
-    fmt.println(uints.pop());          // 9
+    val uiDyn = new collections.ArrayList<UInt>();
+    uiDyn.addAll(uints);
+    uiDyn.add(9);
+    fmt.println(uiDyn.removeAt(uiDyn.size() - 1)); // 9
     var ulongs: [ULong] = new [ULong]{ 1, 2 };
     fmt.println(ulongs[1]);            // 2
-    ulongs += 7;
-    fmt.println(ulongs.pop());         // 7
+    val ulDyn = new collections.ArrayList<ULong>();
+    ulDyn.addAll(ulongs);
+    ulDyn.add(7);
+    fmt.println(ulDyn.removeAt(ulDyn.size() - 1)); // 7
 
     // ---- 包装 SIZE/BYTES ----
     fmt.println(Integer.SIZE);         // 32

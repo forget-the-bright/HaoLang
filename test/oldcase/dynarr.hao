@@ -1,5 +1,7 @@
 package main;
 
+import collections;
+
 class Item {
     var tag: Int = 0;
     constructor(tag: Int) { this.tag = tag; }
@@ -7,60 +9,62 @@ class Item {
 }
 
 func main() {
-    // 1. 带类型标注的空数组 + push
-    var xs: [Int] = new [Int]{};
-    xs += 10;
-    xs += 20;
-    xs += 30;
-    fmt.println(xs.length);      // 3
-    fmt.println(xs[0]);          // 10
-    fmt.println(xs[2]);          // 30
+    // 1. ArrayList + add
+    var xs = new collections.ArrayList<Int>();
+    xs.add(10);
+    xs.add(20);
+    xs.add(30);
+    fmt.println(xs.size());      // 3
+    fmt.println(xs.get(0));      // 10
+    fmt.println(xs.get(2));      // 30
 
-    // 2. 触发 2 倍扩容（初始 cap=0 -> 4 -> 8 ...）
+    // 2. 触发内部 ensureCapacity 扩容
     var i = 0;
     while (i < 10) {
-        xs += i * 100;
+        xs.add(i * 100);
         i += 1;
     }
-    fmt.println(xs.length);      // 13
-    fmt.println(xs[12]);         // 900
-    fmt.println(xs[3]);          // 0 (第一个 i=0)
+    fmt.println(xs.size());      // 13
+    fmt.println(xs.get(12));     // 900
+    fmt.println(xs.get(3));      // 0 (第一个 i=0)
 
-    // 3. 字符串数组 push
-    var names: [String] = new [String]{};
-    names += "alpha";
-    names += "beta";
-    names += "gamma";
-    fmt.println(names.length);   // 3
-    fmt.println(names[1]);       // beta
+    // 3. 字符串 ArrayList
+    var names = new collections.ArrayList<String>();
+    names.add("alpha");
+    names.add("beta");
+    names.add("gamma");
+    fmt.println(names.size());   // 3
+    fmt.println(names.get(1));   // beta
 
-    // 4. 字面量数组也可增长（cap 初始 == len）
-    var ds = new [Double]{ 1.5, 2.5 };
-    ds += 3.5;
-    fmt.println(ds.length);      // 3
-    fmt.println(ds[2]);          // 3.5
+    // 4. 先装入再追加
+    var ds = new collections.ArrayList<Double>();
+    ds.add(1.5);
+    ds.add(2.5);
+    ds.add(3.5);
+    fmt.println(ds.size());      // 3
+    fmt.println(ds.get(2));      // 3.5
 
-    // 5. push 对象引用
-    var items: [Item] = new [Item]{};
+    // 5. add 对象引用
+    var items = new collections.ArrayList<Item>();
     var k = 0;
     while (k < 5) {
-        items += new Item(k);
+        items.add(new Item(k));
         k += 1;
     }
-    fmt.println(items.length);   // 5
-    fmt.println(items[4].label()); // item4
+    fmt.println(items.size());   // 5
+    fmt.println(items.get(4).label()); // item4
 
-    // 6. for-in 遍历动态数组
+    // 6. for-in 遍历 ArrayList
     var total = 0;
     for (x in xs) {
         total += x;
     }
     fmt.println(total);          // 10+20+30 + (0+100+...+900) = 60 + 4500 = 4560
 
-    // 7. pop：移除并返回末尾元素
-    fmt.println(xs.pop());       // 900
-    fmt.println(xs.pop());       // 800
-    fmt.println(xs.length);      // 11
-    fmt.println(names.pop());    // gamma
-    fmt.println(items.pop().label()); // item4
+    // 7. removeAt(size-1)：移除并返回末尾元素
+    fmt.println(xs.removeAt(xs.size() - 1));       // 900
+    fmt.println(xs.removeAt(xs.size() - 1));       // 800
+    fmt.println(xs.size());                        // 11
+    fmt.println(names.removeAt(names.size() - 1)); // gamma
+    fmt.println(items.removeAt(items.size() - 1).label()); // item4
 }

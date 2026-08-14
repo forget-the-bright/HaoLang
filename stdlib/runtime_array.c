@@ -8,17 +8,13 @@
 
 void* hao_array_new(int64_t len, int64_t esz, int64_t is_ptr) {
     if (len < 0) {
-        fprintf(stderr, "panic: 数组长度不能为负数: %lld\n", (long long)len);
-        exit(1);
+        hao_panic_msg("数组长度不能为负数");
     }
     if (esz != 1 && esz != 2 && esz != 4 && esz != 8) {
-        fprintf(stderr, "panic: 不支持的数组元素宽度: %lld\n", (long long)esz);
-        exit(1);
+        hao_panic_msg("不支持的数组元素宽度");
     }
     if ((uint64_t)len > (UINT64_MAX - (uint64_t)HAO_ARR_HEADER) / (uint64_t)esz) {
-        fprintf(stderr, "panic: 数组过大: len=%lld esz=%lld\n",
-                (long long)len, (long long)esz);
-        exit(1);
+        hao_panic_msg("数组过大");
     }
     int64_t cap = len > 0 ? len : 1;
     int64_t ptr_flag = (is_ptr && esz == 8) ? 1 : 0;
@@ -59,100 +55,9 @@ void* hao_array_get_obj(void* arr, int64_t idx) {
     if (!arr) return NULL;
     hao_array_check(arr, idx);
     if (hao_array_esz(arr) != 8) {
-        fputs("panic: hao_array_get_obj 仅支持指针宽元素\n", stderr);
-        exit(1);
+        hao_panic_msg("hao_array_get_obj 仅支持指针宽元素");
     }
     return *(void**)((char*)arr + (size_t)idx * 8);
-}
-
-void* hao_array_push(void* arr, int64_t val) {
-    if (!arr) {
-        fputs("panic: 对 null 数组执行 push\n", stderr);
-        exit(1);
-    }
-    int64_t len = hao_array_len(arr);
-    int64_t cap = hao_array_cap(arr);
-    int64_t esz = hao_array_esz(arr);
-
-    char* oldbase = (char*)arr - HAO_ARR_HEADER;
-    int64_t is_ptr = (*(int64_t*)(oldbase + 0) >> 1) & 1;
-    void* valp = (is_ptr && val) ? (void*)(uintptr_t)val : NULL;
-    /* 禁止先 is_heap_ptr（其内 safepoint）；直接挂根，对齐 fs 皮带 */
-    hao_gc_add_root(arr);
-    if (valp) hao_gc_add_root(valp);
-
-    if (len >= cap) {
-        uint64_t nc = cap ? (uint64_t)cap * 2ULL : 4ULL;
-        if (nc < (uint64_t)len + 1ULL) nc = (uint64_t)len + 1ULL;
-        if (esz <= 0 ||
-            nc > (uint64_t)INT64_MAX ||
-            nc > (UINT64_MAX - (uint64_t)HAO_ARR_HEADER) / (uint64_t)esz) {
-            if (valp) hao_gc_remove_root(valp);
-            hao_gc_remove_root(arr);
-            fputs("panic: 数组扩容过大\n", stderr);
-            exit(1);
-        }
-        int64_t newcap = (int64_t)nc;
-        size_t oldBytes = (size_t)HAO_ARR_HEADER + (size_t)cap * (size_t)esz;
-        uint64_t meta = is_ptr ? 1ULL : 0ULL;
-        void* old_arr = arr;
-        char* newbase = (char*)gc_alloc_ex(
-            (size_t)HAO_ARR_HEADER + (size_t)newcap * (size_t)esz,
-            GC_KIND_ARRAY, meta);
-        /* v0.53.2：memcpy+shade 原子（持 GC 锁、中间无 safepoint） */
-        hao_gc_array_copy_and_shade(newbase, oldbase, oldBytes, len,
-                                    is_ptr && esz == 8 ? 1 : 0);
-        arr = newbase + HAO_ARR_HEADER;
-        *(int64_t*)((char*)arr - HAO_ARR_CAP_OFF) = newcap;
-        if (old_arr != arr) {
-            hao_gc_remove_root(old_arr);
-            hao_gc_add_root(arr);
-        }
-    }
-
-    char* slot = (char*)arr + (size_t)len * (size_t)esz;
-    if (esz == 1) {
-        *(uint8_t*)slot = (uint8_t)(val & 0xFF);
-    } else if (esz == 2) {
-        *(int16_t*)slot = (int16_t)val;
-    } else if (esz == 4) {
-        *(int32_t*)slot = (int32_t)val;
-    } else {
-        /* v0.54：dst=槽地址；混合屏障 load old 后再 publish */
-        if (is_ptr)
-            hao_gc_barrier(slot, (void*)(uintptr_t)val);
-        *(int64_t*)slot = val;
-    }
-    *(int64_t*)((char*)arr - HAO_ARR_LEN_OFF) = len + 1;
-    if (valp) hao_gc_remove_root(valp);
-    hao_gc_remove_root(arr);
-    return arr;
-}
-
-int64_t hao_array_pop(void* arr) {
-    if (!arr) {
-        fputs("panic: 对 null 数组执行 pop\n", stderr);
-        exit(1);
-    }
-    int64_t len = hao_array_len(arr);
-    if (len <= 0) {
-        fputs("panic: 对空数组执行 pop\n", stderr);
-        exit(1);
-    }
-    int64_t esz = hao_array_esz(arr);
-    char* slot = (char*)arr + (size_t)(len - 1) * (size_t)esz;
-    int64_t val;
-    if (esz == 1) {
-        val = (int64_t)*(uint8_t*)slot;
-    } else if (esz == 2) {
-        val = (int64_t)*(int16_t*)slot;
-    } else if (esz == 4) {
-        val = (int64_t)*(int32_t*)slot;
-    } else {
-        val = *(int64_t*)slot;
-    }
-    *(int64_t*)((char*)arr - HAO_ARR_LEN_OFF) = len - 1;
-    return val;
 }
 
 void* hao_array_clone(void* arr) {
@@ -173,4 +78,64 @@ void* hao_array_clone(void* arr) {
     *(int64_t*)(newbase + HAO_ARR_LEN_OFF_BASE) = len;
     *(int64_t*)(newbase + HAO_ARR_ESZ_OFF_BASE) = esz;
     return dst;
+}
+
+/* v0.77：对标 System.arraycopy / Array.Copy（永久 C 底座；非业务） */
+void hao_arraycopy(void* dst, int64_t dstPos, void* src, int64_t srcPos,
+                   int64_t n) {
+    if (n == 0) return;
+    if (!dst || !src) {
+        hao_panic_msg("arraycopy null 数组");
+    }
+    if (n < 0 || dstPos < 0 || srcPos < 0) {
+        hao_panic_msg("arraycopy 下标/长度非法");
+    }
+    int64_t dlen = hao_array_len(dst);
+    int64_t slen = hao_array_len(src);
+    int64_t desz = hao_array_esz(dst);
+    int64_t sesz = hao_array_esz(src);
+    if (desz != sesz) {
+        hao_panic_msg("arraycopy 元素宽度不一致");
+    }
+    if (dstPos > dlen - n || srcPos > slen - n) {
+        hao_panic_msg("arraycopy 越界");
+    }
+    char* dbase = (char*)dst - HAO_ARR_HEADER;
+    char* sbase = (char*)src - HAO_ARR_HEADER;
+    int64_t is_ptr = (*(int64_t*)(dbase + 0) >> 1) & 1;
+    int64_t src_ptr = (*(int64_t*)(sbase + 0) >> 1) & 1;
+    if (is_ptr != src_ptr) {
+        hao_panic_msg("arraycopy is_ptr 不一致");
+    }
+    hao_gc_add_root(dst);
+    hao_gc_add_root(src);
+    size_t bytes = (size_t)n * (size_t)desz;
+    char* d = (char*)dst + (size_t)dstPos * (size_t)desz;
+    char* s = (char*)src + (size_t)srcPos * (size_t)sesz;
+    if (is_ptr && desz == 8) {
+        /* 逐槽屏障（可重叠：先拷到临时或按方向） */
+        if (d == s) {
+            /* no-op */
+        } else if (d > s && d < s + bytes) {
+            int64_t i = n - 1;
+            while (i >= 0) {
+                void* v = *(void**)(s + (size_t)i * 8);
+                hao_gc_barrier(d + (size_t)i * 8, v);
+                *(void**)(d + (size_t)i * 8) = v;
+                i -= 1;
+            }
+        } else {
+            int64_t i = 0;
+            while (i < n) {
+                void* v = *(void**)(s + (size_t)i * 8);
+                hao_gc_barrier(d + (size_t)i * 8, v);
+                *(void**)(d + (size_t)i * 8) = v;
+                i += 1;
+            }
+        }
+    } else {
+        memmove(d, s, bytes);
+    }
+    hao_gc_remove_root(src);
+    hao_gc_remove_root(dst);
 }

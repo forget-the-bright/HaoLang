@@ -254,6 +254,9 @@ private:
                                       const InterfaceInfoPtr& ii);
     // 发射合成 get/set 方法体
     void genSyntheticPropMethods(const ClassInfoPtr& ci);
+    // v0.76：合成 @Class.$jsonWrite → lang.StringBuilder；返回 IR 名或 "null"
+    std::string emitJsonWrite(const ClassInfoPtr& ci);
+    std::map<std::string, std::string> jsonWriteFns_;
     void genFunction(HaoLangParser::FuncDeclContext* fn);
     // 泛型实例化版本：用显式符号生成
     void genFunction(HaoLangParser::FuncDeclContext* fn,

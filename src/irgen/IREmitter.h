@@ -364,11 +364,10 @@ public:
             "declare ptr  @hao_array_new(i64, i64, i64)",
             "declare ptr  @hao_make_args(i32, ptr)",  // main(args) 构造参数数组
             "declare i64  @hao_array_len(ptr)",
-            "declare i64  @hao_array_cap(ptr)",
             "declare i64  @hao_array_check(ptr, i64)",
-            "declare ptr  @hao_array_push(ptr, i64)",
-            "declare i64  @hao_array_pop(ptr)",
             "declare ptr  @hao_array_clone(ptr)",
+            "declare void @hao_arraycopy(ptr, i64, ptr, i64, i64)",
+            "declare i32  @hao_json_try_write(ptr, ptr, i32, i32, ptr, i32)",
             "declare ptr  @hao_object_new(i64, i64)",
             "declare ptr  @hao_object_new_map(i64, ptr, i64)",
             "declare ptr  @hao_handle_wrap(ptr)",  // 永生/外部 raw → NativeHandle（drop=NULL）

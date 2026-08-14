@@ -42,10 +42,10 @@ class ConcurrentHashMap<K, V> : Map<K, V> {
     // 构造空表（16 段）。
     // 复杂度：O(1)
     constructor() {
-        this.segments = new [ChmSegment<K, V>]{};
+        this.segments = new [ChmSegment<K, V>](16);
         var i = 0;
         while (i < 16) {
-            this.segments += new ChmSegment<K, V>();
+            this.segments[i] = new ChmSegment<K, V>();
             i += 1;
         }
     }
@@ -199,13 +199,22 @@ class ConcurrentHashMap<K, V> : Map<K, V> {
     func keys(): [K] {
         this.lockAll();
         try {
-            var out: [K] = new [K]{};
+            var total = 0;
             var i = 0;
+            while (i < 16) {
+                total = total + this.segments[i].map.size();
+                i += 1;
+            }
+            if (total <= 0) { return new [K]{}; }
+            var out: [K] = new [K](total);
+            var oi = 0;
+            i = 0;
             while (i < 16) {
                 val ks = this.segments[i].map.keys();
                 var j = 0;
                 while (j < ks.length) {
-                    out += ks[j];
+                    out[oi] = ks[j];
+                    oi = oi + 1;
                     j += 1;
                 }
                 i += 1;
@@ -219,13 +228,22 @@ class ConcurrentHashMap<K, V> : Map<K, V> {
     func valueArray(): [V] {
         this.lockAll();
         try {
-            var out: [V] = new [V]{};
+            var total = 0;
             var i = 0;
+            while (i < 16) {
+                total = total + this.segments[i].map.size();
+                i += 1;
+            }
+            if (total <= 0) { return new [V]{}; }
+            var out: [V] = new [V](total);
+            var oi = 0;
+            i = 0;
             while (i < 16) {
                 val vs = this.segments[i].map.valueArray();
                 var j = 0;
                 while (j < vs.length) {
-                    out += vs[j];
+                    out[oi] = vs[j];
+                    oi = oi + 1;
                     j += 1;
                 }
                 i += 1;
@@ -247,12 +265,23 @@ class ConcurrentHashMap<K, V> : Map<K, V> {
     func entrySet(): Iterable<MapEntry<K, V>> {
         this.lockAll();
         try {
-            var out: [MapEntry<K, V>] = new [MapEntry<K, V>]{};
+            var total = 0;
             var i = 0;
+            while (i < 16) {
+                total = total + this.segments[i].map.size();
+                i += 1;
+            }
+            if (total <= 0) {
+                return new ArrayIterable<MapEntry<K, V>>(new [MapEntry<K, V>]{});
+            }
+            var out: [MapEntry<K, V>] = new [MapEntry<K, V>](total);
+            var oi = 0;
+            i = 0;
             while (i < 16) {
                 val entIt = this.segments[i].map.entrySet().iterator();
                 while (entIt.hasNext()) {
-                    out += entIt.next();
+                    out[oi] = entIt.next();
+                    oi = oi + 1;
                 }
                 i += 1;
             }

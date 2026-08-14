@@ -1,0 +1,28 @@
+// v0.78：StringBuilder.append 跨 ensureCapacity + 强制 GC，串仍可 .length
+package main;
+
+import gc;
+import lang;
+
+func main() {
+    var i = 0;
+    while (i < 200) {
+        val sb = new lang.StringBuilder();
+        // 小容量逼 ensureCapacity
+        val s = "hello-" + i + "-world-压力-xxxxxxxx";
+        sb.append(s);
+        gc.GC.collect();
+        val t = sb.toString();
+        if (t.length < 10) {
+            fmt.println("FAIL short");
+            return;
+        }
+        // 再触碰原串 .length（曾 UAF → hao_str_len 非法指针）
+        if (s.length < 5) {
+            fmt.println("FAIL s.len");
+            return;
+        }
+        i = i + 1;
+    }
+    fmt.println("sb_append_gc_smoke OK");
+}

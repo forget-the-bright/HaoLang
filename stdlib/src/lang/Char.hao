@@ -30,37 +30,35 @@ class Character {
         return this.value;
     }
 
-    // UTF-8 编码 → fromBytes（v0.56：删 hao_char_to_str）
+    // UTF-8 编码 → fromBytes（定长缓冲，对齐 Java/C# 数组定长）
     static func toStr(v: Char): String {
         var cp: Int = v;
         if (cp < 0) { cp = 0xFFFD; }
         if (cp > 0x10FFFF) { cp = 0xFFFD; }
-        var arr: [Byte] = new [Byte]{};
         if (cp <= 0x7F) {
+            val arr = new [Byte](1);
             val b: Byte = cp;
-            arr += b;
-        } else if (cp <= 0x7FF) {
-            val b0: Byte = 0xC0 | (cp >> 6);
-            val b1: Byte = 0x80 | (cp & 0x3F);
-            arr += b0;
-            arr += b1;
-        } else if (cp <= 0xFFFF) {
-            val b0: Byte = 0xE0 | (cp >> 12);
-            val b1: Byte = 0x80 | ((cp >> 6) & 0x3F);
-            val b2: Byte = 0x80 | (cp & 0x3F);
-            arr += b0;
-            arr += b1;
-            arr += b2;
-        } else {
-            val b0: Byte = 0xF0 | (cp >> 18);
-            val b1: Byte = 0x80 | ((cp >> 12) & 0x3F);
-            val b2: Byte = 0x80 | ((cp >> 6) & 0x3F);
-            val b3: Byte = 0x80 | (cp & 0x3F);
-            arr += b0;
-            arr += b1;
-            arr += b2;
-            arr += b3;
+            arr[0] = b;
+            return hao_str_from_byte_arr(arr);
         }
+        if (cp <= 0x7FF) {
+            val arr = new [Byte](2);
+            arr[0] = 0xC0 | (cp >> 6);
+            arr[1] = 0x80 | (cp & 0x3F);
+            return hao_str_from_byte_arr(arr);
+        }
+        if (cp <= 0xFFFF) {
+            val arr = new [Byte](3);
+            arr[0] = 0xE0 | (cp >> 12);
+            arr[1] = 0x80 | ((cp >> 6) & 0x3F);
+            arr[2] = 0x80 | (cp & 0x3F);
+            return hao_str_from_byte_arr(arr);
+        }
+        val arr = new [Byte](4);
+        arr[0] = 0xF0 | (cp >> 18);
+        arr[1] = 0x80 | ((cp >> 12) & 0x3F);
+        arr[2] = 0x80 | ((cp >> 6) & 0x3F);
+        arr[3] = 0x80 | (cp & 0x3F);
         return hao_str_from_byte_arr(arr);
     }
 

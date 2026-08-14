@@ -283,22 +283,8 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                         return out;
                     }
                     if (sfi->type->kind == TypeKind::Array && op == "+=") {
-                        Value curV(cur, sfi->type);
-                        if (!ensureNonNullOperand(curV, e, "+=")) return Value();
-                        TypePtr elemType = sfi->type->elem ? sfi->type->elem : Type::makeInt();
-                        if (!isAssignable(rhs.type, elemType)) {
-                            error(e, "无法将 " + rhs.type->toString() + " 追加到 " +
-                                     sfi->type->toString() + " 类型的静态字段");
-                            return Value();
-                        }
-                        rhs = coerce(rhs, elemType, 0, 0);
-                        std::string val64 = em_.boxToI64(rhs.ir, elemType);
-                        std::string reg = emitCall("ptr", "@hao_array_push",
-                                                   "ptr " + cur + ", i64 " + val64);
-                        emitGlobalGcStore(gptr, reg, sfi->type);
-                        /* D10：静态字段复合薄 dbg.value */
-                        emitDbgValueIf(sfi->type->llvmType(), reg, fname, 0, 0);
-                        return Value(reg, sfi->type);
+                        error(e, "数组不支持 +=（对齐 Java/C#；请用 collections.ArrayList）");
+                        return Value();
                     }
                     if (!sfi->type->isNumeric() &&
                         !(op == "&=" || op == "|=" || op == "^=" ||
@@ -461,24 +447,10 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
                     return out;
                 }
 
-                // 数组字段 += 元素 => push，扩容后写回字段
+                // 数组字段 += 已废（对齐 Java/C#）
                 if (fi->type->kind == TypeKind::Array && op == "+=") {
-                    Value curV(cur, fi->type);
-                    if (!ensureNonNullOperand(curV, e, "+=")) return Value();
-                    TypePtr elemType = fi->type->elem ? fi->type->elem : Type::makeInt();
-                    if (!isAssignable(rhs.type, elemType)) {
-                        error(e, "无法将 " + rhs.type->toString() + " 追加到 " +
-                                 fi->type->toString() + " 类型的字段");
-                        return Value();
-                    }
-                    rhs = coerce(rhs, elemType, 0, 0);
-                    std::string val64 = em_.boxToI64(rhs.ir, elemType);
-                    std::string reg = emitCall("ptr", "@hao_array_push",
-                                               "ptr " + cur + ", i64 " + val64);
-                    emitHeapStore(fp, reg, fi->type, recv.ir);
-                    /* D10：实例字段复合薄 dbg.value */
-                    emitDbgValueIf(fi->type->llvmType(), reg, fname, 0, 0);
-                    return Value(reg, fi->type);
+                    error(e, "数组不支持 +=（对齐 Java/C#；请用 collections.ArrayList）");
+                    return Value();
                 }
 
                 if (!fi->type->isNumeric() &&
@@ -650,25 +622,10 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
             return out;
         }
 
-        // 数组 += 元素 => push（动态扩容，可能 realloc 移动，必须写回变量）
+        // 数组 += 已废（对齐 Java/C#；增长用 ArrayList）
         if (sym->type->kind == TypeKind::Array && op == "+=") {
-            if (!ensureNonNullOperand(cur, e, "+=")) return Value();
-            TypePtr elemType = sym->type->elem ? sym->type->elem : Type::makeInt();
-            if (!isAssignable(rhs.type, elemType)) {
-                error(e, "无法将 " + rhs.type->toString() + " 追加到 " +
-                         sym->type->toString() + " 类型的数组");
-                return Value();
-            }
-            rhs = coerce(rhs, elemType, 0, 0);
-
-            // 把元素统一转成 i64 传入（任意 8 字节类型均可；可空/引用走 ptrtoint）
-            std::string val64 = em_.boxToI64(rhs.ir, elemType);
-
-            std::string reg = emitCall("ptr", "@hao_array_push",
-                                       "ptr " + cur.ir + ", i64 " + val64);
-            emitVarStore(sym, sym->type, reg);
-            emitDbgValueIf(sym->type->llvmType(), reg, varName, sym->line, 0);
-            return Value(reg, sym->type);
+            error(e, "数组不支持 +=（对齐 Java/C#；请用 collections.ArrayList）");
+            return Value();
         }
 
         TypePtr calcTy;
@@ -1794,11 +1751,8 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
         }
     }
     if (field == "capacity" && isArrayReceiver(base.type)) {
-        Value b = base;
-        rootGcOperand(b);
-        std::string wide = emitCall("i64", "@hao_array_cap", "ptr " + b.ir);
-        std::string reg = emitCast("trunc", "i64", wide, "i32");
-        return Value(reg, Type::makeInt());
+        error(ctx, "数组无公开 capacity（对齐 Java/C#；容量在 ArrayList/StringBuilder）");
+        return Value();
     }
 
     // 对象字段读取
@@ -1973,18 +1927,8 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
     // ===== 数组内建方法 =====
     if (isArrayReceiver(recvR.type)) {
         if (method == "pop") {
-            if (isArrayBaseClass(recvR.type)) {
-                error(ctx, "Array 基类不支持 pop()，请使用具体 [T]");
-                return Value();
-            }
-            if (call->argList()) {
-                error(ctx, "数组的 pop() 方法不接受参数");
-                return Value();
-            }
-            TypePtr elemType = recvR.type->elem ? recvR.type->elem : Type::makeInt();
-            std::string raw = emitCall("i64", "@hao_array_pop", "ptr " + recvR.ir);
-            std::string reg = em_.unboxFromI64(raw, elemType);
-            return Value(reg, elemType);
+            error(ctx, "数组不支持 pop()（对齐 Java/C#；请用 collections.ArrayList）");
+            return Value();
         }
         if (method == "clone") {
             if (call->argList()) {
@@ -1996,7 +1940,7 @@ Value IRGen::applyMethodCall(const Value& recv, const std::string& method,
                 return Value(raw, Type::makeArray(recvR.type->elem));
             return Value(raw, Type::makeClass("object$Array"));
         }
-        error(ctx, "数组没有方法 '" + method + "'（支持 pop()/clone()）");
+        error(ctx, "数组没有方法 '" + method + "'（支持 clone()）");
         return Value();
     }
 

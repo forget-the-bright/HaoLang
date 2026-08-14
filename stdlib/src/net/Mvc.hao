@@ -117,19 +117,19 @@ public class HttpApp {
     var server: ServerSocket;
     var port: Int;
     var routes: collections.HashMap<String, RouteBinding>;
-    var filters: [HttpFilter];
-    var interceptors: [HandlerInterceptor];
+    var filters: collections.ArrayList<HttpFilter>;
+    var interceptors: collections.ArrayList<HandlerInterceptor>;
     var running: Bool;
-    var staticMounts: [StaticMount];
+    var staticMounts: collections.ArrayList<StaticMount>;
 
     constructor() {
         this.server = new ServerSocket();
         this.port = 0;
         this.routes = new collections.HashMap<String, RouteBinding>();
-        this.filters = new [HttpFilter]{};
-        this.interceptors = new [HandlerInterceptor]{};
+        this.filters = new collections.ArrayList<HttpFilter>();
+        this.interceptors = new collections.ArrayList<HandlerInterceptor>();
         this.running = false;
-        this.staticMounts = new [StaticMount]{};
+        this.staticMounts = new collections.ArrayList<StaticMount>();
     }
 
     // v0.49：挂载静态目录；GET urlPrefix/... → root/...
@@ -140,7 +140,7 @@ public class HttpApp {
         if (p.length > 1 && String.valueOf(p).endsWith("/")) {
             p = String.valueOf(p).substring(0, p.length - 1);
         }
-        this.staticMounts += new StaticMount(p, dir);
+        this.staticMounts.add(new StaticMount(p, dir));
     }
 
     func listen(port: Int): Bool {
@@ -154,11 +154,11 @@ public class HttpApp {
     }
 
     func addFilter(f: HttpFilter) {
-        this.filters += f;
+        this.filters.add(f);
     }
 
     func addInterceptor(i: HandlerInterceptor) {
-        this.interceptors += i;
+        this.interceptors.add(i);
     }
 
     // ---- 显式路径注册 ----
@@ -324,22 +324,22 @@ public class HttpApp {
         }
         // 拦截器 pre
         var ii = 0;
-        while (ii < this.interceptors.length) {
-            if (!this.interceptors[ii].preHandle(req)) {
+        while (ii < this.interceptors.size()) {
+            if (!this.interceptors.get(ii).preHandle(req)) {
                 return HttpResponse.of(403, "forbidden");
             }
             ii += 1;
         }
         val chain = new FilterChain();
-        chain.filters = this.filters;
+        chain.filters = this.filters.toArray();
         chain.index = 0;
         val term = chain.terminal;
         term.app = this;
         val resp = chain.proceed(req);
         // 拦截器 post
         var ji = 0;
-        while (ji < this.interceptors.length) {
-            this.interceptors[ji].postHandle(req, resp);
+        while (ji < this.interceptors.size()) {
+            this.interceptors.get(ji).postHandle(req, resp);
             ji += 1;
         }
         return resp;
@@ -347,8 +347,8 @@ public class HttpApp {
 
     func tryStatic(path: String): HttpResponse? {
         var mi = 0;
-        while (mi < this.staticMounts.length) {
-            val m = this.staticMounts[mi];
+        while (mi < this.staticMounts.size()) {
+            val m = this.staticMounts.get(mi);
             mi += 1;
             val pref = m.prefix;
             var matched = false;
@@ -452,8 +452,7 @@ public class HttpApp {
         }
         val ctrl = bind.ctrl!!;
         val t = reflect.typeOf(ctrl);
-        var args: [Long] = new [Long]{};
-        args += reflect.ptrOf(req);
+        var args: [Long] = new [Long]{ reflect.ptrOf(req) };
         val retType = t.methodReturnType(bind.methodName);
         if (retType == "Unit" || retType == "void") {
             t.invokeUnit(ctrl, bind.methodName, args);

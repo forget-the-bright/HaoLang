@@ -3,6 +3,8 @@
 // ============================================================
 package main;
 
+import collections;
+
 func stringCharTest() {
     // Char 字面量
     val c1: Char = 'A';
@@ -80,14 +82,16 @@ func stringCharTest() {
     fmt.println("🚀".length == 1);          // true
     fmt.println(@"a\nb".length == 4);       // true（字面 a \ n b）
 
-    // [Char] esz=4
-    var chars: [Char] = new [Char]{ 'A', '好' };
-    fmt.println(chars.length);              // 2
-    fmt.println(chars[0] == 'A');           // true
-    fmt.println(chars[1] == '好');          // true
-    chars += 'Z';
-    fmt.println(chars.length);              // 3
-    fmt.println(chars.pop() == 'Z');        // true
+    // ArrayList<Char>（Char 载荷）
+    var chars = new collections.ArrayList<Char>();
+    chars.add('A');
+    chars.add('好');
+    fmt.println(chars.size());              // 2
+    fmt.println(chars.get(0) == 'A');       // true
+    fmt.println(chars.get(1) == '好');      // true
+    chars.add('Z');
+    fmt.println(chars.size());              // 3
+    fmt.println(chars.removeAt(chars.size() - 1) == 'Z'); // true
 
     // Char? 装箱 / !! / ??（正向+反向默认值）
     var nc: Char? = null;
@@ -104,4 +108,17 @@ func stringCharTest() {
     fmt.println(bytes.length);              // 2
     fmt.println(String.fromBytes(bytes).toString()); // Hi
     fmt.println(String.valueOf("你好").byteLength()); // 6
+
+    // v0.76：lang.StringBuilder 循环 append（禁 String+ 假缓冲）
+    val sb = StringBuilder.withCapacity(32);
+    var si = 0;
+    while (si < 2000) {
+        sb.append("ab");
+        si += 1;
+    }
+    fmt.println(sb.byteLength() == 4000);   // true
+    fmt.println(sb.toString().length == 4000); // true
+    val sbuf = StringBuffer.withCapacity(8);
+    sbuf.append("z");
+    fmt.println(sbuf.toString());           // z
 }

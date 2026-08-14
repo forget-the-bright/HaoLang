@@ -1,7 +1,9 @@
 // ============================================================
-//  v0.34.1 / 审计：!! 赋值左值 + 数组形参 += + 可空数组形参 / when 方法
+//  v0.34.1 / 审计：!! 赋值左值 + ArrayList 形参可变可见 + 可空数组形参 / when 方法
 // ============================================================
 package main;
+
+import collections;
 
 class LfNode {
     var value: Int = 0;
@@ -10,8 +12,8 @@ class LfNode {
     func get(): Int { return this.value; }
 }
 
-func langFixPush(out: [Int], x: Int) {
-    out += x;
+func langFixPush(out: collections.ArrayList<Int>, x: Int) {
+    out.add(x);
 }
 
 // [Int]? 形参须按值（数据指针/null），不可误走 by-ref 砸堆
@@ -29,16 +31,16 @@ func langFixTest() {
     n!!.next!!.value = 9;
     fmt.println(n!!.next!!.value);             // 9
 
-    // 数组形参 += 扩容后调用方可见
-    var a: [Int] = new [Int]{};
+    // ArrayList 形参 add 后调用方可见
+    var a = new collections.ArrayList<Int>();
     var i = 0;
     while (i < 20) {
         langFixPush(a, i);
         i += 1;
     }
-    fmt.println(a.length);                     // 20
-    fmt.println(a[0]);                         // 0
-    fmt.println(a[19]);                        // 19
+    fmt.println(a.size());                     // 20
+    fmt.println(a.get(0));                     // 0
+    fmt.println(a.get(19));                    // 19
 
     // 可空数组形参：非空与 null 均安全
     fmt.println(langFixOptLen(new [Int]{ 10, 20, 30 }));  // 3

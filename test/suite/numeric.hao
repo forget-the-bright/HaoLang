@@ -40,23 +40,27 @@ func numericTest() {
     fmt.println(L & 7);                // 7
     fmt.println(L << 1);               // 30
 
-    // ---- 紧凑数组 esz ----
+    // ---- 紧凑数组 esz + ArrayList add/removeAt ----
     var shorts: [Short] = new [Short]{ 1, 2, 3 };
     fmt.println(shorts.length);        // 3
     fmt.println(shorts[1]);            // 2
-    shorts += 4;
-    fmt.println(shorts.pop());         // 4
+    val shortDyn = new collections.ArrayList<Short>();
+    shortDyn.addAll(shorts);
+    shortDyn.add(4);
+    fmt.println(shortDyn.removeAt(shortDyn.size() - 1)); // 4
 
     var floats: [Float] = new [Float]{ 1.0, 2.0 };
     fmt.println(floats.length);        // 2
     floats[0] = 3.5;
     fmt.println(floats[0]);            // 3.5
-    floats += 4.5;
-    fmt.println(floats.pop());         // 4.5
+    val floatDyn = new collections.ArrayList<Float>();
+    floatDyn.addAll(floats);
+    floatDyn.add(4.5);
+    fmt.println(floatDyn.removeAt(floatDyn.size() - 1)); // 4.5
 
-    var doubles: [Double] = new [Double]{};
-    doubles += 9.25;
-    fmt.println(doubles.pop());        // 9.25
+    var doubles = new collections.ArrayList<Double>();
+    doubles.add(9.25);
+    fmt.println(doubles.removeAt(doubles.size() - 1)); // 9.25
 
     var longs: [Long] = new [Long]{ 100, 200 };
     fmt.println(longs[1]);             // 200

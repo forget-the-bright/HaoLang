@@ -1,0 +1,27 @@
+// v0.78：ArrayList.add 跨 ensureCapacity + 强制 GC，元素仍可达
+package main;
+
+import collections;
+import gc;
+
+class Box {
+    var id: Int = 0;
+    constructor(id: Int) { this.id = id; }
+}
+
+func main() {
+    val list = new collections.ArrayList<Box>();
+    var i = 0;
+    while (i < 64) {
+        val b = new Box(i);
+        list.add(b);
+        gc.GC.collect();
+        val got = list.get(list.size() - 1);
+        if (got.id != i) {
+            fmt.println("FAIL id");
+            return;
+        }
+        i = i + 1;
+    }
+    fmt.println("arraylist_add_gc_smoke OK");
+}

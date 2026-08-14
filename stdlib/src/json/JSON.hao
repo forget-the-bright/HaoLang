@@ -8,37 +8,46 @@ import lang;
 import os;
 import reflect;
 
-// 可增长字符串分片缓冲：stringifyBean / 手写 toJson 热路径禁平方 r=r+ 整结果
-// finish 用二叉树拼接 O(n log n)，避免逐字节 push 的 GC 根税
+// 可增长 JSON 缓冲：内部 lang.StringBuilder（v0.76；禁碎片树拼接）
 public class JsonBuf {
-    var parts: [String];
+    var sb: lang.StringBuilder;
 
     constructor() {
-        this.parts = new [String]{};
+        this.sb = lang.StringBuilder.withCapacity(256);
+    }
+
+    static func withCapacity(capacity: Int): JsonBuf {
+        val b = new JsonBuf();
+        b.sb.ensureCapacity(capacity);
+        return b;
     }
 
     func append(s: String) {
-        this.parts += s;
+        this.sb.append(s);
+    }
+
+    func append(c: Char) {
+        this.sb.append(c);
+    }
+
+    func appendLong(n: Long) {
+        this.sb.append(n);
+    }
+
+    func appendBool(b: Bool) {
+        this.sb.append(b);
+    }
+
+    func appendNull() {
+        this.sb.appendNull();
     }
 
     func finish(): String {
-        var cur = this.parts;
-        while (cur.length > 1) {
-            var nxt: [String] = new [String]{};
-            var i = 0;
-            while (i < cur.length) {
-                if (i + 1 < cur.length) {
-                    nxt += (cur[i] + cur[i + 1]);
-                    i += 2;
-                } else {
-                    nxt += cur[i];
-                    i += 1;
-                }
-            }
-            cur = nxt;
-        }
-        if (cur.length == 0) { return ""; }
-        return cur[0];
+        return this.sb.toString();
+    }
+
+    func builder(): lang.StringBuilder {
+        return this.sb;
     }
 }
 
@@ -291,7 +300,9 @@ class JSON {
 
     static func stringify(value: Object, features: Int, indent: Int): String {
         var stack: [Long] = new [Long]{};
-        return JSON.stringifyAt(value, features, indent, stack, 0);
+        val buf = JsonBuf.withCapacity(512);
+        JSON.stringifyAtInto(buf, value, features, indent, stack, 0);
+        return buf.finish();
     }
 
     static func stackHas(stack: [Long], p: Long): Bool {
@@ -304,14 +315,21 @@ class JSON {
     }
 
     static func stackPush(stack: [Long], p: Long): [Long] {
-        var n: [Long] = new [Long]{};
-        var i = 0;
-        while (i < stack.length) {
-            n += stack[i];
-            i += 1;
+        val n = new [Long](stack.length + 1);
+        if (stack.length > 0) {
+            val nl: Long = stack.length;
+            _arraycopy(n, 0, stack, 0, nl);
         }
-        n += p;
+        n[stack.length] = p;
         return n;
+    }
+
+    // 优先 $jsonWrite（meta）；否则通用 stringifyAt 片段再 append
+    static func stringifyAtInto(buf: JsonBuf, value: Object, features: Int, indent: Int, stack: [Long], depth: Int) {
+        if (_jsonTryWrite(value, buf.builder(), features, indent, stack, depth) != 0) {
+            return;
+        }
+        buf.append(JSON.stringifyAt(value, features, indent, stack, depth));
     }
 
     // Map 形态：entrySet()+get(K)（泛型 is/as Map 当前不可用，走反射）
@@ -403,8 +421,7 @@ class JSON {
                     while (it.invokeBool(iter, "hasNext", emptyArgs)) {
                         val kStr = it.invokeStr(iter, "next", emptyArgs);
                         if (kStr == null) { continue; }
-                        var gargs: [Long] = new [Long]{};
-                        gargs += reflect.ptrOfStr(kStr!!);
+                        var gargs: [Long] = new [Long]{ reflect.ptrOfStr(kStr!!) };
                         val child = t.invokeObj(value, "get", gargs);
                         if (!first) { r = r + ","; }
                         first = false;
@@ -605,8 +622,7 @@ class JSON {
         while (i < sz) {
             if (i > 0) { r = r + ","; }
             if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
-            var gargs: [Long] = new [Long]{};
-            gargs += i;
+            var gargs: [Long] = new [Long]{ i };
             val child = t.invokeObj(value, "get", gargs);
             if (child == null) {
                 r = r + "null";
@@ -619,11 +635,16 @@ class JSON {
         return r + "]";
     }
 
-    // 反射 Bean：BeanInfo 缓存 + 按索引读（对标 Fastjson ObjectWriter；禁按名查找/每次 quote）
+    // 反射 Bean：写入 JsonBuf（冷回落；热路径走 $jsonWrite）
     static func stringifyBean(value: Object, t: reflect.Class, features: Int, indent: Int, stack: [Long], depth: Int): String {
+        val buf = new JsonBuf();
+        JSON.stringifyBeanInto(buf, value, t, features, indent, stack, depth);
+        return buf.finish();
+    }
+
+    static func stringifyBeanInto(buf: JsonBuf, value: Object, t: reflect.Class, features: Int, indent: Int, stack: [Long], depth: Int) {
         val pretty = (features & JSON.PrettyFormat) != 0;
         val info = JSON.beanInfoOf(t);
-        val buf = new JsonBuf();
         buf.append("{");
         var first = true;
         var i = 0;
@@ -631,20 +652,6 @@ class JSON {
         while (i < n) {
             val f = info.fields.get(i);
             i += 1;
-            var piece = "";
-            if (f.kind == 1) {
-                val s = t.getFieldAt(value, f.index);
-                if (s == null) { piece = "null"; }
-                else { piece = JSON.quote(s!!); }
-            } else if (f.kind == 2) {
-                val s = t.getFieldAt(value, f.index);
-                if (s == null) { piece = "null"; }
-                else { piece = s!!; }
-            } else {
-                val child = t.getFieldObjectAt(value, f.index);
-                if (child == null) { piece = "null"; }
-                else { piece = JSON.stringifyAt(child!!, features, indent + 1, stack, depth); }
-            }
             if (!first) { buf.append(","); }
             first = false;
             if (pretty) {
@@ -654,7 +661,52 @@ class JSON {
             buf.append(f.quotedKey);
             buf.append(":");
             if (pretty) { buf.append(" "); }
-            buf.append(piece);
+            if (f.kind == 1) {
+                val s = t.getFieldAt(value, f.index);
+                if (s == null) { buf.appendNull(); }
+                else { JSON.quoteInto(buf, s!!); }
+            } else if (f.kind == 2) {
+                val s = t.getFieldAt(value, f.index);
+                if (s == null) { buf.appendNull(); }
+                else { buf.append(s!!); }
+            } else {
+                val child = t.getFieldObjectAt(value, f.index);
+                if (child == null) { buf.appendNull(); }
+                else { JSON.stringifyAtInto(buf, child!!, features, indent + 1, stack, depth); }
+            }
+        }
+        if (pretty && !first) {
+            buf.append("\n");
+            buf.append(JSON.pad(indent));
+        }
+        buf.append("}");
+    }
+
+    static func stringifyObj(obj: JSONObject, features: Int, indent: Int, stack: [Long], depth: Int): String {
+        val pretty = (features & JSON.PrettyFormat) != 0;
+        val writeNull = (features & JSON.WriteMapNullValue) != 0;
+        val keySnap = obj.keys();
+        val nkeys = keySnap.length;
+        val buf = new JsonBuf();
+        buf.append("{");
+        var first = true;
+        var i = 0;
+        while (i < nkeys) {
+            val k = keySnap[i];
+            val v = obj.get(k);
+            i += 1;
+            if (v == null) { continue; }
+            if ((!writeNull) && (v!! is JSONNull)) { continue; }
+            if (!first) { buf.append(","); }
+            first = false;
+            if (pretty) {
+                buf.append("\n");
+                buf.append(JSON.pad(indent + 1));
+            }
+            JSON.quoteInto(buf, k);
+            buf.append(":");
+            if (pretty) { buf.append(" "); }
+            JSON.stringifyAtInto(buf, v!!, features, indent + 1, stack, depth + 1);
         }
         if (pretty && !first) {
             buf.append("\n");
@@ -664,80 +716,66 @@ class JSON {
         return buf.finish();
     }
 
-    static func stringifyObj(obj: JSONObject, features: Int, indent: Int, stack: [Long], depth: Int): String {
-        val pretty = (features & JSON.PrettyFormat) != 0;
-        val writeNull = (features & JSON.WriteMapNullValue) != 0;
-        // 键名快照：while 内 `r` 与 `k` 曾疑似 spill 别名，导致后续键被污染成结果串前缀
-        val keySnap = obj.keys();
-        val nkeys = keySnap.length;
-        var r = "{";
-        var first = true;
-        var i = 0;
-        while (i < nkeys) {
-            val k = keySnap[i];
-            val v = obj.get(k);
-            i += 1;
-            if (v == null) { continue; }
-            if ((!writeNull) && (v!! is JSONNull)) { continue; }
-            val piece = JSON.stringifyAt(v!!, features, indent + 1, stack, depth + 1);
-            val kq = JSON.quote(k);
-            if (!first) { r = r + ","; }
-            first = false;
-            if (pretty) {
-                r = r + "\n" + JSON.pad(indent + 1);
-            }
-            r = r + kq + ":";
-            if (pretty) { r = r + " "; }
-            r = r + piece;
-        }
-        if (pretty && !first) {
-            r = r + "\n" + JSON.pad(indent);
-        }
-        return r + "}";
-    }
-
     static func stringifyArr(arr: JSONArray, features: Int, indent: Int, stack: [Long], depth: Int): String {
         val pretty = (features & JSON.PrettyFormat) != 0;
-        var r = "[";
+        val buf = new JsonBuf();
+        buf.append("[");
         var i = 0;
         while (i < arr.size()) {
-            if (i > 0) { r = r + ","; }
-            if (pretty) { r = r + "\n" + JSON.pad(indent + 1); }
-            r = r + JSON.stringifyAt(arr.get(i), features, indent + 1, stack, depth + 1);
+            if (i > 0) { buf.append(","); }
+            if (pretty) {
+                buf.append("\n");
+                buf.append(JSON.pad(indent + 1));
+            }
+            JSON.stringifyAtInto(buf, arr.get(i), features, indent + 1, stack, depth + 1);
             i += 1;
         }
         if (pretty && arr.size() > 0) {
-            r = r + "\n" + JSON.pad(indent);
+            buf.append("\n");
+            buf.append(JSON.pad(indent));
         }
-        return r + "]";
+        buf.append("]");
+        return buf.finish();
     }
 
     static func pad(n: Int): String {
-        var r = "";
+        val buf = lang.StringBuilder.withCapacity(n * 2);
         var i = 0;
         while (i < n) {
-            r = r + "  ";
+            buf.append("  ");
             i += 1;
         }
-        return r;
+        return buf.toString();
     }
 
-    static func quote(s: String): String {
-        var r = "\"";
+    static func quoteInto(buf: JsonBuf, s: String) {
+        JSON.quoteIntoSb(buf.builder(), s);
+    }
+
+    static func quoteIntoSb(sb: lang.StringBuilder, s: String) {
+        sb.append("\"");
         var i = 0;
         while (i < s.length) {
             val c = s[i];
-            if (c == 34) { r = r + "\\\""; }
-            else if (c == 92) { r = r + "\\\\"; }
-            else if (c == 10) { r = r + "\\n"; }
-            else if (c == 13) { r = r + "\\r"; }
-            else if (c == 9) { r = r + "\\t"; }
-            else { r = r + c; }
+            if (c == 34) { sb.append("\\\""); }
+            else if (c == 92) { sb.append("\\\\"); }
+            else if (c == 10) { sb.append("\\n"); }
+            else if (c == 13) { sb.append("\\r"); }
+            else if (c == 9) { sb.append("\\t"); }
+            else { sb.append(c); }
             i += 1;
         }
-        return r + "\"";
+        sb.append("\"");
+    }
+
+    static func quote(s: String): String {
+        val buf = JsonBuf.withCapacity(s.length + 8);
+        JSON.quoteInto(buf, s);
+        return buf.finish();
     }
 }
+
+extern func _jsonTryWrite(o: Object, sb: lang.StringBuilder, features: Int, indent: Int, stack: [Long], depth: Int): Int = "hao_json_try_write";
 
 class JsonParser {
     var s: String;
