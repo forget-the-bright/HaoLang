@@ -432,6 +432,8 @@ public:
         if (isInteger() && target.isInteger() && from == to) return true;
         if (isInteger() && target.isInteger() && from > to) return true;
         if (isFloating() && target.isFloating() && from > to) return true;
+        // 浮点→整型：显式标注赋值允许（fptosi；对齐 Java/C# 截断转换）
+        if (isFloating() && target.isInteger()) return true;
         return false;
     }
 

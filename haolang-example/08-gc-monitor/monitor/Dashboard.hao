@@ -130,7 +130,7 @@ class GcSnapshot {
     static var threadCacheMs: Long = 0;
 
     constructor() {
-        this.note = "v0.75.1：/api/gc 全量 GcSnapshot；jsonMs/serverTotal 以 X-Hao-* 头为准；lite 见 /api/gc/lite。";
+        this.note = "v0.79.3：/api/gc 全量；X-Hao-Server-Ms=handler（不含 writeResponse）；写路径 SB+头/体分 send；墙钟应与 srv 同阶。";
     }
 
     static func nsToMs(deltaNs: Long): Long {

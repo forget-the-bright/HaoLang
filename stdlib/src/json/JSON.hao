@@ -753,9 +753,9 @@ class JSON {
     }
 
     static func quoteIntoSb(sb: lang.StringBuilder, s: String) {
-        // 一次 get_bytes 扫 UTF-8（禁每码点 s.length/s[i] 反复拷贝）
+        // payload 只读扫 UTF-8（对齐 Java value；禁 get_bytes）
         sb.append("\"");
-        val bytes = hao_str_get_bytes(s);
+        val bytes = s.value;
         var bi = 0;
         val n = bytes.length;
         while (bi < n) {

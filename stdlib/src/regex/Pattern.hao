@@ -16,6 +16,7 @@ package regex;
 
 import collections;
 import exception;
+import lang;
 
 class RegexException : exception.Exception {
     constructor(message: String) {
@@ -93,14 +94,15 @@ class Pattern {
 
     func replaceAll(input: String, replacement: String): String {
         val m = this.matcher(input);
-        var r = "";
+        val sb = lang.StringBuilder.withCapacity(_byteLen(input));
         var last = 0;
         while (m.find()) {
-            r = r + _byteSlice(input, last, m.start()) + replacement;
+            sb.append(_byteSlice(input, last, m.start()));
+            sb.append(replacement);
             last = m.end();
         }
-        r = r + _byteSlice(input, last, _byteLen(input));
-        return r;
+        sb.append(_byteSlice(input, last, _byteLen(input)));
+        return sb.toString();
     }
 
     func replaceFirst(input: String, replacement: String): String {
@@ -214,5 +216,5 @@ extern func _groupCount(h: NativeHandle): Int = "hao_regex_group_count";
 extern func _search(h: NativeHandle, text: String, from: Int, capS: [Int], capE: [Int]): Bool = "hao_regex_search_simple";
 extern func _fullmatch(h: NativeHandle, text: String): Bool = "hao_regex_fullmatch";
 extern func _fullmatchInto(h: NativeHandle, text: String, capS: [Int], capE: [Int]): Bool = "hao_regex_fullmatch_into";
-extern func _byteSlice(s: String, start: Int, end: Int): String = "hao_str_byte_slice";
-extern func _byteLen(s: String): Int = "hao_str_byte_len";
+func _byteSlice(s: String, start: Int, end: Int): String { return String.utf8ByteSlice(s, start, end); }
+func _byteLen(s: String): Int { return String.utf8ByteLen(s); }

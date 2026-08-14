@@ -22,16 +22,18 @@ function RunSmoke([string]$src, [string]$name, [string]$expect) {
 RunSmoke "test\sb_append_gc_smoke.hao" "sb_append_gc" "sb_append_gc_smoke OK"
 RunSmoke "test\arraylist_add_gc_smoke.hao" "arraylist_add_gc" "arraylist_add_gc_smoke OK"
 
-# 故意 fatal 须落 hao-crash.log（构造非法指针走 hao_str_len）
-# 仅源码门禁：确认 runtime_string 走 hao_panic_msg / hao_report_fatal
+# 禁恢复 hao_str_byte_arr；禁 payload 半套；禁死 str_len
 $rs = Get-Content -Raw "stdlib\runtime_string.c"
-if ($rs -notmatch "hao_str_len" -or $rs -notmatch "hao_panic_msg") {
-    throw "FAIL str_len must use hao_panic_msg"
-}
 if ($rs -match "hao_str_byte_arr") {
     throw "FAIL hao_str_byte_arr must be deleted"
 }
-Write-Host "OK   str_len fatal path + no byte_arr"
+if ($rs -match "hao_str_payload") {
+    throw "FAIL hao_str_payload must be deleted"
+}
+if ($rs -match "hao_str_len\s*\(") {
+    throw "FAIL hao_str_len must be deleted"
+}
+Write-Host "OK   no payload + no byte_arr + no str_len"
 
 Remove-Item -Recurse -Force $outDir -ErrorAction SilentlyContinue
 Write-Host "SB_GC_GATE OK"

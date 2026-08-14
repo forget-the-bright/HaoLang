@@ -37,19 +37,29 @@ class Object {
         return reflect.typeOf(this);
     }
 
-    // "<0x" + 16 位小写 hex + ">"（对齐旧 hao_fmt_ptr_angle；按位 &/>>）
+    // "<0x" + 16 位小写 hex + ">"（固定容量 SB；禁 Character.toStr+）
     static func ptrAngle(p: Long): String {
+        val sb = StringBuilder.withCapacity(19);
+        sb.append('<');
+        sb.append('0');
+        sb.append('x');
+        val hex = new [Char](16);
         var u = p;
-        var digits = "";
-        var n = 0;
-        while (n < 16) {
+        var i = 15;
+        while (i >= 0) {
             val d: Int = u & 15;
             var cp: Char = 48 + d;
             if (d >= 10) { cp = 87 + d; }
-            digits = Character.toStr(cp) + digits;
+            hex[i] = cp;
             u = u >> 4;
-            n = n + 1;
+            i = i - 1;
         }
-        return "<0x" + digits + ">";
+        i = 0;
+        while (i < 16) {
+            sb.append(hex[i]);
+            i = i + 1;
+        }
+        sb.append('>');
+        return sb.toString();
     }
 }

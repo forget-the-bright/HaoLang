@@ -86,6 +86,55 @@ if ($mvc -match 'startsWith\("/api/"\)\s*\{\s*useKeep\s*=\s*false') {
 }
 Need $mvc "HAO_HTTP_API_SHORT" "missing HAO_HTTP_API_SHORT gate"
 
+# v0.79.3：writeResponse 须 SB 组头 + 分开发送；禁 out=out+body
+$http = Get-Content -Raw (Join-Path $Root "stdlib\src\net\Http.hao")
+$wr = [regex]::Match($http, '(?s)static func writeResponse\(client: Socket, resp: HttpResponse, keepAlive: Bool\) \{.*?resp\.writeMs\s*=')
+if (-not $wr.Success) {
+    Write-Host "FAIL GC_HTTP_LAT cannot locate writeResponse+writeMs"
+    $fail++
+} else {
+    $body = $wr.Value
+    $code = [regex]::Replace($body, '(?m)//.*$', '')
+    if ($code -notmatch 'StringBuilder') {
+        Write-Host "FAIL GC_HTTP_LAT writeResponse must use StringBuilder"
+        $fail++
+    } else { Write-Host "OK   writeResponse uses StringBuilder" }
+    if ($code -match 'out\s*=\s*out\s*\+') {
+        Write-Host "FAIL GC_HTTP_LAT writeResponse still out=out+"
+        $fail++
+    } else { Write-Host "OK   writeResponse no out=out+" }
+    if ($code -notmatch 'client\.send\(head\)' -or $code -notmatch 'client\.send\(resp\.body\)') {
+        Write-Host "FAIL GC_HTTP_LAT writeResponse must send(head) then send(body)"
+        $fail++
+    } else { Write-Host "OK   writeResponse two-send head/body" }
+}
+
+# v0.79.4：decodeChunkedBody 须 SB；禁 out=out+
+$dc = [regex]::Match($http, '(?s)static func decodeChunkedBody\(rawBody: String\): String \{.*?return .*\.toString\(\);\s*\}')
+if (-not $dc.Success) {
+    Write-Host "FAIL GC_HTTP_LAT cannot locate decodeChunkedBody"
+    $fail++
+} else {
+    $dcCode = [regex]::Replace($dc.Value, '(?m)//.*$', '')
+    if ($dcCode -notmatch 'StringBuilder') {
+        Write-Host "FAIL GC_HTTP_LAT decodeChunkedBody must use StringBuilder"
+        $fail++
+    } else { Write-Host "OK   decodeChunkedBody uses StringBuilder" }
+    if ($dcCode -match 'out\s*=\s*out\s*\+') {
+        Write-Host "FAIL GC_HTTP_LAT decodeChunkedBody still out=out+"
+        $fail++
+    } else { Write-Host "OK   decodeChunkedBody no out=out+" }
+}
+
+# v0.79.4：ByteBuf 读路径禁全量 toString 再 slice
+if ($bbCode -match 'val\s+all\s*=\s*this\.sb\.toString\(\)' -or $bbCode -match '_bbSlice\(all') {
+    Write-Host "FAIL GC_HTTP_LAT ByteBuf still toString+slice on read path"
+    $fail++
+} else {
+    Write-Host "OK   ByteBuf no full toString+slice"
+}
+Need $bb "byteSlice" "ByteBuf must use StringBuilder.byteSlice"
+
 if ($fail -gt 0) {
     Write-Host "GC_HTTP_LAT_SOURCE_GATE FAIL ($fail)"
     exit 1

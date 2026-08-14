@@ -39,27 +39,27 @@ class Character {
             val arr = new [Byte](1);
             val b: Byte = cp;
             arr[0] = b;
-            return hao_str_from_byte_arr(arr);
+            return String.fromUtf8Owned(arr);
         }
         if (cp <= 0x7FF) {
             val arr = new [Byte](2);
             arr[0] = 0xC0 | (cp >> 6);
             arr[1] = 0x80 | (cp & 0x3F);
-            return hao_str_from_byte_arr(arr);
+            return String.fromUtf8Owned(arr);
         }
         if (cp <= 0xFFFF) {
             val arr = new [Byte](3);
             arr[0] = 0xE0 | (cp >> 12);
             arr[1] = 0x80 | ((cp >> 6) & 0x3F);
             arr[2] = 0x80 | (cp & 0x3F);
-            return hao_str_from_byte_arr(arr);
+            return String.fromUtf8Owned(arr);
         }
         val arr = new [Byte](4);
         arr[0] = 0xF0 | (cp >> 18);
         arr[1] = 0x80 | ((cp >> 12) & 0x3F);
         arr[2] = 0x80 | ((cp >> 6) & 0x3F);
         arr[3] = 0x80 | (cp & 0x3F);
-        return hao_str_from_byte_arr(arr);
+        return String.fromUtf8Owned(arr);
     }
 
     static func compare(a: Char, b: Char): Int {

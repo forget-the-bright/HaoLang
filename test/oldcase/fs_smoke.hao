@@ -14,7 +14,7 @@ func main() {
     f.close();
 
     val fs2 = os.FileStream.open(path, "rb");
-    val r = fs2!!.readBytes(16);
+    val r = fs2!!.readBytes(16)!!;
     fmt.println(r.length);
     fmt.println(r[0]);
     fmt.println(r[2]);

@@ -184,7 +184,7 @@ flowchart TD
 | net/fs/os 持 GC 指针跨 block | os_block 跨度 **`hao_gc_add_root` + `hao_gc_remove_root` 成对**（禁只加不摘） |
 | `hao_array_push` / `str_concat` / `substring` / `reflect_invoke` | 分配前**直接** `add_root`（**禁止**先 `is_heap_ptr`——其内 safepoint 会假死）；扩容换指针须 remove 旧 + add 新 |
 | channel send/try_send | **先 `hao_gc_add_root_if_heap` 再 chan_lock**（整型载荷勿进根表） |
-| `hao_str_trim` / `to_upper` / `to_lower` / `byte_slice` / `hao_make_args` | 分配前直接 `add_root`（禁 `is_heap_ptr` 前置） |
+| `hao_str_trim` / `to_upper` / `to_lower` / `hao_make_args`（**byte_slice 已废止**） | 分配前直接 `add_root`（禁 `is_heap_ptr` 前置） |
 | `hao_regex_compile` | pattern 成对挂根 |
 | Mutex / 原子自旋 | Hao CAS 失败路径 `hao_gc_safepoint`（删 `hao_sync_lock`） |
 | finalizer | 回调后仍可达（显式根/槽+全线程 shadow/pins+堆边）→ 挂回堆；Win SEH 隔离回调异常 |

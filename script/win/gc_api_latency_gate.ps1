@@ -7,7 +7,7 @@ param(
     [int]$MaxSafepointP95Ms = 20,
     [int]$MaxServerP95Ms = 40,
     [int]$MaxJsonP95Ms = 8,
-    [int]$MaxWallP95Ms = 80,
+    [int]$MaxWallP95Ms = 15,
     [switch]$StartMonitor
 )
 $ErrorActionPreference = "Stop"
@@ -144,7 +144,10 @@ try {
     $srvP95 = Get-Pct $srvs 0.95
     $gcP95 = Get-Pct $gcs 0.95
     $jsonP95 = Get-Pct $jsons 0.95
-    Write-Host "GC_API_LATENCY samples=$ok wall p50=${p50} p95=${p95} | srvP95=$srvP95 gcP95=$gcP95 jsonP95=$jsonP95 holdP95=$holdP95 spP95=$spP95 (full snap)"
+    $clientOhP95 = $p95 - $srvP95
+    if ($clientOhP95 -lt 0) { $clientOhP95 = 0 }
+    Write-Host ("GC_API_LATENCY samples=$ok wall p50=${p50} p95=${p95} | srvP95=$srvP95 gcP95=$gcP95 " +
+        "jsonP95=$jsonP95 holdP95=$holdP95 spP95=$spP95 clientOhP95=$clientOhP95 (full snap)")
 
     if ($holdP95 -gt $MaxHoldP95Ms) {
         Write-Host "FAIL holdP95=$holdP95 > $MaxHoldP95Ms (lock tax)"
@@ -162,12 +165,9 @@ try {
         Write-Host "FAIL jsonP95=$jsonP95 > $MaxJsonP95Ms (stringifyBean / double encode?)"
         exit 1
     }
-    if ($p95 -gt 250) {
-        Write-Host "FAIL wall p95=$p95 > 250 catastrophic"
-        exit 1
-    }
     if ($p95 -gt $MaxWallP95Ms) {
-        Write-Host "WARN wall p95=$p95 > soft $MaxWallP95Ms (clientOh?) but server/hold/json OK"
+        Write-Host "FAIL wall p95=$p95 > $MaxWallP95Ms (writeResponse String+/send tax or real clientOh; srv=$srvP95 clientOh~$clientOhP95)"
+        exit 1
     }
     Write-Host "GC_API_LATENCY_GATE OK"
     exit 0

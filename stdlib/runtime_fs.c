@@ -65,22 +65,23 @@ int32_t hao_fs_write_str(HaoNativeHandle* h, HaoString* data) {
     return (int32_t)w;
 }
 
-HaoString* hao_fs_read_str(HaoNativeHandle* h, int32_t max) {
+void* hao_fs_read_bytes(HaoNativeHandle* h, int32_t max) {
     FILE* fp = hao_fs_file(h);
-    HaoString* buf;
+    void* arr;
     size_t n;
+    /* 对齐原 read_str：坏句柄 / max<=0 → null（非空数组） */
     if (!fp || max <= 0) return NULL;
     if (max > INT32_MAX - 1) max = INT32_MAX - 1;
     hao_gc_add_root(h);
-    buf = hao_str_alloc(max);
-    hao_gc_add_root(buf);
+    arr = hao_array_new(max, 1, 0);
+    hao_gc_add_root(arr);
     hao_gc_os_block_enter();
-    n = fread(hao_str_data(buf), 1, (size_t)max, fp);
+    n = fread(arr, 1, (size_t)max, fp);
     hao_gc_os_block_leave();
-    hao_str_set_byte_len(buf, (int32_t)n);
-    hao_gc_remove_root(buf);
+    *(int64_t*)((char*)arr - HAO_ARR_LEN_OFF) = (int64_t)n;
+    hao_gc_remove_root(arr);
     hao_gc_remove_root(h);
-    return buf;
+    return arr;
 }
 
 int32_t hao_fs_write_bytes(HaoNativeHandle* h, void* arr) {
@@ -104,24 +105,6 @@ int32_t hao_fs_write_bytes(HaoNativeHandle* h, void* arr) {
     hao_gc_remove_root(arr);
     hao_gc_remove_root(h);
     return (int32_t)w;
-}
-
-void* hao_fs_read_bytes(HaoNativeHandle* h, int32_t max) {
-    FILE* fp = hao_fs_file(h);
-    void* arr;
-    size_t n;
-    if (!fp || max <= 0) return hao_array_new(0, 1, 0);
-    if (max > INT32_MAX - 1) max = INT32_MAX - 1;
-    hao_gc_add_root(h);
-    arr = hao_array_new(max, 1, 0);
-    hao_gc_add_root(arr);
-    hao_gc_os_block_enter();
-    n = fread(arr, 1, (size_t)max, fp);
-    hao_gc_os_block_leave();
-    *(int64_t*)((char*)arr - HAO_ARR_LEN_OFF) = (int64_t)n;
-    hao_gc_remove_root(arr);
-    hao_gc_remove_root(h);
-    return arr;
 }
 
 int8_t hao_fs_seek(HaoNativeHandle* h, int64_t off, int32_t whence) {

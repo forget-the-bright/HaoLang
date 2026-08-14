@@ -1,47 +1,13 @@
 // ============================================================
-//  lang.String —— 基础类型 String 的方法包装（对标 Java java.lang.String）
+//  lang.String —— 对标 Java java.lang.String（value 真字段，禁 C 跳板）
 // ------------------------------------------------------------
-//  文件名 String.hao。
-//
-//  HaoLang 的 String 是引用类型：头对象 GC_SLOTS + UTF-8 [Byte] 载荷
-//  （cap≥len+1，尾 NUL 供 FFI），【不是】值类型：
-//    - String? 的 null 就是指针 0（零开销），非空即堆头指针
-//    - .length / charAt / s[i] 按 Unicode 码点（不是字节）
-//    - 本类是「API / Object 包装」：集中暴露方法表；需要 Object 时装箱
-//
-//  ⚠ 类名与内建类型同名 String：
-//     - 类型标注裸名 `String` = 内建字符串
-//     - 包装类型请写 `lang.String`，或靠 valueOf 推断
-//     - 字面量 "hi" 仍是内建 String；属性 .length 为码点数
-//     - `new String(s)` 会失败；请用 String.valueOf(s)
-//
-//  ═══════════════════════════════════════════════════════════
-//  【内建 String 已有能力】（无需包装）
-//  ═══════════════════════════════════════════════════════════
-//    拼接 a+b / += ；相等 a==b ；长度 s.length（码点）；s[i]→Char；
-//    模板 $"…" / 逐字 @"…" / @$…" ；fmt.println
-//
-//  【可空 String?】null=指针0；?. / ?? / !! 与引用类型相同
-//
-//  【对象包装 lang.String】
-//    装箱 String.valueOf(s) / fromInt|fromDouble|fromBool
-//    拆箱 box.toString() / box.value
-//    无字面量→包装的隐式自动装箱
-//
-//  ═══════════════════════════════════════════════════════════
-//  【实例 API】（码点下标；substring 为半开区间 [start,end)）
-//  ═══════════════════════════════════════════════════════════
-//    length / isEmpty / substring / indexOf / indexOf(sub,from) / lastIndexOf
-//    contains / startsWith / endsWith / charAt→Char / trim / toUpperCase / toLowerCase
-//    byteLength / getBytes（拷贝） / hashCode / equals / toString
-//  【静态】valueOf / fromInt / fromDouble / fromBool / fromBytes / compare
-//
-//  不包装时调用：String.valueOf(s).substring(0, 2) / .indexOf(sub, from)
-//  或内建："hi".length / "hi"[0]
+//  内建 String：头 { value:[Byte], cpLen }；仅 lang/json 可读字段。
+//  造串：fromUtf8 / fromUtf8Owned（object_new + 写字段）。
 // ============================================================
 package lang;
 
 import hash;
+import collections;
 
 class String {
     var value: String;
@@ -53,24 +19,77 @@ class String {
     static func valueOf(s: String): lang.String {
         return new lang.String(s);
     }
-    // IR 内建 + / .length / s[i] 唯一 Hao 入口（v0.79：算法在 Hao；布局经 get_bytes）
+
+    // 业务唯一造串：拷贝 bytes → 头对象 → 写 value/cpLen
+    static func fromUtf8(bytes: [Byte]): String {
+        val exact = collections.copyOf(bytes);
+        return String.fromUtf8Owned(exact);
+    }
+
+    // 调用方交出独占 [Byte]（SB.toString / 字面量路径）
+    static func fromUtf8Owned(bytes: [Byte]): String {
+        val s = hao_object_new(2, 1);
+        s.value = bytes;
+        s.cpLen = Character.utf8CpCount(bytes);
+        return s;
+    }
+
+    // 供 net/http/os/regex：公开字节长/切片（内部读 value）
+    static func utf8ByteLen(s: String): Int {
+        return s.value.length;
+    }
+    // 单字节（0..255）；越界 -1。供 HTTP ASCII 扫描，禁 per-byte utf8ByteSlice 造串
+    static func utf8ByteAt(s: String, i: Int): Int {
+        val n = s.value.length;
+        if (i < 0 || i >= n) { return -1; }
+        val b: Int = s.value[i];
+        return b;
+    }
+    static func utf8ByteSlice(s: String, start: Int, end: Int): String {
+        var a = start;
+        var b = end;
+        val n = s.value.length;
+        if (a < 0) { a = 0; }
+        if (b > n) { b = n; }
+        if (b < a) { b = a; }
+        // copyOfRange 已独占；fromUtf8Owned 免二次 copyOf
+        return String.fromUtf8Owned(collections.copyOfRange(s.value, a, b));
+    }
+
     static func concat(a: String, b: String): String {
-        val n = hao_str_byte_len(a) + hao_str_byte_len(b);
+        val n = a.value.length + b.value.length;
         val sb = StringBuilder.withCapacity(n);
         sb.append(a);
         sb.append(b);
         return sb.toString();
     }
+
     static func codePointLen(s: String): Long {
-        val cached = hao_str_get_cp_len(s);
+        val cached = s.cpLen;
         if (cached >= 0) { return cached; }
-        val n = Character.utf8CpCount(hao_str_get_bytes(s));
-        hao_str_set_cp_len(s, n);
+        val n = Character.utf8CpCount(s.value);
+        s.cpLen = n;
         return n;
     }
+
     static func charAtCp(s: String, i: Long): Char {
-        return Character.utf8CharAtCp(hao_str_get_bytes(s), i);
+        return Character.utf8CharAtCp(s.value, i);
     }
+
+    static func contentHash(s: String): Int {
+        val bytes = s.value;
+        var h: Long = -3750763034362895579;
+        var i = 0;
+        while (i < bytes.length) {
+            val b: Int = bytes[i];
+            h = h ^ b;
+            h = h * 1099511628211;
+            i = i + 1;
+        }
+        val out: Int = h;
+        return out;
+    }
+
     static func fromInt(n: Int): lang.String {
         return new lang.String(Integer.toStr(n));
     }
@@ -86,12 +105,10 @@ class String {
     static func fromBool(b: Bool): lang.String {
         return new lang.String(Boolean.toStr(b));
     }
-    // 从 UTF-8 [Byte] 建串（不要求尾 NUL；工厂内部补）
     static func fromBytes(arr: [Byte]): lang.String {
-        return new lang.String(hao_str_from_byte_arr(arr));
+        return new lang.String(String.fromUtf8(arr));
     }
 
-    // 字典序：按码点比较（合法 UTF-8 下与字节序一致）
     static func compare(a: String, b: String): Int {
         val na = a.length;
         val nb = b.length;
@@ -110,10 +127,9 @@ class String {
         return 0;
     }
 
-    // 字节下标 indexOf（Http 报文等）；from 起搜；未找到 -1
     static func byteIndexOf(s: String, sub: String, from: Int): Int {
-        val a = hao_str_get_bytes(s);
-        val b = hao_str_get_bytes(sub);
+        val a = s.value;
+        val b = sub.value;
         val sl = a.length;
         val subl = b.length;
         var f = from;
@@ -141,15 +157,13 @@ class String {
     func length(): Int {
         return this.value.length;
     }
-    // UTF-8 字节数（不含尾 NUL）
     func byteLength(): Int {
-        return hao_str_byte_len(this.value);
+        return String.utf8ByteLen(this.value);
     }
-    // 公开 API：返回载荷拷贝（不可变契约，对齐 Java getBytes）
+    // 公开 API：拷贝 value（对齐 Java getBytes）
     func getBytes(): [Byte] {
-        return hao_str_get_bytes(this.value);
+        return collections.copyOf(this.value.value);
     }
-    // v0.56：查询/substring/大小写上移 Hao；C 留 IR 原语 char_at/byte_of_cp/byte_slice
     func isEmpty(): Bool {
         return this.value.length == 0;
     }
@@ -162,17 +176,16 @@ class String {
         if (b < a) { b = a; }
         if (a > n) { a = n; }
         if (b > n) { b = n; }
-        val bytes = hao_str_get_bytes(s);
+        val bytes = s.value;
         var b0 = Character.utf8ByteOfCp(bytes, a);
         var b1 = Character.utf8ByteOfCp(bytes, b);
         if (b0 < 0) { b0 = 0; }
-        if (b1 < 0) { b1 = hao_str_byte_len(s); }
-        return hao_str_byte_slice(s, b0, b1);
+        if (b1 < 0) { b1 = bytes.length; }
+        return String.utf8ByteSlice(s, b0, b1);
     }
     func indexOf(sub: String): Int {
         return this.indexOf(sub, 0);
     }
-    // Java String.indexOf(str, fromIndex)：码点下标起搜
     func indexOf(sub: String, from: Int): Int {
         val n = this.value.length;
         val m = sub.length;
@@ -229,7 +242,6 @@ class String {
     func charAt(i: Int): Char {
         return this.value[i];
     }
-    // ASCII 空白（空格/制表/换行/回车）；按码点扫
     func trim(): String {
         val n = this.value.length;
         var a = 0;
@@ -246,7 +258,6 @@ class String {
         }
         return this.substring(a, b);
     }
-    // ASCII a–z → A–Z；其余码点原样
     func toUpperCase(): String {
         var r = "";
         val n = this.value.length;

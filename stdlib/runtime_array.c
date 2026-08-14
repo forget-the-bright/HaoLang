@@ -30,6 +30,18 @@ void* hao_array_new(int64_t len, int64_t esz, int64_t is_ptr) {
     return base + HAO_ARR_HEADER;
 }
 
+/* 从 C 常量串造 [Byte]（仅 IR 字面量；长度=strlen，无尾 NUL 进 len） */
+void* hao_array_from_cstr(const char* c) {
+    if (!c) c = "";
+    size_t n = strlen(c);
+    if (n > (size_t)INT32_MAX) {
+        hao_panic_msg("C 字符串过长无法造 [Byte]");
+    }
+    void* arr = hao_array_new((int64_t)n, 1, 0);
+    if (n > 0 && arr) memcpy(arr, c, n);
+    return arr;
+}
+
 int64_t hao_array_len(void* arr) {
     if (!arr) return 0;
     return *(int64_t*)((char*)arr - HAO_ARR_LEN_OFF);

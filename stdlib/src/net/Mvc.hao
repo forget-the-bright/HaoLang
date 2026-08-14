@@ -490,7 +490,7 @@ public class HttpApp {
             val req = HttpServer.parseRequest(raw);
             var keep = true;
             val conn = req.getHeader("Connection");
-            if (conn != null && String.valueOf(conn!!).toLowerCase() == "close") {
+            if (conn != null && Http.asciiEqCi(String.valueOf(conn!!).trim(), "close")) {
                 keep = false;
             }
             val out = ch.pipeline.fireChannelRead(req);

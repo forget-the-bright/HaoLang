@@ -2806,10 +2806,9 @@ std::string IRGen::emitJsonWrite(const ClassInfoPtr& ci) {
     beginFunctionGcRoots();
 
     auto appendStr = [&](const std::string& lit) {
-        std::string c = em_.internString(lit);
-        std::string p = emitCall("ptr", "@hao_str_from_cstr", "ptr " + c);
+        Value sv = emitStringFromLiteral(lit);
         (void)emitCall("ptr", "@lang$StringBuilder.append",
-                       "ptr %sb.arg, ptr " + p);
+                       "ptr %sb.arg, ptr " + sv.ir);
     };
     auto appendLongReg = [&](const std::string& reg) {
         (void)emitCall("ptr", "@lang$StringBuilder.append$Long",
@@ -2869,17 +2868,13 @@ std::string IRGen::emitJsonWrite(const ClassInfoPtr& ci) {
                 } else if (k == TypeKind::Float) {
                     std::string v =
                         emitCall("float", "@hao_unbox_f32", "ptr " + box);
-                    std::string sreg =
-                        emitCall("ptr", "@lang$Float.toStr", "float " + v);
-                    (void)emitCall("ptr", "@lang$StringBuilder.append",
-                                   "ptr %sb.arg, ptr " + sreg);
+                    emitCallVoid("@lang$Float.appendTo",
+                                 "ptr %sb.arg, float " + v);
                 } else if (k == TypeKind::Double) {
                     std::string v =
                         emitCall("double", "@hao_unbox_f64", "ptr " + box);
-                    std::string sreg =
-                        emitCall("ptr", "@lang$Double.toStr", "double " + v);
-                    (void)emitCall("ptr", "@lang$StringBuilder.append",
-                                   "ptr %sb.arg, ptr " + sreg);
+                    emitCallVoid("@lang$Double.appendTo",
+                                 "ptr %sb.arg, double " + v);
                 } else if (k == TypeKind::Bool) {
                     std::string wide =
                         emitCall("i32", "@hao_unbox_i32", "ptr " + box);
@@ -2947,22 +2942,22 @@ std::string IRGen::emitJsonWrite(const ClassInfoPtr& ci) {
                 em_.emitLabel(okL);
             });
         } else if (k == TypeKind::Float || k == TypeKind::Double) {
-            // 冷路径：toStr 再 append（少见）
+            // 对齐 ISpanFormattable：appendTo 直写 SB
             std::string lt = f.type->llvmType();
             std::string v = emitLoad(lt, fp);
-            std::string sreg;
             if (k == TypeKind::Double)
-                sreg = emitCall("ptr", "@lang$Double.toStr", lt + " " + v);
+                emitCallVoid("@lang$Double.appendTo",
+                             "ptr %sb.arg, double " + v);
             else
-                sreg = emitCall("ptr", "@lang$Float.toStr", lt + " " + v);
-            (void)emitCall("ptr", "@lang$StringBuilder.append",
-                           "ptr %sb.arg, ptr " + sreg);
+                emitCallVoid("@lang$Float.appendTo",
+                             "ptr %sb.arg, float " + v);
         } else {
             appendStr("null");
         }
     }
     appendStr("}");
     emitRetVoid();
+    em_.flushEntryAllocas();
     em_.emitRaw("}");
 
     currentClass_ = nullptr;
@@ -3469,7 +3464,7 @@ std::string IRGen::evalStaticInit(antlr4::tree::ParseTree* node, TypeKind kind) 
         if (auto* t = lit->STRING_LIT()) {
             // 返回 intern 的 C 串（@…）。静态全局不能直接存为 HaoString*，
             // emitStaticFieldGlobals / staticinit 会把 String 改走 runtime 包装；
-            // emitNewFactory 用 @… → hao_str_from_cstr。
+            // emitNewFactory：字面量走 emitStringFromLiteral（fromUtf8）。
             return em_.internString(StringUtil::unescapeStringLiteral(t->getText()));
         }
         return "";
@@ -3656,10 +3651,9 @@ void IRGen::genStaticConstructor(const ClassInfoPtr& ci) {
             std::string obj = emitObjectNewForClass(ci.get());
             std::string vtp = emitGep("ptr", obj, "i64", "0");
             emitStore("ptr", ci->vtableIRName, vtp);
-            std::string nameC = em_.internString(cname);
-            std::string nameS = emitCall("ptr", "@hao_str_from_cstr", "ptr " + nameC);
+            Value nameS = emitStringFromLiteral(cname);
             emitCallVoid(ci->ctorIRName,
-                         "ptr " + obj + ", ptr " + nameS + ", i32 " +
+                         "ptr " + obj + ", ptr " + nameS.ir + ", i32 " +
                          std::to_string(ord));
             emitGlobalGcStore("@" + ci->name + "." + cname, obj, enumTy);
             ++ord;

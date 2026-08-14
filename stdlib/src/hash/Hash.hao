@@ -1,6 +1,7 @@
 package hash;
 
 import reflect;
+import lang;
 
 // splitmix64 风格混合（v0.56：上移 Hao）
 func mix64(x: Long): Long {
@@ -52,17 +53,7 @@ func hashOf(x: Char): Int {
     return hashOf(xi);
 }
 func hashOf(x: String): Int {
-    val bytes = hao_str_get_bytes(x);
-    var h: Long = -3750763034362895579; // FNV offset basis
-    var i = 0;
-    while (i < bytes.length) {
-        val b: Int = bytes[i];
-        h = h ^ b;
-        h = h * 1099511628211;
-        i = i + 1;
-    }
-    val out: Int = h;
-    return out;
+    return lang.String.contentHash(x);
 }
 func hashOf(x: Object): Int { return x.hashCode(); }
 func hashOf(x: Byte): Int {

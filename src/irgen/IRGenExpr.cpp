@@ -208,6 +208,40 @@ Value IRGen::genAssign(HaoLangParser::AssignExprContext* e) {
             Value recv;
             if (!evalAssignRecv(pf, pf->postfixOp().size() - 1, recv)) {
                 // 前缀含调用等，不是可赋值字段左值——落入下方报错
+            } else if (recv.type->kind == TypeKind::String) {
+                // 内建 String.value / cpLen 赋值（仅 lang/json）
+                if (recv.type->nullable) {
+                    error(pf, "不能对可空 String? 直接赋值内部字段，请使用 '!!'");
+                    return Value();
+                }
+                std::string fname = mem->IDENT()->getText();
+                int slot = stringInternalSlot(fname);
+                if (slot < 0) {
+                    error(pf, "String 没有可写字段 '" + fname + "'");
+                    return Value();
+                }
+                if (!canAccessStringInternals()) {
+                    error(pf, "不能访问 String 内部字段 '" + fname +
+                              "'（仅 lang/json；对齐 Java private value）");
+                    return Value();
+                }
+                if (op != "=") {
+                    error(e, "String." + fname + " 仅支持简单赋值");
+                    return Value();
+                }
+                TypePtr ft = stringInternalType(fname);
+                rootGcOperand(recv);
+                Value rhs = genAssign(e->assignExpr());
+                if (!rhs.valid()) return Value();
+                if (!isAssignable(rhs.type, ft)) {
+                    error(e, "无法将 " + rhs.type->toString() + " 赋值给 String." +
+                             fname);
+                    return Value();
+                }
+                rhs = coerce(rhs, ft, 0, 0);
+                std::string fp = fieldPtr(recv.ir, slot);
+                emitHeapStore(fp, rhs.ir, ft, recv.ir);
+                return rhs;
             } else if (recv.type->kind == TypeKind::Class) {
                 if (recv.type->nullable) {
                     error(pf, "不能对可空类型 " + recv.type->toString() +
@@ -1733,7 +1767,7 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
                    " 直接访问成员 '" + field + "'，请使用 '?.' 或 '!!'");
         return Value();
     }
-    // String / 数组的 length、capacity（C 仍返回 i64，截断为 Int）
+    // String / 数组的 length、capacity；内建 String.value/cpLen（Java 字段）
     if (field == "length") {
         if (base.type->kind == TypeKind::String) {
             Value b = base;
@@ -1753,6 +1787,25 @@ Value IRGen::applyMemberAccess(const Value& base, const std::string& field,
     if (field == "capacity" && isArrayReceiver(base.type)) {
         error(ctx, "数组无公开 capacity（对齐 Java/C#；容量在 ArrayList/StringBuilder）");
         return Value();
+    }
+    // 内建 String 内部字段：value / cpLen（仅 lang/json，对齐 Java private）
+    if (base.type->kind == TypeKind::String) {
+        int slot = stringInternalSlot(field);
+        if (slot >= 0) {
+            if (!canAccessStringInternals()) {
+                error(ctx, "不能访问 String 内部字段 '" + field +
+                           "'（仅 lang/json；对齐 Java private value）");
+                return Value();
+            }
+            if (base.ir.empty()) {
+                error(ctx, "静态上下文不能访问 String." + field);
+                return Value();
+            }
+            TypePtr ft = stringInternalType(field);
+            std::string fp = fieldPtr(base.ir, slot);
+            std::string reg = emitLoad(ft->llvmType(), fp);
+            return Value(reg, ft);
+        }
     }
 
     // 对象字段读取

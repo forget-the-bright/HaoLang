@@ -1,5 +1,5 @@
 # GC-HTTP-LAT 压测：HttpClient（弃用 IWR 作真值）+ 服务端分段 ms
-# 口诀：clientOverhead≈wall → 客户端/连接；server≈wall 且 gcStats 大 → STW park；json 大 → 反射 JSON；hold 大 → 锁税
+# 口诀：clientOh=wall-srv；修后应个位数。大 clientOh → 查 writeResponse/短连；server≈wall 且 gcStats 大 → STW；json 大 → JSON；hold 大 → 锁税
 $url = "http://127.0.0.1:18090/api/gc"
 $totalHours = 24
 $totalSeconds = $totalHours * 3600
@@ -63,10 +63,24 @@ while ((Get-Date) -lt $endTime -and -not $shouldStop) {
             $p50 = Get-Pct $lat 0.50
             $p95 = Get-Pct $lat 0.95
 
-            $srv = Get-I64 $json "serverTotalMs"
-            $gcMs = Get-I64 $json "gcStatsMs"
-            $jsonMs = Get-I64 $json "jsonMs"
-            $procMs = Get-I64 $json "procMs"
+            # 权威计时在响应头（body 的 jsonMs/serverTotalMs 故意为 0）
+            $hdr = $resp.Headers
+            function HdrMs([string]$name) {
+                $vals = $null
+                if ($hdr.TryGetValues($name, [ref]$vals) -and $vals -and $vals.Count -gt 0) {
+                    return [int64]$vals[0]
+                }
+                # HttpContent headers
+                $ch = $resp.Content.Headers
+                if ($ch.TryGetValues($name, [ref]$vals) -and $vals -and $vals.Count -gt 0) {
+                    return [int64]$vals[0]
+                }
+                return [int64]0
+            }
+            $srv = HdrMs "X-Hao-Server-Ms"
+            $gcMs = HdrMs "X-Hao-GcStats-Ms"
+            $jsonMs = HdrMs "X-Hao-Json-Ms"
+            $procMs = HdrMs "X-Hao-Proc-Ms"
             $hold = Get-I64 $json "lastCollectHoldMs"
             $sp = Get-I64 $json "lastStatsSafepointMs"
             $clientOh = $ms - $srv

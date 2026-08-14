@@ -277,6 +277,8 @@ void hao_gc_fprint_debug_snapshot(FILE* f);
 
 /* is_ptr≠0：元素为 GC 指针，精确堆扫扫 [0..len)；写屏障在 set/arraycopy 时触发 */
 void*   hao_array_new(int64_t len, int64_t esz, int64_t is_ptr);
+/* IR 字面量：C 常量 → 堆 [Byte]（再经 lang$String.fromUtf8） */
+void*   hao_array_from_cstr(const char* c);
 int64_t hao_array_len(void* arr);
 /* 运行时内部（字符串尾 NUL 槽）；非语言公开 API */
 int64_t hao_array_cap(void* arr);
@@ -309,25 +311,15 @@ HaoString* hao_str_from_bytes(const char* bytes, int32_t byte_len);
 const char* hao_str_cstr(const HaoString* s);
 /* 可写载荷（填 Hao 自有缓冲）；禁止作为对外合法「借出堆内指针」模式——出桥用 hao_ffi_dup_* */
 char*       hao_str_data(HaoString* s);
-HaoString* hao_str_byte_slice(HaoString* s, int32_t start, int32_t end);
+/* C 出桥：字节长。from_byte_arr 已废止（Hao 走 String.fromUtf8 / s.value） */
 int32_t hao_str_byte_len(HaoString* s);
-/* 码点长度缓存槽（-1=未算；算法在 Hao） */
-int64_t hao_str_get_cp_len(HaoString* s);
-void hao_str_set_cp_len(HaoString* s, int64_t n);
-/* 在 cap 内调整内容长度并写 NUL；供 recv/read 截断 */
-void    hao_str_set_byte_len(HaoString* s, int32_t n);
-/* 公开 API：拷贝为 [Byte]；从 [Byte] 建串；只读内部载荷 */
-void*      hao_str_get_bytes(HaoString* s);
-HaoString* hao_str_from_byte_arr(void* arr);
 
 /* P7c：field_set 仍用 parse_cstr；toStr/parse 业务已上移 Hao（v0.79） */
-int hao_fmt_double(double v, char* out, int cap);
 /* 手写十进制/指针（禁 Win64 未对齐栈进 snprintf） */
 int hao_fmt_i64_dec(char* out, int cap, int64_t v);
 int hao_fmt_u64_dec(char* out, int cap, uint64_t v);
 int hao_fmt_ptr_angle(char* out, int cap, const void* p);
 int hao_parse_double_cstr(const char* p, const char** endp, double* out);
-int64_t hao_f64_to_i64(double v);
 
 /* ============================================================
  *  NativeHandle（runtime_handle.c）—— C 资源代理句柄

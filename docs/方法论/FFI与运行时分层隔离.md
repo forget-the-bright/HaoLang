@@ -232,7 +232,7 @@ C 类型只做中转，**绝不作为上层 API 类型**
 
 ❌ 禁止业务层手动 free / 手动操作原生资源内存
 
-## 7\. 对标分层铁律（Go / Java / C# · v0.79）
+## 7\. 对标分层铁律（Go / Java / C# · v0.79+）
 
 对齐的是**设计理念**，不是「看起来差不多」或 PARTIAL 糊弄：
 
@@ -245,18 +245,31 @@ C 类型只做中转，**绝不作为上层 API 类型**
 
 **PARTIAL = 未结案。** 禁止把「格式化 / Object 三默认 / reflect 标量拼串 / 串 UTF-8·concat 算法仍在 C」标成已对齐。
 
+### 7\.0 串与数值：Java `value` 真字段（v0.79.2 钉死）
+
+| 能力 | Java | C# | Hao |
+|------|------|-----|-----|
+| 内部读串 | `String.value` 字段 | `GetRawStringData` / Span | **`s.value` IR GEP（仅 lang/json）** |
+| 公开字节 | `getBytes()` 永远新数组 | `Encoding.GetBytes` 拷贝 | **Hao `Arrays.copyOf(s.value)`** |
+| SB 追加串 | `arraycopy` from value | `Append(ref GetRawStringData())` | **`arraycopy(s.value, …)`** |
+| 数值入缓冲 | `getChars` / FloatingDecimal | `ISpanFormattable.TryFormat` | **`Double/Float.appendTo(sb)`** |
+| JSON 字面量 | 写缓冲 | 写 Span | **`emitStringFromLiteral` → `fromUtf8` → `append(String)`** |
+| IO 读 | `byte[]` / Channel | `Span<byte>` | **C 填 `[Byte]` → Hao `fromUtf8`** |
+
+**0.79/0.79.1 半套废止**：`hao_str_get_bytes` 当内部 value、再叠 `hao_str_payload` 薄跳板、`appendUtf8`/`copy_cstr_to_arr`——**性质仍不对**。**禁止**再发明 view/raw/payload2。业务面 **Ban** payload/get_bytes/cp_len/byte_slice/from_byte_arr。
+
 ### 7\.1 对齐清单（结案标准）
 
 | ID | 区域 | 判定 | 结案定义 |
 |----|------|------|----------|
 | A1–A8 | fmt / File / Net / Http / SB / 集合 / JSON 跳板 / Int toStr | ALIGNED | 保持；gate 防回潮 |
-| M5 | 死/僵尸 C 导出 | 须删符号 + gate Ban | 无业务调用方仍 export = 未结案 |
-| M2 | Object.hashCode/equals/toString | **Hao** | C 最多身份位型薄读；无拼串 |
-| M1 | Float/Double toStr/parse | **Hao** | 删 `hao_float_*` / `hao_double_*` 业务导出 |
+| M5 | 死/僵尸 C 导出 | 须删符号 + gate Ban | 无 `hao_str_len`/`char_at`/`concat`/`byte_of_cp`/`hao_fmt_double`/`hao_f64_to_i64` |
+| M2 | Object.hashCode/equals/toString | **Hao** | C 最多身份位型薄读；ptrAngle 走 SB |
+| M1 | Float/Double toStr/parse | **Hao** | `appendTo`；语言 coerce 浮点→整；删 f64_to_i64 |
 | M3 | reflect 标量→串 | **Hao toStr** | C 禁 `field_value_to_str` 业务格式化 |
-| M4 | `hao_str_*` 算法面 | 冻结新增；len/char_at/byte_of_cp/concat 迁 Hao | concat→SB/`arraycopy`；IR 走 `lang$String.*` |
+| M4 | `hao_str_*` 算法面 | **Hao + `s.value` 字段** | IR 走 `lang$String.*`；禁 payload/get_bytes |
 
-**永久留下（理念对齐，非坑）**：GC、`arraycopy`/`array_new`、Handle/`ffi_dup`、panic、fs/net/regex 引擎体、print 写字节、time/proc、串**布局**薄跳板（`get_bytes` / `from_byte_arr` / `byte_slice` / `byte_len`）。
+**永久留下（理念对齐，非坑）**：GC、`object_new`/`array_new`/`arraycopy`/`array_from_cstr`、Handle/`ffi_dup`、panic、fs/net/regex 引擎体、print 写字节、time/proc。串业务 **不** 再靠 C 薄跳板。
 
 ## 8\. 顶层最终方法论（可作为文档结尾金句）
 

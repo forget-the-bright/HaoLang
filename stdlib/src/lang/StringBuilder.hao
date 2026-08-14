@@ -72,9 +72,9 @@ class StringBuilder {
         this.count = n;
     }
 
-    // 对齐 Java getChars：先独立拷贝字节，再 ensureCapacity（禁内部别名跨 GC）
+    // 对齐 C# Append(string)：s.value → arraycopy
     func append(s: String): StringBuilder {
-        val src = hao_str_get_bytes(s);
+        val src = s.value;
         val n = src.length;
         if (n <= 0) { return this; }
         this.ensureCapacity(this.count + n);
@@ -178,13 +178,21 @@ class StringBuilder {
         return this.append("null");
     }
 
+    // 字节区间 → 串（一次 copyOfRange+fromUtf8Owned）；禁先 toString 再切片
+    func byteSlice(from: Int, to: Int): String {
+        var a = from;
+        var b = to;
+        if (a < 0) { a = 0; }
+        if (b > this.count) { b = this.count; }
+        if (a >= b) { return ""; }
+        return String.fromUtf8Owned(collections.copyOfRange(this.value, a, b));
+    }
+
     override func toString(): String {
         if (this.count <= 0) {
             return "";
         }
-        val exact = new [Byte](this.count);
-        collections.arraycopy(this.value, 0, exact, 0, this.count);
-        return hao_str_from_byte_arr(exact);
+        return this.byteSlice(0, this.count);
     }
 }
 
@@ -231,4 +239,4 @@ class StringBuffer {
     }
 }
 
-// hao_str_* 见 lang/native.hao
+// hao_object_new 见 lang/native.hao；串业务禁 C FFI

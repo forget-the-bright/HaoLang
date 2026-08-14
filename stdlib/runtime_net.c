@@ -325,27 +325,24 @@ int32_t hao_net_send(HaoNativeHandle* unit, HaoString* data) {
     return (int32_t)sent;
 }
 
-HaoString* hao_net_recv(HaoNativeHandle* unit, int32_t max) {
+/* 填 [Byte]：n==0 → 空数组（EOF）；n<0 → null。Hao 再 fromUtf8。 */
+void* hao_net_recv_bytes(HaoNativeHandle* unit, int32_t max) {
     if (!hao_net_ensure()) return NULL;
     hao_sock_t s = hao_net_load(unit);
     if (s == HAO_INVALID_SOCKET || max <= 0) return NULL;
     if (max > INT32_MAX - 1) max = INT32_MAX - 1;
-    HaoString* buf = hao_str_alloc(max);
-    hao_gc_add_root(buf);
+    void* arr = hao_array_new(max, 1, 0);
+    hao_gc_add_root(arr);
     hao_gc_os_block_enter();
-    int n = g_ws.recv(s, hao_str_data(buf), (int)max, 0);
+    int n = g_ws.recv(s, (char*)arr, (int)max, 0);
     hao_gc_os_block_leave();
-    hao_gc_remove_root(buf);
-    /* Go/Java: n==0 EOF -> empty String; n<0 timeout/error -> null */
-    if (n < 0) return NULL;
-    if (n == 0) {
-        hao_str_data(buf)[0] = '\0';
-        hao_str_set_byte_len(buf, 0);
-        return buf;
+    if (n < 0) {
+        hao_gc_remove_root(arr);
+        return NULL;
     }
-    hao_str_data(buf)[n] = '\0';
-    hao_str_set_byte_len(buf, n);
-    return buf;
+    *(int64_t*)((char*)arr - HAO_ARR_LEN_OFF) = (int64_t)n;
+    hao_gc_remove_root(arr);
+    return arr;
 }
 
 int32_t hao_net_close(HaoNativeHandle* unit) {
@@ -415,21 +412,23 @@ int32_t hao_net_udp_sendto(HaoNativeHandle* unit, HaoString* host, int32_t port,
     return sent;
 }
 
-HaoString* hao_net_udp_recvfrom(HaoNativeHandle* unit, int32_t max) {
+void* hao_net_udp_recvfrom_bytes(HaoNativeHandle* unit, int32_t max) {
     if (!hao_net_ensure()) return NULL;
     hao_sock_t s = hao_net_load(unit);
     if (s == HAO_INVALID_SOCKET || max <= 0) return NULL;
     if (max > INT32_MAX - 1) max = INT32_MAX - 1;
-    HaoString* buf = hao_str_alloc(max);
-    hao_gc_add_root(buf);
+    void* arr = hao_array_new(max, 1, 0);
+    hao_gc_add_root(arr);
     hao_gc_os_block_enter();
-    int n = g_ws.recvfrom(s, hao_str_data(buf), (int)max, 0, NULL, NULL);
+    int n = g_ws.recvfrom(s, (char*)arr, (int)max, 0, NULL, NULL);
     hao_gc_os_block_leave();
-    hao_gc_remove_root(buf);
-    if (n < 0) return NULL;
-    hao_str_data(buf)[n] = '\0';
-    hao_str_set_byte_len(buf, n);
-    return buf;
+    if (n < 0) {
+        hao_gc_remove_root(arr);
+        return NULL;
+    }
+    *(int64_t*)((char*)arr - HAO_ARR_LEN_OFF) = (int64_t)n;
+    hao_gc_remove_root(arr);
+    return arr;
 }
 
 #else
@@ -596,25 +595,22 @@ int32_t hao_net_send(HaoNativeHandle* unit, HaoString* data) {
     return (int32_t)sent;
 }
 
-HaoString* hao_net_recv(HaoNativeHandle* unit, int32_t max) {
+void* hao_net_recv_bytes(HaoNativeHandle* unit, int32_t max) {
     hao_sock_t s = hao_net_load(unit);
     if (s == HAO_INVALID_SOCKET || max <= 0) return NULL;
     if (max > INT32_MAX - 1) max = INT32_MAX - 1;
-    HaoString* buf = hao_str_alloc(max);
-    hao_gc_add_root(buf);
+    void* arr = hao_array_new(max, 1, 0);
+    hao_gc_add_root(arr);
     hao_gc_os_block_enter();
-    int n = (int)recv(s, hao_str_data(buf), (int)max, 0);
+    int n = (int)recv(s, (char*)arr, (int)max, 0);
     hao_gc_os_block_leave();
-    hao_gc_remove_root(buf);
-    if (n < 0) return NULL;
-    if (n == 0) {
-        hao_str_data(buf)[0] = '\0';
-        hao_str_set_byte_len(buf, 0);
-        return buf;
+    if (n < 0) {
+        hao_gc_remove_root(arr);
+        return NULL;
     }
-    hao_str_data(buf)[n] = '\0';
-    hao_str_set_byte_len(buf, n);
-    return buf;
+    *(int64_t*)((char*)arr - HAO_ARR_LEN_OFF) = (int64_t)n;
+    hao_gc_remove_root(arr);
+    return arr;
 }
 
 int32_t hao_net_close(HaoNativeHandle* unit) {
@@ -681,20 +677,22 @@ int32_t hao_net_udp_sendto(HaoNativeHandle* unit, HaoString* host, int32_t port,
     return sent;
 }
 
-HaoString* hao_net_udp_recvfrom(HaoNativeHandle* unit, int32_t max) {
+void* hao_net_udp_recvfrom_bytes(HaoNativeHandle* unit, int32_t max) {
     hao_sock_t s = hao_net_load(unit);
     if (s == HAO_INVALID_SOCKET || max <= 0) return NULL;
     if (max > INT32_MAX - 1) max = INT32_MAX - 1;
-    HaoString* buf = hao_str_alloc(max);
-    hao_gc_add_root(buf);
+    void* arr = hao_array_new(max, 1, 0);
+    hao_gc_add_root(arr);
     hao_gc_os_block_enter();
-    int n = (int)recvfrom(s, hao_str_data(buf), (int)max, 0, NULL, NULL);
+    int n = (int)recvfrom(s, (char*)arr, (int)max, 0, NULL, NULL);
     hao_gc_os_block_leave();
-    hao_gc_remove_root(buf);
-    if (n < 0) return NULL;
-    hao_str_data(buf)[n] = '\0';
-    hao_str_set_byte_len(buf, n);
-    return buf;
+    if (n < 0) {
+        hao_gc_remove_root(arr);
+        return NULL;
+    }
+    *(int64_t*)((char*)arr - HAO_ARR_LEN_OFF) = (int64_t)n;
+    hao_gc_remove_root(arr);
+    return arr;
 }
 
 #endif /* _WIN32 */

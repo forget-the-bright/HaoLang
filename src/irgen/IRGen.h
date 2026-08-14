@@ -648,6 +648,24 @@ private:
     // 计算对象字段地址，返回指针寄存器名
     std::string fieldPtr(const std::string& objIR, int slot);
 
+    // 内建 String 内部字段（对齐 Java value）：仅 package lang/json
+    bool canAccessStringInternals() const {
+        return currentImportPath_ == "lang" || currentImportPath_ == "json";
+    }
+    // value→slot0 [Byte]；cpLen→slot1 Long；非法返回 -1
+    int stringInternalSlot(const std::string& field) const {
+        if (field == "value") return 0;
+        if (field == "cpLen") return 1;
+        return -1;
+    }
+    TypePtr stringInternalType(const std::string& field) const {
+        if (field == "value") return Type::makeArray(Type::makeByte());
+        if (field == "cpLen") return Type::makeLong();
+        return Type::makeUnknown();
+    }
+    // 字面量 → [Byte] 常量数组 + lang$String.fromUtf8（禁 hao_str_from_cstr 业务）
+    Value emitStringFromLiteral(const std::string& content);
+
     // GC v3：引用 / 装箱可空视为堆指针
 /** 与 Type::isGcManaged 同义（docs/类型属性.md）；历史名保留。 */
     static bool isGcPointerType(const TypePtr& t);

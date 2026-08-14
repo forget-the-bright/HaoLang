@@ -1,14 +1,7 @@
 // ============================================================
-//  lang 包 —— 运行时 extern 集中声明
+//  lang 包 —— 运行时底座 extern（禁串业务 FFI）
 // ============================================================
 package lang;
 
-extern func hao_str_byte_len(s: String): Int = "hao_str_byte_len";
-extern func hao_str_byte_slice(s: String, start: Int, end: Int): String = "hao_str_byte_slice";
-extern func hao_str_get_bytes(s: String): [Byte] = "hao_str_get_bytes";
-extern func hao_str_from_byte_arr(arr: [Byte]): String = "hao_str_from_byte_arr";
-/* 浮点→i64 截断薄跳板（非格式化业务；供 Double.toStr） */
-extern func hao_f64_to_i64(v: Double): Long = "hao_f64_to_i64";
-/* 码点长度缓存槽（布局字段；算法仍在 Hao） */
-extern func hao_str_get_cp_len(s: String): Long = "hao_str_get_cp_len";
-extern func hao_str_set_cp_len(s: String, n: Long): Unit = "hao_str_set_cp_len";
+/* 仅对象分配底座；String.fromUtf8 写 value/cpLen 字段 */
+extern func hao_object_new(nfields: Long, bitmap: Long): String = "hao_object_new";

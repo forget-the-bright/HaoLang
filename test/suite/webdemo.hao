@@ -27,7 +27,7 @@ func webDemoTest() {
     fmt.println(reflect.normalizePackagePrefix("demo.web") == "demo$web$"); // true
 
     val app = new net.HttpApp();
-    if (!app.listen(7903)) {
+    if (!app.listen(17903)) {
         fmt.println("webdemo-listen-fail");
         return;
     }
@@ -43,7 +43,7 @@ func webDemoTest() {
     val th = new thread.Thread();
     th.start({ app.serveOnce(); });
     thread.sleep(80);
-    val r1 = net.Http.get("http://127.0.0.1:7903/web/home");
+    val r1 = net.Http.get("http://127.0.0.1:17903/web/home");
     fmt.println(r1.status);                              // 200
     fmt.println(r1.body);                                // web-home
     th.join();
@@ -51,14 +51,14 @@ func webDemoTest() {
     val th2 = new thread.Thread();
     th2.start({ app.serveOnce(); });
     thread.sleep(80);
-    val r2 = net.Http.get("http://127.0.0.1:7903/web/api/v1");
+    val r2 = net.Http.get("http://127.0.0.1:17903/web/api/v1");
     fmt.println(r2.body);                                // api-v1
     th2.join();
 
     val th3 = new thread.Thread();
     th3.start({ app.serveOnce(); });
     thread.sleep(80);
-    val r3 = net.Http.post("http://127.0.0.1:7903/web/api/echo", "zz");
+    val r3 = net.Http.post("http://127.0.0.1:17903/web/api/echo", "zz");
     fmt.println(r3.body);                                // api:zz
     th3.join();
 

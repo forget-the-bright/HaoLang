@@ -2,6 +2,7 @@
 //  net.ByteBuf —— 连接入站累积缓冲（对标 Netty ByteBuf 子集）
 // ------------------------------------------------------------
 //  v0.76：内部 lang.StringBuilder（禁 data = data + s 假缓冲）。
+//  v0.79.4：可读切片走 sb.byteSlice，禁全量 toString 再 slice。
 // ============================================================
 package net;
 
@@ -29,10 +30,9 @@ public class ByteBuf {
 
     func readableSlice(): String {
         val n = this.sb.byteLength();
-        val all = this.sb.toString();
-        if (this.readerIndex <= 0) { return all; }
+        if (this.readerIndex <= 0) { return this.sb.toString(); }
         if (this.readerIndex >= n) { return ""; }
-        return _bbSlice(all, this.readerIndex, n);
+        return this.sb.byteSlice(this.readerIndex, n);
     }
 
     func skipBytes(n: Int) {
@@ -48,8 +48,7 @@ public class ByteBuf {
         var take = n;
         if (take > avail) { take = avail; }
         if (take <= 0) { return ""; }
-        val all = this.sb.toString();
-        val s = _bbSlice(all, this.readerIndex, this.readerIndex + take);
+        val s = this.sb.byteSlice(this.readerIndex, this.readerIndex + take);
         this.readerIndex = this.readerIndex + take;
         return s;
     }
@@ -62,8 +61,7 @@ public class ByteBuf {
             this.readerIndex = 0;
             return;
         }
-        val all = this.sb.toString();
-        val rest = _bbSlice(all, this.readerIndex, n);
+        val rest = this.sb.byteSlice(this.readerIndex, n);
         this.sb.clear();
         this.sb.append(rest);
         this.readerIndex = 0;
@@ -75,5 +73,5 @@ public class ByteBuf {
     }
 }
 
-extern func _bbLen(s: String): Int = "hao_str_byte_len";
-extern func _bbSlice(s: String, start: Int, end: Int): String = "hao_str_byte_slice";
+func _bbLen(s: String): Int { return String.utf8ByteLen(s); }
+func _bbSlice(s: String, start: Int, end: Int): String { return String.utf8ByteSlice(s, start, end); }

@@ -6,30 +6,36 @@
 //   send: 写满循环（对标完整写）；失败 -1
 package net;
 
+import lang;
+
 public class Socket {
     var fd: NativeHandle;
     public constructor() { this.fd = NativeHandle.empty(); }
     public func connect(host: String, port: Int): Bool { return _connect(this.fd, host, port); }
     public func send(data: String): Int { return _send(this.fd, data); }
 
-    // 一次 OS recv。"" = EOF；null = 超时/错误。
-    public func recv(maxLen: Int): String? { return _recv(this.fd, maxLen); }
+    // 一次 OS recv。"" = EOF；null = 超时/错误。C 填 [Byte]，Hao fromUtf8。
+    public func recv(maxLen: Int): String? {
+        val bytes = _recvBytes(this.fd, maxLen);
+        if (bytes == null) { return null; }
+        return String.fromUtf8Owned(bytes!!);
+    }
 
     // 对标 Go io.ReadFull / Java readNBytes：凑满 n 字节，否则 null。
     public func recvExact(n: Int): String? {
         if (n < 0) { return null; }
         if (n == 0) { return ""; }
-        var out = "";
-        while (_netByteLen(out) < n) {
-            val need = n - _netByteLen(out);
+        val sb = lang.StringBuilder.withCapacity(n);
+        while (sb.byteLength() < n) {
+            val need = n - sb.byteLength();
             var want = need;
             if (want > 65536) { want = 65536; }
             val chunk = this.recv(want);
             if (chunk == null) { return null; }
             if (_netByteLen(chunk!!) == 0) { return null; }
-            out = out + chunk!!;
+            sb.append(chunk!!);
         }
-        return out;
+        return sb.toString();
     }
 
     public func setReadTimeout(ms: Int): Bool { return _setRecvTimeout(this.fd, ms); }
@@ -70,13 +76,17 @@ public class UdpSocket {
     public func sendTo(host: String, port: Int, data: String): Int {
         return _udp_sendto(this.fd, host, port, data);
     }
-    public func recvFrom(maxLen: Int): String? { return _udp_recvfrom(this.fd, maxLen); }
+    public func recvFrom(maxLen: Int): String? {
+        val bytes = _udp_recvfrom_bytes(this.fd, maxLen);
+        if (bytes == null) { return null; }
+        return String.fromUtf8Owned(bytes!!);
+    }
     public func close(): Unit { _close(this.fd); }
 }
 
 extern func _connect(p: NativeHandle, host: String, port: Int): Bool = "hao_net_connect";
 extern func _send(p: NativeHandle, data: String): Int = "hao_net_send";
-extern func _recv(p: NativeHandle, max: Int): String? = "hao_net_recv";
+extern func _recvBytes(p: NativeHandle, max: Int): [Byte]? = "hao_net_recv_bytes";
 extern func _close(p: NativeHandle): Unit = "hao_net_close";
 extern func _listen(p: NativeHandle, port: Int): Bool = "hao_net_listen";
 extern func _listenBacklog(p: NativeHandle, port: Int, backlog: Int): Bool = "hao_net_listen_backlog";
@@ -87,5 +97,6 @@ extern func _accept(s: NativeHandle, c: NativeHandle): Bool = "hao_net_accept";
 extern func _udp_open(p: NativeHandle): Bool = "hao_net_udp_open";
 extern func _udp_bind(p: NativeHandle, port: Int): Bool = "hao_net_udp_bind";
 extern func _udp_sendto(p: NativeHandle, host: String, port: Int, data: String): Int = "hao_net_udp_sendto";
-extern func _udp_recvfrom(p: NativeHandle, max: Int): String? = "hao_net_udp_recvfrom";
-extern func _netByteLen(s: String): Int = "hao_str_byte_len";
+extern func _udp_recvfrom_bytes(p: NativeHandle, max: Int): [Byte]? = "hao_net_udp_recvfrom_bytes";
+
+func _netByteLen(s: String): Int { return String.utf8ByteLen(s); }

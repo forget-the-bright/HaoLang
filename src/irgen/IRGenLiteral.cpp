@@ -613,16 +613,12 @@ Value IRGen::genLiteral(HaoLangParser::LiteralContext* lit) {
 
     if (auto* t = lit->STRING_LIT()) {
         std::string content = StringUtil::unescapeStringLiteral(t->getText());
-        std::string cstr = em_.internString(content);
-        std::string reg = emitCall("ptr", "@hao_str_from_cstr", "ptr " + cstr);
-        return Value(reg, Type::makeString());
+        return emitStringFromLiteral(content);
     }
 
     if (auto* vs = lit->VERBATIM_STRING()) {
         std::string content = StringUtil::unescapeVerbatimString(vs->getText());
-        std::string cstr = em_.internString(content);
-        std::string reg = emitCall("ptr", "@hao_str_from_cstr", "ptr " + cstr);
-        return Value(reg, Type::makeString());
+        return emitStringFromLiteral(content);
     }
 
     if (lit->CHAR_LIT()) {
@@ -688,9 +684,7 @@ Value IRGen::genTemplateString(HaoLangParser::TemplateStringContext* ts) {
                     }
                 }
             }
-            std::string cstr = em_.internString(s);
-            std::string reg = emitCall("ptr", "@hao_str_from_cstr", "ptr " + cstr);
-            piece = Value(reg, Type::makeString());
+            piece = emitStringFromLiteral(s);
         } else if (auto* ip = dynamic_cast<HaoLangParser::TmplInterpContext*>(part)) {
             Value v = genExpr(ip->expr());
             if (!v.valid()) return Value();
@@ -724,11 +718,25 @@ Value IRGen::genTemplateString(HaoLangParser::TemplateStringContext* ts) {
     }
 
     if (first) {
-        std::string cstr = em_.internString("");
-        std::string reg = emitCall("ptr", "@hao_str_from_cstr", "ptr " + cstr);
-        return Value(reg, Type::makeString());
+        return emitStringFromLiteral("");
     }
     return acc;
+}
+
+Value IRGen::emitStringFromLiteral(const std::string& content) {
+    std::string cstr = em_.internString(content);
+    std::string bytes =
+        emitCall("ptr", "@hao_array_from_cstr", "ptr " + cstr);
+    Value arr(bytes, Type::makeArray(Type::makeByte()));
+    rootGcOperand(arr);
+    /* Hao [Byte] 形参 by-ref：须传「指针槽」地址，不能直接传数据指针 */
+    std::string slot = arrayArgSlot(nullptr, arr);
+    /* array_from_cstr 已独占；走 fromUtf8Owned 免二次 copyOf */
+    std::string reg =
+        emitCall("ptr", "@lang$String.fromUtf8Owned", "ptr " + slot);
+    Value s(reg, Type::makeString());
+    rootGcOperand(s);
+    return s;
 }
 
 } // namespace hao

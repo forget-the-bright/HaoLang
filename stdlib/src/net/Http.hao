@@ -6,6 +6,8 @@ package net;
 import text;
 import json;
 import os;
+import lang;
+import time;
 
 public class HttpResponse {
     var status: Int = 0;
@@ -14,6 +16,8 @@ public class HttpResponse {
     var contentType: String = "text/plain; charset=utf-8";
     // true：writeResponse 用 Transfer-Encoding: chunked（与 Content-Length 互斥）
     var chunked: Bool = false;
+    // writeResponse 填：组头+两次 send 耗时（ms）；-1=未写。不进同响应头（已发出）
+    var writeMs: Long = -1;
 
     constructor() {
         this.status = 0;
@@ -21,6 +25,7 @@ public class HttpResponse {
         this.headers = "";
         this.contentType = "text/plain; charset=utf-8";
         this.chunked = false;
+        this.writeMs = -1;
     }
 
     func isOk(): Bool {
@@ -125,27 +130,53 @@ public class HttpRequest {
     }
 
     func getHeader(name: String): String? {
-        val key = name + ":";
-        val lines = text.split(this.headers, "\r\n");
-        var i = 0;
-        while (i < lines.length) {
-            val line = lines[i];
+        // 按行字节扫描；禁 split 整块头造 [String]
+        var pos = 0;
+        val n = _httpByteLen(this.headers);
+        while (pos < n) {
+            var lineEnd = String.byteIndexOf(this.headers, "\r\n", pos);
+            if (lineEnd < 0) { lineEnd = n; }
+            val line = _httpByteSlice(this.headers, pos, lineEnd);
             if (HttpRequest.headerKeyEq(line, name)) {
-                var j = String.valueOf(line).indexOf(":");
+                var j = String.byteIndexOf(line, ":", 0);
                 if (j < 0) { return null; }
-                var v = String.valueOf(line).substring(j + 1, line.length);
+                var v = _httpByteSlice(line, j + 1, _httpByteLen(line));
                 return String.valueOf(v).trim();
             }
-            i += 1;
+            if (lineEnd >= n) { break; }
+            pos = lineEnd + 2;
         }
         return null;
     }
 
+    // 头名 CI 比对到 ':' 前（跳过空白）；禁 substring+toLowerCase 造串
     static func headerKeyEq(line: String, name: String): Bool {
-        val j = String.valueOf(line).indexOf(":");
+        val j = String.byteIndexOf(line, ":", 0);
         if (j < 0) { return false; }
-        val k = String.valueOf(String.valueOf(line).substring(0, j)).trim();
-        return String.valueOf(k).toLowerCase() == String.valueOf(name).toLowerCase();
+        var a = 0;
+        var b = j;
+        while (a < b) {
+            val c = String.utf8ByteAt(line, a);
+            if (c != 32 && c != 9) { break; }
+            a += 1;
+        }
+        while (b > a) {
+            val c = String.utf8ByteAt(line, b - 1);
+            if (c != 32 && c != 9) { break; }
+            b -= 1;
+        }
+        val nlen = _httpByteLen(name);
+        if (b - a != nlen) { return false; }
+        var i = 0;
+        while (i < nlen) {
+            var x = String.utf8ByteAt(line, a + i);
+            var y = String.utf8ByteAt(name, i);
+            if (x >= 65 && x <= 90) { x = x + 32; }
+            if (y >= 65 && y <= 90) { y = y + 32; }
+            if (x != y) { return false; }
+            i += 1;
+        }
+        return true;
     }
 
     func getQuery(name: String): String? {
@@ -261,8 +292,7 @@ public class Http {
             val line = _httpByteSlice(headers, pos, lineEnd);
             if (_httpByteLen(line) >= 17 && Http.asciiStartsWithCi(line, "transfer-encoding:")) {
                 val rawV = _httpByteSlice(line, 17, _httpByteLen(line));
-                val v = String.valueOf(String.valueOf(rawV).trim()).toLowerCase();
-                if (String.valueOf(v).indexOf("chunked") >= 0) { return true; }
+                if (Http.asciiContainsCi(rawV, "chunked")) { return true; }
             }
             if (lineEnd >= n) { break; }
             pos = lineEnd + 2;
@@ -277,14 +307,12 @@ public class Http {
         var v = 0;
         var i = 0;
         while (i < n) {
-            val one = _httpByteSlice(s, i, i + 1);
-            val c = String.valueOf(one).charAt(0);
+            val c = String.utf8ByteAt(s, i);
             var d = -1;
             if (c >= 48 && c <= 57) { d = c - 48; }
             else if (c >= 97 && c <= 102) { d = c - 97 + 10; }
             else if (c >= 65 && c <= 70) { d = c - 65 + 10; }
             else { return -1; }
-            // 防 Int 溢出
             if (v > 268435455) { return -1; }
             v = v * 16 + d;
             i += 1;
@@ -294,11 +322,11 @@ public class Http {
 
     // 将 chunked 体解码为原始字节串；不完整或非法返回已解部分（调用方截断）
     static func decodeChunkedBody(rawBody: String): String {
-        var out = "";
+        val sb = lang.StringBuilder.withCapacity(64);
         var pos = 0;
         val n = _httpByteLen(rawBody);
         val lim = Http.maxBytesLimit;
-        while (pos < n && _httpByteLen(out) < lim) {
+        while (pos < n && sb.byteLength() < lim) {
             val lineEnd = String.byteIndexOf(rawBody, "\r\n", pos);
             if (lineEnd < 0) { break; }
             var sizeTok = _httpByteSlice(rawBody, pos, lineEnd);
@@ -310,25 +338,30 @@ public class Http {
             if (sz == 0) { break; }
             if (pos + sz + 2 > n) { break; }
             val piece = _httpByteSlice(rawBody, pos, pos + sz);
-            if (_httpByteLen(out) + sz > lim) {
-                val room = lim - _httpByteLen(out);
-                if (room > 0) { out = out + _httpByteSlice(piece, 0, room); }
+            if (sb.byteLength() + sz > lim) {
+                val room = lim - sb.byteLength();
+                if (room > 0) { sb.append(_httpByteSlice(piece, 0, room)); }
                 break;
             }
-            out = out + piece;
+            sb.append(piece);
             pos = pos + sz;
             if (pos + 2 <= n && _httpByteSlice(rawBody, pos, pos + 2) == "\r\n") {
                 pos = pos + 2;
             }
         }
-        return out;
+        return sb.toString();
     }
 
-    // 编码为 chunked 体（含结尾 0 块）
+    // 编码为 chunked 体（含结尾 0 块）；SB 组包，禁 body 串平方 +
     static func encodeChunkedBody(body: String): String {
         val n = _httpByteLen(body);
         if (n == 0) { return "0\r\n\r\n"; }
-        return Http.toHex(n) + "\r\n" + body + "\r\n0\r\n\r\n";
+        val sb = lang.StringBuilder.withCapacity(n + 32);
+        sb.append(Http.toHex(n));
+        sb.append("\r\n");
+        sb.append(body);
+        sb.append("\r\n0\r\n\r\n");
+        return sb.toString();
     }
 
     static func toHex(n: Int): String {
@@ -512,14 +545,13 @@ public class Http {
         }
         var i = 15;
         while (i < ln) {
-            val one = _httpByteSlice(line, i, i + 1);
-            if (one != " " && one != "\t") { break; }
+            val c = String.utf8ByteAt(line, i);
+            if (c != 32 && c != 9) { break; }
             i += 1;
         }
         var j = i;
         while (j < ln) {
-            val one = _httpByteSlice(line, j, j + 1);
-            val c = String.valueOf(one).charAt(0);
+            val c = String.utf8ByteAt(line, j);
             if (c < 48 || c > 57) { break; }
             j += 1;
         }
@@ -544,13 +576,50 @@ public class Http {
         return null;
     }
 
-    // ASCII 前缀大小写不敏感（仅用于 HTTP 头名）
+    // ASCII 前缀大小写不敏感（仅用于 HTTP 头名）；按字节比对，禁 slice+toLowerCase 造串
     static func asciiStartsWithCi(s: String, prefix: String): Bool {
         val n = _httpByteLen(prefix);
         if (_httpByteLen(s) < n) { return false; }
-        val a = String.valueOf(_httpByteSlice(s, 0, n)).toLowerCase();
-        val b = String.valueOf(prefix).toLowerCase();
-        return a == b;
+        var i = 0;
+        while (i < n) {
+            var a = String.utf8ByteAt(s, i);
+            var b = String.utf8ByteAt(prefix, i);
+            if (a >= 65 && a <= 90) { a = a + 32; }
+            if (b >= 65 && b <= 90) { b = b + 32; }
+            if (a != b) { return false; }
+            i += 1;
+        }
+        return true;
+    }
+
+    // 整串 ASCII CI 相等（Connection: close 等）
+    static func asciiEqCi(s: String, lit: String): Bool {
+        if (_httpByteLen(s) != _httpByteLen(lit)) { return false; }
+        return Http.asciiStartsWithCi(s, lit);
+    }
+
+    // hay 是否含 ASCII 子串（CI）；禁 toLowerCase 造串
+    static func asciiContainsCi(hay: String, needle: String): Bool {
+        val hn = _httpByteLen(hay);
+        val nn = _httpByteLen(needle);
+        if (nn <= 0) { return true; }
+        if (hn < nn) { return false; }
+        var i = 0;
+        while (i + nn <= hn) {
+            var ok = true;
+            var j = 0;
+            while (j < nn) {
+                var a = String.utf8ByteAt(hay, i + j);
+                var b = String.utf8ByteAt(needle, j);
+                if (a >= 65 && a <= 90) { a = a + 32; }
+                if (b >= 65 && b <= 90) { b = b + 32; }
+                if (a != b) { ok = false; break; }
+                j += 1;
+            }
+            if (ok) { return true; }
+            i += 1;
+        }
+        return false;
     }
 
     static func parseResponse(raw: String): HttpResponse {
@@ -663,7 +732,7 @@ public class HttpServer {
             val req = HttpServer.parseRequest(raw);
             var keep = true;
             val conn = req.getHeader("Connection");
-            if (conn != null && String.valueOf(conn!!).toLowerCase() == "close") {
+            if (conn != null && Http.asciiEqCi(String.valueOf(conn!!).trim(), "close")) {
                 keep = false;
             }
             val out = ch.pipeline.fireChannelRead(req);
@@ -706,8 +775,11 @@ public class HttpServer {
         HttpServer.writeResponse(client, resp, false);
     }
 
-    // keepAlive=true → HTTP/1.1 + Connection: keep-alive（Phase1）
+    // keepAlive=true → HTTP/1.1 + Connection: keep-alive
+    // v0.79.3：SB 组头；头/体两次 send；禁 out=out+body（曾把 ~20ms 写税装进 clientOh）
     static func writeResponse(client: Socket, resp: HttpResponse, keepAlive: Bool) {
+        val t0 = time.now();
+        val tW = t0.ts;
         var phrase = "OK";
         if (resp.status == 404) { phrase = "Not Found"; }
         if (resp.status == 400) { phrase = "Bad Request"; }
@@ -723,23 +795,51 @@ public class HttpServer {
             ver = "HTTP/1.1";
             conn = "keep-alive";
         }
-        var out = ver + " " + Integer.toStr(resp.status) + " " + phrase + "\r\n";
-        out = out + "Content-Type: " + ct + "\r\n";
-        if (resp.headers.length > 0 && HttpServer.isSafeHeaderBlock(resp.headers)) {
-            out = out + resp.headers;
-            if (!String.valueOf(resp.headers).endsWith("\r\n")) {
-                out = out + "\r\n";
+        val hlen = _httpByteLen(resp.headers);
+        val sb = lang.StringBuilder.withCapacity(hlen + 128);
+        sb.append(ver);
+        sb.append(" ");
+        sb.append(Integer.toStr(resp.status));
+        sb.append(" ");
+        sb.append(phrase);
+        sb.append("\r\n");
+        sb.append("Content-Type: ");
+        sb.append(ct);
+        sb.append("\r\n");
+        if (hlen > 0 && HttpServer.isSafeHeaderBlock(resp.headers)) {
+            sb.append(resp.headers);
+            var needCrLf = true;
+            if (hlen >= 2 && String.utf8ByteAt(resp.headers, hlen - 2) == 13 &&
+                String.utf8ByteAt(resp.headers, hlen - 1) == 10) {
+                needCrLf = false;
+            }
+            if (needCrLf) { sb.append("\r\n"); }
+        }
+        sb.append("Connection: ");
+        sb.append(conn);
+        sb.append("\r\n");
+        if (resp.chunked) {
+            sb.append("Transfer-Encoding: chunked\r\n\r\n");
+            val head = sb.toString();
+            client.send(head);
+            val chunk = Http.encodeChunkedBody(resp.body);
+            if (_httpByteLen(chunk) > 0) {
+                client.send(chunk);
+            }
+        } else {
+            sb.append("Content-Length: ");
+            sb.append(Integer.toStr(_httpByteLen(resp.body)));
+            sb.append("\r\n\r\n");
+            val head = sb.toString();
+            client.send(head);
+            // 体单独 send：禁拼进头缓冲再 ffi_dup 超级串
+            if (_httpByteLen(resp.body) > 0) {
+                client.send(resp.body);
             }
         }
-        out = out + "Connection: " + conn + "\r\n";
-        if (resp.chunked) {
-            out = out + "Transfer-Encoding: chunked\r\n\r\n";
-            out = out + Http.encodeChunkedBody(resp.body);
-        } else {
-            out = out + "Content-Length: " + Integer.toStr(_httpByteLen(resp.body)) + "\r\n\r\n";
-            out = out + resp.body;
-        }
-        client.send(out);
+        val t1 = time.now();
+        val dt = t1.ts - tW;
+        resp.writeMs = dt / 1000000;
     }
 
     // 自定义头块：禁止 \r\n\r\n 提前结束；每个 LF 须紧跟在 CR 后（防头注入）
@@ -751,7 +851,7 @@ public class HttpServer {
             val lf = String.byteIndexOf(h, "\n", i);
             if (lf < 0) { break; }
             if (lf == 0) { return false; }
-            if (_httpByteSlice(h, lf - 1, lf) != "\r") { return false; }
+            if (String.utf8ByteAt(h, lf - 1) != 13) { return false; }
             i = lf + 1;
         }
         return true;
@@ -797,5 +897,5 @@ public class HttpServer {
 }
 
 // HTTP 线协议按字节计量（与 HaoString.len / regex 包一致）
-extern func _httpByteLen(s: String): Int = "hao_str_byte_len";
-extern func _httpByteSlice(s: String, start: Int, end: Int): String = "hao_str_byte_slice";
+func _httpByteLen(s: String): Int { return String.utf8ByteLen(s); }
+func _httpByteSlice(s: String, start: Int, end: Int): String { return String.utf8ByteSlice(s, start, end); }

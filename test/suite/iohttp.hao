@@ -38,7 +38,7 @@ func ioHttpTest() {
     fmt.println(w!!.writeBytes(buf));               // 4
     w!!.close();
     val r = os.FileStream.open(path, "rb");
-    val got = r!!.readBytes(16);
+    val got = r!!.readBytes(16)!!;
     fmt.println(got.length);                        // 4
     fmt.println(got[0]);                            // 0
     fmt.println(got[2]);                            // 255

@@ -1,7 +1,7 @@
 // ============================================================
 //  lang.Double —— 基础类型 Double（f64）的包装类
 //  标注包装写 lang.Double；裸名 Double = 内建
-//  v0.79：toStr/parse 全 Hao（删 hao_double_* 业务导出）
+//  v0.79+：appendTo=C# TryFormat；toStr=appendTo+toString；禁 FFI 截断
 // ============================================================
 package lang;
 
@@ -30,22 +30,30 @@ class Double {
     }
 
     static func appendU64(sb: StringBuilder, u: Long) {
-        // 复用 StringBuilder.append(Long) 位缓冲（禁串反转拼接）
         sb.append(u);
     }
 
-    // 自研十进制（对齐旧 hao_fmt_double；禁 libc）
-    static func toStr(v: Double): String {
-        if (v != v) { return "nan"; }
+    // 对齐 C# ISpanFormattable：直接写 SB（禁中间 String）
+    static func appendTo(sb: StringBuilder, v: Double) {
+        if (v != v) {
+            sb.append("nan");
+            return;
+        }
         val bits = reflect.dblBits(v);
         val expBits = (bits >> 52) & 2047;
         val mant = bits & 4503599627370495;
         if (expBits == 2047) {
-            if (mant != 0) { return "nan"; }
-            if (bits < 0) { return "-inf"; }
-            return "inf";
+            if (mant != 0) {
+                sb.append("nan");
+                return;
+            }
+            if (bits < 0) {
+                sb.append("-inf");
+                return;
+            }
+            sb.append("inf");
+            return;
         }
-        val sb = StringBuilder.withCapacity(32);
         var x = v;
         var neg = bits < 0;
         if (neg) {
@@ -54,7 +62,7 @@ class Double {
         }
         if (x == 0.0) {
             sb.append('0');
-            return sb.toString();
+            return;
         }
         var exp10 = 0;
         while (x >= 10.0 && exp10 < 308) {
@@ -71,7 +79,7 @@ class Double {
             frac = frac * 10.0;
             nd = nd + 1;
         }
-        var digs = hao_f64_to_i64(frac + 0.5);
+        var digs: Long = frac + 0.5;
         if (digs >= 1000000000000000) {
             digs = 100000000000000;
             exp10 = exp10 + 1;
@@ -143,6 +151,11 @@ class Double {
             }
             Double.appendU64(sb, e);
         }
+    }
+
+    static func toStr(v: Double): String {
+        val sb = StringBuilder.withCapacity(32);
+        Double.appendTo(sb, v);
         return sb.toString();
     }
 

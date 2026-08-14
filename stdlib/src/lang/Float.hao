@@ -35,9 +35,15 @@ class Float {
         return f;
     }
 
-    static func toStr(v: Float): String {
+    static func appendTo(sb: StringBuilder, v: Float) {
         val d: Double = v;
-        return Double.toStr(d);
+        Double.appendTo(sb, d);
+    }
+
+    static func toStr(v: Float): String {
+        val sb = StringBuilder.withCapacity(32);
+        Float.appendTo(sb, v);
+        return sb.toString();
     }
 
     static func compare(a: Float, b: Float): Int {

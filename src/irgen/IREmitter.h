@@ -346,7 +346,7 @@ public:
             "declare void @llvm.dbg.value(metadata, metadata, metadata)",
             "declare void @hao_println_str(ptr)",
             "declare void @hao_print_str(ptr)",
-            "declare ptr  @hao_str_from_cstr(ptr)",
+            "declare ptr  @hao_array_from_cstr(ptr)",
             "declare i8   @hao_str_eq(ptr, ptr)",
             "declare void @hao_panic_null()",
             "declare void @hao_dbg_set_src_loc(ptr, i32, i32)",

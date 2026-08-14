@@ -4,6 +4,8 @@
 // ============================================================
 package os;
 
+import lang;
+
 public class FileStream {
     var handle: NativeHandle;
 
@@ -32,14 +34,16 @@ public class FileStream {
     }
 
     func read(maxLen: Int): String? {
-        return _fsReadStr(this.handle, maxLen);
+        val bytes = this.readBytes(maxLen);
+        if (bytes == null) { return null; }
+        return String.fromUtf8Owned(bytes!!);
     }
 
     func writeBytes(data: [Byte]): Int {
         return _fsWriteBytes(this.handle, data);
     }
 
-    func readBytes(maxLen: Int): [Byte] {
+    func readBytes(maxLen: Int): [Byte]? {
         return _fsReadBytes(this.handle, maxLen);
     }
 
@@ -64,7 +68,7 @@ public class FileStream {
         if (sz < 0) {
             return null;
         }
-        // INT32_MAX - 1：与 C 上限及 hao_fs_read_str 一致
+        // INT32_MAX - 1：与 C 读缓冲上限一致
         if (sz > 2147483646) {
             return null;
         }
@@ -102,10 +106,9 @@ public class FileStream {
 extern func _fsOpen(h: NativeHandle, path: String, mode: String): Bool = "hao_fs_open";
 extern func _fsClose(h: NativeHandle): Int = "hao_fs_close";
 extern func _fsWriteStr(h: NativeHandle, data: String): Int = "hao_fs_write_str";
-extern func _fsReadStr(h: NativeHandle, max: Int): String? = "hao_fs_read_str";
 extern func _fsWriteBytes(h: NativeHandle, data: [Byte]): Int = "hao_fs_write_bytes";
-extern func _fsReadBytes(h: NativeHandle, max: Int): [Byte] = "hao_fs_read_bytes";
+extern func _fsReadBytes(h: NativeHandle, max: Int): [Byte]? = "hao_fs_read_bytes";
 extern func _fsSeek(h: NativeHandle, off: Long, whence: Int): Bool = "hao_fs_seek";
 extern func _fsTell(h: NativeHandle): Long = "hao_fs_tell";
 extern func _fsFlush(h: NativeHandle): Bool = "hao_fs_flush";
-extern func _fsByteLen(s: String): Int = "hao_str_byte_len";
+func _fsByteLen(s: String): Int { return String.utf8ByteLen(s); }

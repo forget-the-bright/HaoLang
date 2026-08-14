@@ -70,23 +70,9 @@ class Long {
     }
 
     static func toStr(v: Long): String {
-        if (v == 0) { return "0"; }
-        if (v == Long.MIN_VALUE) { return "-9223372036854775808"; }
-        var neg = false;
-        var x = v;
-        if (v < 0) {
-            neg = true;
-            x = 0 - x;
-        }
-        var r = "";
-        while (x > 0) {
-            val d: Int = x % 10;
-            val ch: Char = 48 + d;
-            r = Character.toStr(ch) + r;
-            x = x / 10;
-        }
-        if (neg) { return "-" + r; }
-        return r;
+        val sb = StringBuilder.withCapacity(20);
+        sb.append(v);
+        return sb.toString();
     }
 
     static func compare(a: Long, b: Long): Int {
