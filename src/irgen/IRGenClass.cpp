@@ -2870,14 +2870,14 @@ std::string IRGen::emitJsonWrite(const ClassInfoPtr& ci) {
                     std::string v =
                         emitCall("float", "@hao_unbox_f32", "ptr " + box);
                     std::string sreg =
-                        emitCall("ptr", "@hao_float_to_str", "float " + v);
+                        emitCall("ptr", "@lang$Float.toStr", "float " + v);
                     (void)emitCall("ptr", "@lang$StringBuilder.append",
                                    "ptr %sb.arg, ptr " + sreg);
                 } else if (k == TypeKind::Double) {
                     std::string v =
                         emitCall("double", "@hao_unbox_f64", "ptr " + box);
                     std::string sreg =
-                        emitCall("ptr", "@hao_double_to_str", "double " + v);
+                        emitCall("ptr", "@lang$Double.toStr", "double " + v);
                     (void)emitCall("ptr", "@lang$StringBuilder.append",
                                    "ptr %sb.arg, ptr " + sreg);
                 } else if (k == TypeKind::Bool) {
@@ -2952,9 +2952,9 @@ std::string IRGen::emitJsonWrite(const ClassInfoPtr& ci) {
             std::string v = emitLoad(lt, fp);
             std::string sreg;
             if (k == TypeKind::Double)
-                sreg = emitCall("ptr", "@hao_double_to_str", lt + " " + v);
+                sreg = emitCall("ptr", "@lang$Double.toStr", lt + " " + v);
             else
-                sreg = emitCall("ptr", "@hao_float_to_str", lt + " " + v);
+                sreg = emitCall("ptr", "@lang$Float.toStr", lt + " " + v);
             (void)emitCall("ptr", "@lang$StringBuilder.append",
                            "ptr %sb.arg, ptr " + sreg);
         } else {

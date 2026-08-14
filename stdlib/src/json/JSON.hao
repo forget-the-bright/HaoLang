@@ -753,17 +753,22 @@ class JSON {
     }
 
     static func quoteIntoSb(sb: lang.StringBuilder, s: String) {
+        // 一次 get_bytes 扫 UTF-8（禁每码点 s.length/s[i] 反复拷贝）
         sb.append("\"");
-        var i = 0;
-        while (i < s.length) {
-            val c = s[i];
+        val bytes = hao_str_get_bytes(s);
+        var bi = 0;
+        val n = bytes.length;
+        while (bi < n) {
+            val c = Character.utf8CpAt(bytes, bi);
+            val next = Character.utf8NextByte(bytes, bi);
             if (c == 34) { sb.append("\\\""); }
             else if (c == 92) { sb.append("\\\\"); }
             else if (c == 10) { sb.append("\\n"); }
             else if (c == 13) { sb.append("\\r"); }
             else if (c == 9) { sb.append("\\t"); }
             else { sb.append(c); }
-            i += 1;
+            if (next <= bi) { bi = bi + 1; }
+            else { bi = next; }
         }
         sb.append("\"");
     }

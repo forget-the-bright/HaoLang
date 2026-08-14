@@ -1,6 +1,7 @@
 // ============================================================
 //  lang.Float —— 基础类型 Float（f32）的包装类
 //  标注包装写 lang.Float；裸名 Float = 内建
+//  v0.79：toStr/parse 全 Hao（删 hao_float_* 业务导出）
 // ============================================================
 package lang;
 
@@ -28,11 +29,15 @@ class Float {
     }
 
     static func parse(s: String): Float? {
-        return hao_parse_float(s);
+        val d = Double.parse(s);
+        if (d == null) { return null; }
+        val f: Float = d!!;
+        return f;
     }
 
     static func toStr(v: Float): String {
-        return hao_float_to_str(v);
+        val d: Double = v;
+        return Double.toStr(d);
     }
 
     static func compare(a: Float, b: Float): Int {
@@ -56,6 +61,6 @@ class Float {
     }
 
     override func toString(): String {
-        return hao_float_to_str(this.value);
+        return Float.toStr(this.value);
     }
 }

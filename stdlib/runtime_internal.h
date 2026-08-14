@@ -311,25 +311,23 @@ const char* hao_str_cstr(const HaoString* s);
 char*       hao_str_data(HaoString* s);
 HaoString* hao_str_byte_slice(HaoString* s, int32_t start, int32_t end);
 int32_t hao_str_byte_len(HaoString* s);
-/* 码点下标 → 字节下标；越界 -1（substring Hao 原语） */
-int32_t hao_str_byte_of_cp(HaoString* s, int32_t cp_idx);
+/* 码点长度缓存槽（-1=未算；算法在 Hao） */
+int64_t hao_str_get_cp_len(HaoString* s);
+void hao_str_set_cp_len(HaoString* s, int64_t n);
 /* 在 cap 内调整内容长度并写 NUL；供 recv/read 截断 */
 void    hao_str_set_byte_len(HaoString* s, int32_t n);
 /* 公开 API：拷贝为 [Byte]；从 [Byte] 建串；只读内部载荷 */
 void*      hao_str_get_bytes(HaoString* s);
 HaoString* hao_str_from_byte_arr(void* arr);
 
-HaoString* hao_float_to_str(float v);
-HaoString* hao_double_to_str(double v);
-void* hao_parse_float(HaoString* s);
-void* hao_parse_double(HaoString* s);
-/* P7c 自研浮点；禁 libc strto* 与 %g */
+/* P7c：field_set 仍用 parse_cstr；toStr/parse 业务已上移 Hao（v0.79） */
 int hao_fmt_double(double v, char* out, int cap);
 /* 手写十进制/指针（禁 Win64 未对齐栈进 snprintf） */
 int hao_fmt_i64_dec(char* out, int cap, int64_t v);
 int hao_fmt_u64_dec(char* out, int cap, uint64_t v);
 int hao_fmt_ptr_angle(char* out, int cap, const void* p);
 int hao_parse_double_cstr(const char* p, const char** endp, double* out);
+int64_t hao_f64_to_i64(double v);
 
 /* ============================================================
  *  NativeHandle（runtime_handle.c）—— C 资源代理句柄

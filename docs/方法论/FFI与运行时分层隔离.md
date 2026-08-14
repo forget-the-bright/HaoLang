@@ -232,7 +232,33 @@ C 类型只做中转，**绝不作为上层 API 类型**
 
 ❌ 禁止业务层手动 free / 手动操作原生资源内存
 
-## 7\. 顶层最终方法论（可作为文档结尾金句）
+## 7\. 对标分层铁律（Go / Java / C# · v0.79）
+
+对齐的是**设计理念**，不是「看起来差不多」或 PARTIAL 糊弄：
+
+| 对标 | 业务（格式化 / 容器 / HTTP / Path / Object 默认） | 原生最后一跳 |
+|------|--------------------------------------------------|--------------|
+| Go | 几乎全在 Go | `syscall` / 极薄 runtime |
+| Java | 几乎全在 Java | `native` / JNI |
+| C# | 几乎全在 C# | P/Invoke |
+| **Hao** | **应hao尽hao** | `hao_print_*` / `hao_fs_*` / `hao_net_*` / GC / `arraycopy` / Handle / panic |
+
+**PARTIAL = 未结案。** 禁止把「格式化 / Object 三默认 / reflect 标量拼串 / 串 UTF-8·concat 算法仍在 C」标成已对齐。
+
+### 7\.1 对齐清单（结案标准）
+
+| ID | 区域 | 判定 | 结案定义 |
+|----|------|------|----------|
+| A1–A8 | fmt / File / Net / Http / SB / 集合 / JSON 跳板 / Int toStr | ALIGNED | 保持；gate 防回潮 |
+| M5 | 死/僵尸 C 导出 | 须删符号 + gate Ban | 无业务调用方仍 export = 未结案 |
+| M2 | Object.hashCode/equals/toString | **Hao** | C 最多身份位型薄读；无拼串 |
+| M1 | Float/Double toStr/parse | **Hao** | 删 `hao_float_*` / `hao_double_*` 业务导出 |
+| M3 | reflect 标量→串 | **Hao toStr** | C 禁 `field_value_to_str` 业务格式化 |
+| M4 | `hao_str_*` 算法面 | 冻结新增；len/char_at/byte_of_cp/concat 迁 Hao | concat→SB/`arraycopy`；IR 走 `lang$String.*` |
+
+**永久留下（理念对齐，非坑）**：GC、`arraycopy`/`array_new`、Handle/`ffi_dup`、panic、fs/net/regex 引擎体、print 写字节、time/proc、串**布局**薄跳板（`get_bytes` / `from_byte_arr` / `byte_slice` / `byte_len`）。
+
+## 8\. 顶层最终方法论（可作为文档结尾金句）
 
 **底层留最小C底座、中间做强制FFI隔离、上层全原生HaoLang实现；**
 

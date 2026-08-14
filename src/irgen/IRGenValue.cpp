@@ -492,10 +492,10 @@ Value IRGen::toStringValue(const Value& v) {
             return toStringValue(asInt);
         }
         case TypeKind::Double:
-            return Value(emitCall("ptr", "@hao_double_to_str", "double " + v.ir),
+            return Value(emitCall("ptr", "@lang$Double.toStr", "double " + v.ir),
                          Type::makeString());
         case TypeKind::Float:
-            return Value(emitCall("ptr", "@hao_float_to_str", "float " + v.ir),
+            return Value(emitCall("ptr", "@lang$Float.toStr", "float " + v.ir),
                          Type::makeString());
         case TypeKind::Bool:
             return Value(emitCall("ptr", "@lang$Boolean.toStr", "i8 " + v.ir),

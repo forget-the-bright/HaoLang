@@ -1,10 +1,12 @@
 // ============================================================
 //  lang.Double —— 基础类型 Double（f64）的包装类
 //  标注包装写 lang.Double；裸名 Double = 内建
+//  v0.79：toStr/parse 全 Hao（删 hao_double_* 业务导出）
 // ============================================================
 package lang;
 
 import hash;
+import reflect;
 
 class Double {
     var value: Double;
@@ -27,12 +29,195 @@ class Double {
         return this.value;
     }
 
-    static func parse(s: String): Double? {
-        return hao_parse_double(s);
+    static func appendU64(sb: StringBuilder, u: Long) {
+        // 复用 StringBuilder.append(Long) 位缓冲（禁串反转拼接）
+        sb.append(u);
     }
 
+    // 自研十进制（对齐旧 hao_fmt_double；禁 libc）
     static func toStr(v: Double): String {
-        return hao_double_to_str(v);
+        if (v != v) { return "nan"; }
+        val bits = reflect.dblBits(v);
+        val expBits = (bits >> 52) & 2047;
+        val mant = bits & 4503599627370495;
+        if (expBits == 2047) {
+            if (mant != 0) { return "nan"; }
+            if (bits < 0) { return "-inf"; }
+            return "inf";
+        }
+        val sb = StringBuilder.withCapacity(32);
+        var x = v;
+        var neg = bits < 0;
+        if (neg) {
+            sb.append('-');
+            x = 0.0 - x;
+        }
+        if (x == 0.0) {
+            sb.append('0');
+            return sb.toString();
+        }
+        var exp10 = 0;
+        while (x >= 10.0 && exp10 < 308) {
+            x = x / 10.0;
+            exp10 = exp10 + 1;
+        }
+        while (x < 1.0 && exp10 > 0 - 308) {
+            x = x * 10.0;
+            exp10 = exp10 - 1;
+        }
+        var frac = x;
+        var nd = 0;
+        while (nd < 14) {
+            frac = frac * 10.0;
+            nd = nd + 1;
+        }
+        var digs = hao_f64_to_i64(frac + 0.5);
+        if (digs >= 1000000000000000) {
+            digs = 100000000000000;
+            exp10 = exp10 + 1;
+        }
+        nd = 15;
+        while (nd > 1 && (digs % 10) == 0) {
+            digs = digs / 10;
+            nd = nd - 1;
+        }
+        if (exp10 >= 0 - 4 && exp10 < 15) {
+            val wholeDigits = exp10 + 1;
+            if (wholeDigits <= 0) {
+                sb.append('0');
+                sb.append('.');
+                var z = 0;
+                while (z < 0 - wholeDigits) {
+                    sb.append('0');
+                    z = z + 1;
+                }
+                Double.appendU64(sb, digs);
+            } else if (wholeDigits >= nd) {
+                Double.appendU64(sb, digs);
+                var z = 0;
+                while (z < wholeDigits - nd) {
+                    sb.append('0');
+                    z = z + 1;
+                }
+            } else {
+                var pow: Long = 1;
+                var i = 0;
+                while (i < nd - wholeDigits) {
+                    pow = pow * 10;
+                    i = i + 1;
+                }
+                val wi = digs / pow;
+                val fr = digs % pow;
+                Double.appendU64(sb, wi);
+                if (fr != 0) {
+                    sb.append('.');
+                    var p2 = pow / 10;
+                    while (p2 > fr && p2 > 0) {
+                        sb.append('0');
+                        p2 = p2 / 10;
+                    }
+                    Double.appendU64(sb, fr);
+                }
+            }
+        } else {
+            var pow: Long = 1;
+            var i = 0;
+            while (i < nd - 1) {
+                pow = pow * 10;
+                i = i + 1;
+            }
+            val lead = digs / pow;
+            val rest = digs % pow;
+            Double.appendU64(sb, lead);
+            if (rest != 0) {
+                sb.append('.');
+                Double.appendU64(sb, rest);
+            }
+            sb.append('e');
+            var e = exp10;
+            if (e < 0) {
+                sb.append('-');
+                e = 0 - e;
+            } else {
+                sb.append('+');
+            }
+            Double.appendU64(sb, e);
+        }
+        return sb.toString();
+    }
+
+    static func parse(s: String): Double? {
+        if (s.length == 0) { return null; }
+        var i = 0;
+        var neg = false;
+        if (s[0] == '+') {
+            i = 1;
+            if (s.length == 1) { return null; }
+        } else if (s[0] == '-') {
+            neg = true;
+            i = 1;
+            if (s.length == 1) { return null; }
+        }
+        if (i + 2 < s.length) {
+            val c0 = s[i];
+            val c1 = s[i + 1];
+            val c2 = s[i + 2];
+            if ((c0 == 'i' || c0 == 'I') && (c1 == 'n' || c1 == 'N') && (c2 == 'f' || c2 == 'F')) {
+                if (i + 3 != s.length) { return null; }
+                if (neg) { return 0.0 - Double.MAX_VALUE * Double.MAX_VALUE; }
+                return Double.MAX_VALUE * Double.MAX_VALUE;
+            }
+        }
+        var v: Double = 0.0;
+        var frac: Double = 1.0;
+        var seen = false;
+        while (i < s.length) {
+            val c = s[i];
+            if (c < '0' || c > '9') { break; }
+            v = v * 10.0 + (c - 48);
+            seen = true;
+            i = i + 1;
+        }
+        if (i < s.length && s[i] == '.') {
+            i = i + 1;
+            while (i < s.length) {
+                val c = s[i];
+                if (c < '0' || c > '9') { break; }
+                frac = frac * 0.1;
+                v = v + frac * (c - 48);
+                seen = true;
+                i = i + 1;
+            }
+        }
+        if (!seen) { return null; }
+        if (i < s.length && (s[i] == 'e' || s[i] == 'E')) {
+            i = i + 1;
+            var eneg = false;
+            if (i < s.length && (s[i] == '+' || s[i] == '-')) {
+                eneg = s[i] == '-';
+                i = i + 1;
+            }
+            if (i >= s.length || s[i] < '0' || s[i] > '9') { return null; }
+            var exp = 0;
+            while (i < s.length) {
+                val c = s[i];
+                if (c < '0' || c > '9') { break; }
+                exp = exp * 10 + (c - 48);
+                i = i + 1;
+            }
+            if (eneg) { exp = 0 - exp; }
+            while (exp > 0) {
+                v = v * 10.0;
+                exp = exp - 1;
+            }
+            while (exp < 0) {
+                v = v * 0.1;
+                exp = exp + 1;
+            }
+        }
+        if (i != s.length) { return null; }
+        if (neg) { return 0.0 - v; }
+        return v;
     }
 
     static func compare(a: Double, b: Double): Int {
@@ -56,6 +241,6 @@ class Double {
     }
 
     override func toString(): String {
-        return hao_double_to_str(this.value);
+        return Double.toStr(this.value);
     }
 }

@@ -362,40 +362,58 @@ void* hao_reflect_field_get_obj(HaoNativeHandle* h, void* obj, HaoString* fname)
     return out;
 }
 
-/* 读 HaoFieldMeta 读槽 → JSON/反射用字符串（调用方已挂根 obj） */
-static HaoString* field_value_to_str(void* obj, const HaoFieldMeta* f) {
+/* 按下标读字段槽位型（格式化在 Hao；v0.79） */
+int64_t hao_reflect_field_bits_at(HaoNativeHandle* h, void* obj, int32_t i) {
+    void* meta = meta_raw(h);
+    const HaoClassMeta* m = (const HaoClassMeta*)meta;
+    const HaoFieldMeta* f;
     char* base;
-    char buf[64];
     const char* t;
-    if (!f || !obj) return NULL;
+    int64_t out = 0;
+    if (!obj || !m || i < 0 || i >= m->fieldCount) return 0;
+    hao_gc_add_root(obj);
+    if (!hao_gc_expect_heap_object(obj)) {
+        char buf[96];
+        int n = 0;
+        const char* a = "reflect field_bits_at 非对象/已回收 obj=";
+        while (*a && n < (int)sizeof(buf) - 1) buf[n++] = *a++;
+        n = n + hao_fmt_ptr_angle(buf + n, (int)sizeof(buf) - n, obj);
+        if (n < (int)sizeof(buf)) buf[n] = '\0';
+        hao_panic_msg(buf);
+    }
+    f = &m->fields[i];
     base = (char*)obj + (size_t)f->slot * 8;
     t = f->typeStr;
     if (t && strcmp(t, "Int") == 0) {
-        hao_fmt_i64_dec(buf, (int)sizeof buf, (int64_t)(*(int32_t*)base));
+        out = (int64_t)(*(int32_t*)base);
     } else if (t && strcmp(t, "Long") == 0) {
-        hao_fmt_i64_dec(buf, (int)sizeof buf, *(int64_t*)base);
+        out = *(int64_t*)base;
     } else if (t && strcmp(t, "UInt") == 0) {
-        hao_fmt_u64_dec(buf, (int)sizeof buf, (uint64_t)(*(uint32_t*)base));
-    } else if (t && strcmp(t, "ULong") == 0) {
-        hao_fmt_u64_dec(buf, (int)sizeof buf, *(uint64_t*)base);
-    } else if (t && strcmp(t, "UIntPtr") == 0) {
-        hao_fmt_u64_dec(buf, (int)sizeof buf, *(uint64_t*)base);
+        out = (int64_t)(uint64_t)(*(uint32_t*)base);
+    } else if (t && (strcmp(t, "ULong") == 0 || strcmp(t, "UIntPtr") == 0)) {
+        out = (int64_t)(*(uint64_t*)base);
     } else if (t && strcmp(t, "Short") == 0) {
-        hao_fmt_i64_dec(buf, (int)sizeof buf, (int64_t)(*(int16_t*)base));
+        out = (int64_t)(*(int16_t*)base);
     } else if (t && strcmp(t, "UShort") == 0) {
-        hao_fmt_u64_dec(buf, (int)sizeof buf, (uint64_t)(*(uint16_t*)base));
+        out = (int64_t)(uint64_t)(*(uint16_t*)base);
     } else if (t && strcmp(t, "Byte") == 0) {
-        hao_fmt_u64_dec(buf, (int)sizeof buf, (uint64_t)(*(uint8_t*)base));
+        out = (int64_t)(uint64_t)(*(uint8_t*)base);
     } else if (t && strcmp(t, "SByte") == 0) {
-        hao_fmt_i64_dec(buf, (int)sizeof buf, (int64_t)(*(int8_t*)base));
+        out = (int64_t)(*(int8_t*)base);
     } else if (t && strcmp(t, "Float") == 0) {
-        hao_fmt_double((double)(*(float*)base), buf, (int)sizeof buf);
+        float fv = *(float*)base;
+        int32_t fb;
+        memcpy(&fb, &fv, 4);
+        out = (int64_t)(uint32_t)fb;
     } else if (t && strcmp(t, "Double") == 0) {
-        hao_fmt_double(*(double*)base, buf, (int)sizeof buf);
+        double dv = *(double*)base;
+        memcpy(&out, &dv, 8);
     } else if (t && strcmp(t, "Bool") == 0) {
-        strcpy(buf, (*(int8_t*)base) ? "true" : "false");
+        out = (*(int8_t*)base) ? 1 : 0;
     } else if (t && strcmp(t, "Char") == 0) {
-        hao_fmt_i64_dec(buf, (int)sizeof buf, (int64_t)(*(int32_t*)base));
+        out = (int64_t)(*(int32_t*)base);
+    } else if (t && strcmp(t, "Unit") == 0) {
+        out = 0;
     } else if (type_is_base(t, "String")) {
         HaoString* s = *(HaoString**)base;
         if (s && !hao_gc_expect_heap_ptr(s)) {
@@ -407,34 +425,12 @@ static HaoString* field_value_to_str(void* obj, const HaoFieldMeta* f) {
             if (n < (int)sizeof(buf)) buf[n] = '\0';
             hao_panic_msg(buf);
         }
-        return s;
+        out = (int64_t)(uintptr_t)s;
     } else {
-        hao_fmt_ptr_angle(buf, (int)sizeof buf, *(void**)base);
+        out = (int64_t)(uintptr_t)(*(void**)base);
     }
-    return hao_str_from_cstr(buf);
-}
-
-/* 按索引读字段（JSON 热路径：禁按名线性查找） */
-HaoString* hao_reflect_field_get_at(HaoNativeHandle* h, void* obj, int32_t i) {
-    void* meta = meta_raw(h);
-    const HaoClassMeta* m = (const HaoClassMeta*)meta;
-    const HaoFieldMeta* f;
-    HaoString* r;
-    if (!obj || !m || i < 0 || i >= m->fieldCount) return NULL;
-    hao_gc_add_root(obj);
-    if (!hao_gc_expect_heap_object(obj)) {
-        char buf[96];
-        int n = 0;
-        const char* a = "reflect field_get_at 非对象/已回收 obj=";
-        while (*a && n < (int)sizeof(buf) - 1) buf[n++] = *a++;
-        n = n + hao_fmt_ptr_angle(buf + n, (int)sizeof(buf) - n, obj);
-        if (n < (int)sizeof(buf)) buf[n] = '\0';
-        hao_panic_msg(buf);
-    }
-    f = &m->fields[i];
-    r = field_value_to_str(obj, f);
     hao_gc_remove_root(obj);
-    return r;
+    return out;
 }
 
 void* hao_reflect_field_get_obj_at(HaoNativeHandle* h, void* obj, int32_t i) {
@@ -459,42 +455,7 @@ int32_t hao_reflect_field_is_static(HaoNativeHandle* h, int32_t i) {
     return m->fields[i].isStatic ? 1 : 0;
 }
 
-/* 读字段值转字符串。obj 为对象实例。 */
-HaoString* hao_reflect_field_get(HaoNativeHandle* h, void* obj, HaoString* fname) {
-    void* meta = meta_raw(h);
-    const HaoClassMeta* m = (const HaoClassMeta*)meta;
-    char* name_c;
-    const HaoFieldMeta* f;
-    HaoString* r;
-    if (!obj || !fname) return NULL;
-    /*
-     * obj 被 sweep 后内存常复用为 String 载荷；再按槽读会得到 ASCII 当指针
-     * （崩溃 rcx=「collectC」）。须先挂根再确认仍是 SLOTS/FULL 对象。
-     */
-    hao_gc_add_root(obj);
-    hao_gc_add_root(fname);
-    if (!hao_gc_expect_heap_object(obj)) {
-        char buf[96];
-        int n = 0;
-        const char* a = "reflect field_get 非对象/已回收 obj=";
-        while (*a && n < (int)sizeof(buf) - 1) buf[n++] = *a++;
-        n = n + hao_fmt_ptr_angle(buf + n, (int)sizeof(buf) - n, obj);
-        if (n < (int)sizeof(buf)) buf[n] = '\0';
-        hao_panic_msg(buf);
-    }
-    name_c = hao_ffi_dup_cstr(fname);
-    f = find_field(m, name_c);
-    free(name_c);
-    if (!f) {
-        hao_gc_remove_root(fname);
-        hao_gc_remove_root(obj);
-        return NULL;
-    }
-    r = field_value_to_str(obj, f);
-    hao_gc_remove_root(fname);
-    hao_gc_remove_root(obj);
-    return r;
-}
+/* v0.79：field_get 拼串已删；按名路径在 Hao 循环 getFieldAt */
 
 /* field_set 专用解析（非导出；整型/布尔 parse 已上移 Hao） */
 static int field_parse_i32(const char* p, int32_t* out) {
@@ -834,8 +795,7 @@ float hao_reflect_bits_flt(int64_t i) {
     int32_t bits = (int32_t)i;
     float f; memcpy(&f, &bits, 4); return f;
 }
-int64_t hao_reflect_bool_val(int8_t b) { return b ? 1 : 0; }
-int8_t  hao_reflect_val_bool(int64_t i) { return i ? 1 : 0; }
+/* v0.79：删死导出 bool↔i64 包装 */
 /* v0.76：若类有 $jsonWrite 则调用并返回 1；否则 0（回落反射 Bean） */
 int32_t hao_json_try_write(void* obj, void* sb, int32_t features, int32_t indent,
                            void* stack, int32_t depth) {

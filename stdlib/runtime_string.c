@@ -197,7 +197,17 @@ int32_t hao_str_byte_len(HaoString* s) {
     return sblen(s);
 }
 
-/* ---- 拼接 / 转串 ---- */
+int64_t hao_str_get_cp_len(HaoString* s) {
+    if (!s) return 0;
+    return s->cp_len;
+}
+
+void hao_str_set_cp_len(HaoString* s, int64_t n) {
+    if (!s) return;
+    s->cp_len = n;
+}
+
+/* ---- 拼接 / 转串（业务 concat 已上移 Hao StringBuilder；保留供 extern 冒烟） ---- */
 
 HaoString* hao_str_concat(HaoString* a, HaoString* b) {
     const char* da;

@@ -156,42 +156,5 @@ int hao_parse_double_cstr(const char* p, const char** endp, double* out) {
     return 0;
 }
 
-HaoString* hao_float_to_str(float v) {
-    char buf[96];
-    int n = hao_fmt_double((double)v, buf, (int)sizeof(buf));
-    if (n < 0) n = 0;
-    return hao_str_from_bytes(buf, n);
-}
-
-HaoString* hao_double_to_str(double v) {
-    char buf[96];
-    int n = hao_fmt_double(v, buf, (int)sizeof(buf));
-    if (n < 0) n = 0;
-    return hao_str_from_bytes(buf, n);
-}
-
-void* hao_parse_double(HaoString* s) {
-    char* p = hao_ffi_dup_cstr(s);
-    const char* end = NULL;
-    double v;
-    if (!p || !*p) { free(p); return NULL; }
-    if (hao_parse_double_cstr(p, &end, &v) != 0) {
-        free(p);
-        return NULL;
-    }
-    free(p);
-    return hao_box_f64(v);
-}
-
-void* hao_parse_float(HaoString* s) {
-    char* p = hao_ffi_dup_cstr(s);
-    const char* end = NULL;
-    double v;
-    if (!p || !*p) { free(p); return NULL; }
-    if (hao_parse_double_cstr(p, &end, &v) != 0) {
-        free(p);
-        return NULL;
-    }
-    free(p);
-    return hao_box_f32((float)v);
-}
+/* v0.79：hao_float_to_str / hao_double_to_str / hao_parse_* 已上移 Hao */
+int64_t hao_f64_to_i64(double v) { return (int64_t)v; }

@@ -53,15 +53,23 @@ class String {
     static func valueOf(s: String): lang.String {
         return new lang.String(s);
     }
-    // IR 内建 + / .length / s[i] 唯一 Hao 入口（v0.57）；布局仍经 hao_str_* 薄包
+    // IR 内建 + / .length / s[i] 唯一 Hao 入口（v0.79：算法在 Hao；布局经 get_bytes）
     static func concat(a: String, b: String): String {
-        return hao_str_concat(a, b);
+        val n = hao_str_byte_len(a) + hao_str_byte_len(b);
+        val sb = StringBuilder.withCapacity(n);
+        sb.append(a);
+        sb.append(b);
+        return sb.toString();
     }
     static func codePointLen(s: String): Long {
-        return hao_str_len(s);
+        val cached = hao_str_get_cp_len(s);
+        if (cached >= 0) { return cached; }
+        val n = Character.utf8CpCount(hao_str_get_bytes(s));
+        hao_str_set_cp_len(s, n);
+        return n;
     }
     static func charAtCp(s: String, i: Long): Char {
-        return hao_str_char_at(s, i);
+        return Character.utf8CharAtCp(hao_str_get_bytes(s), i);
     }
     static func fromInt(n: Int): lang.String {
         return new lang.String(Integer.toStr(n));
@@ -70,10 +78,10 @@ class String {
         return new lang.String(Long.toStr(n));
     }
     static func fromFloat(f: Float): lang.String {
-        return new lang.String(hao_float_to_str(f));
+        return new lang.String(Float.toStr(f));
     }
     static func fromDouble(d: Double): lang.String {
-        return new lang.String(hao_double_to_str(d));
+        return new lang.String(Double.toStr(d));
     }
     static func fromBool(b: Bool): lang.String {
         return new lang.String(Boolean.toStr(b));
@@ -154,8 +162,9 @@ class String {
         if (b < a) { b = a; }
         if (a > n) { a = n; }
         if (b > n) { b = n; }
-        var b0 = hao_str_byte_of_cp(s, a);
-        var b1 = hao_str_byte_of_cp(s, b);
+        val bytes = hao_str_get_bytes(s);
+        var b0 = Character.utf8ByteOfCp(bytes, a);
+        var b1 = Character.utf8ByteOfCp(bytes, b);
         if (b0 < 0) { b0 = 0; }
         if (b1 < 0) { b1 = hao_str_byte_len(s); }
         return hao_str_byte_slice(s, b0, b1);

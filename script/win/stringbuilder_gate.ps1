@@ -41,6 +41,37 @@ BanCode $rt "hao_array_push|hao_array_pop|hao_array_ensure_cap|hao_array_set_len
 
 $native = Get-Content -Raw -Encoding utf8 (Join-Path $Root "stdlib\src\lang\native.hao")
 BanCode $native "hao_str_byte_arr" "native no hao_str_byte_arr"
+BanCode $native "hao_float_to_str|hao_double_to_str|hao_parse_float|hao_parse_double" "native no float business"
+BanCode $native "hao_str_len|hao_str_concat|hao_str_char_at|hao_str_byte_of_cp" "native no str algorithm"
+
+$obj = Get-Content -Raw -Encoding utf8 (Join-Path $Root "stdlib\src\object\Object.hao")
+BanCode $obj "hao_object_hashCode|hao_object_equals|hao_object_toString" "Object defaults in Hao"
+NeedText $obj "ptrOf\(this\)" "Object uses ptrOf"
+
+$flt = Get-Content -Raw -Encoding utf8 (Join-Path $Root "stdlib\src\lang\Float.hao")
+BanCode $flt "hao_float_to_str|hao_parse_float" "Float toStr/parse Hao"
+$dbl = Get-Content -Raw -Encoding utf8 (Join-Path $Root "stdlib\src\lang\Double.hao")
+BanCode $dbl "hao_double_to_str|hao_parse_double" "Double toStr/parse Hao"
+
+$str = Get-Content -Raw -Encoding utf8 (Join-Path $Root "stdlib\src\lang\String.hao")
+NeedText $str "StringBuilder.withCapacity" "String.concat via SB"
+NeedText $str "Character.utf8CpCount" "String.codePointLen Hao"
+BanCode $str "hao_str_concat|hao_str_len|hao_str_char_at|hao_str_byte_of_cp" "String no C str algo"
+
+$refl = Get-Content -Raw -Encoding utf8 (Join-Path $Root "stdlib\src\reflect\reflect.hao")
+NeedText $refl "hao_reflect_field_bits_at" "reflect field bits trampoline"
+BanCode $refl "hao_reflect_field_get_at|hao_reflect_field_get\b" "reflect no C field_get stringify"
+
+$rtc = Get-Content -Raw -Encoding utf8 (Join-Path $Root "stdlib\runtime_reflect.c")
+BanCode $rtc "field_value_to_str" "C no field_value_to_str"
+BanCode $rtc "hao_reflect_bool_val|hao_reflect_val_bool" "C no dead bool export"
+
+$emit = Get-Content -Raw -Encoding utf8 (Join-Path $Root "src\irgen\IREmitter.h")
+BanCode $emit "hao_array_push|hao_array_pop|hao_array_cap" "IR no push/pop/cap declare"
+BanCode $emit "hao_float_to_str|hao_double_to_str" "IR no float_to_str declare"
+
+$irv = Get-Content -Raw -Encoding utf8 (Join-Path $Root "src\irgen\IRGenValue.cpp")
+BanCode $irv "@hao_float_to_str|@hao_double_to_str" "IRGenValue uses Float/Double.toStr"
 
 $hm = Get-Content -Raw -Encoding utf8 (Join-Path $Root "stdlib\src\collections\HashMap.hao")
 BanCode $hm "table\s*\+=\s*null" "HashMap no table+=null"
@@ -54,9 +85,6 @@ if ($nGuide -lt 4) {
     Write-Host "FAIL SB_GATE IRGen array+=/pop reject messages ($nGuide)"
     $script:fail++
 } else { Write-Host "OK   IRGen rejects array+=/pop ($nGuide guides)" }
-
-$emit = Get-Content -Raw -Encoding utf8 (Join-Path $Root "src\irgen\IREmitter.h")
-BanCode $emit "hao_array_push|hao_array_pop|hao_array_cap" "IR no push/pop/cap declare"
 
 if ($fail -gt 0) {
     Write-Host "STRINGBUILDER_GATE FAIL ($fail)"

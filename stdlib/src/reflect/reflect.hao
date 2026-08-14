@@ -5,6 +5,7 @@ package reflect;
 
 import collections;
 import exception;
+import lang;
 
 class Class {
     var meta: NativeHandle;
@@ -83,11 +84,59 @@ class Class {
         return hao_reflect_method_anno_value(this.meta, mi, ai);
     }
     func getField(o: Object, name: String): String? {
-        return hao_reflect_field_get(this.meta, o, name);
+        val n = this.getFieldCount();
+        var i = 0;
+        while (i < n) {
+            if (this.getFieldName(i) == name) {
+                return this.getFieldAt(o, i);
+            }
+            i = i + 1;
+        }
+        return null;
     }
-    // JSON 热路径：按字段下标读（禁按名线性查找）
+    // JSON 热路径：按字段下标读（禁按名线性查找）；标量格式化在 Hao（v0.79）
     func getFieldAt(o: Object, i: Int): String? {
-        return hao_reflect_field_get_at(this.meta, o, i);
+        val t = this.getFieldType(i);
+        val bits = hao_reflect_field_bits_at(this.meta, o, i);
+        if (t == "String" || t == "String?") {
+            if (bits == 0) { return null; }
+            return strOfInt(bits);
+        }
+        if (t == "Int") {
+            val v: Int = bits;
+            return Integer.toStr(v);
+        }
+        if (t == "Long") { return Long.toStr(bits); }
+        if (t == "UInt") {
+            val v: UInt = bits;
+            return UInt.toStr(v);
+        }
+        if (t == "ULong" || t == "UIntPtr") {
+            val v: ULong = bits;
+            return ULong.toStr(v);
+        }
+        if (t == "Short") {
+            val v: Int = bits;
+            return Integer.toStr(v);
+        }
+        if (t == "UShort" || t == "Byte") {
+            val v: Int = bits;
+            return Integer.toStr(v);
+        }
+        if (t == "SByte") {
+            val v: Int = bits;
+            return Integer.toStr(v);
+        }
+        if (t == "Float") { return Float.toStr(bitsFlt(bits)); }
+        if (t == "Double") { return Double.toStr(bitsDbl(bits)); }
+        if (t == "Bool") { return Boolean.toStr(bits != 0); }
+        if (t == "Char") {
+            val v: Char = bits;
+            return Integer.toStr(v);
+        }
+        if (t == "Unit") { return ""; }
+        // 引用槽：对齐旧 C 的 <0x…>
+        return Object.ptrAngle(bits);
     }
     // v0.49：引用字段对象指针；标量/String/空 → null（嵌套 Bean / JSON / 模板用）
     func getFieldObject(o: Object, name: String): Object? {
@@ -487,8 +536,7 @@ extern func hao_reflect_anno_value(m: NativeHandle, i: Int): String = "hao_refle
 extern func hao_reflect_method_anno_count(m: NativeHandle, mi: Int): Int = "hao_reflect_method_anno_count";
 extern func hao_reflect_method_anno_name(m: NativeHandle, mi: Int, ai: Int): String = "hao_reflect_method_anno_name";
 extern func hao_reflect_method_anno_value(m: NativeHandle, mi: Int, ai: Int): String = "hao_reflect_method_anno_value";
-extern func hao_reflect_field_get(m: NativeHandle, o: Object, name: String): String? = "hao_reflect_field_get";
-extern func hao_reflect_field_get_at(m: NativeHandle, o: Object, i: Int): String? = "hao_reflect_field_get_at";
+extern func hao_reflect_field_bits_at(m: NativeHandle, o: Object, i: Int): Long = "hao_reflect_field_bits_at";
 extern func hao_reflect_field_get_obj(m: NativeHandle, o: Object, name: String): Object? = "hao_reflect_field_get_obj";
 extern func hao_reflect_field_get_obj_at(m: NativeHandle, o: Object, i: Int): Object? = "hao_reflect_field_get_obj_at";
 extern func hao_reflect_field_is_static(m: NativeHandle, i: Int): Int = "hao_reflect_field_is_static";

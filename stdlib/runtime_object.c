@@ -100,15 +100,6 @@ int8_t hao_type_is(void* obj, void** allowed) {
     return 0;
 }
 
-int32_t hao_object_hashCode(void* obj) {
-    uintptr_t p = (uintptr_t)obj;
-    return (int32_t)(p ^ (p >> 32));
-}
-
-int8_t hao_object_equals(void* a, void* b) {
-    return a == b;
-}
-
 int hao_fmt_u64_dec(char* out, int cap, uint64_t u) {
     char tmp[24];
     int n = 0, len = 0;
@@ -161,8 +152,4 @@ int hao_fmt_ptr_angle(char* out, int cap, const void* p) {
     return len;
 }
 
-HaoString* hao_object_toString(void* obj) {
-    char buf[32];
-    int n = hao_fmt_ptr_angle(buf, (int)sizeof buf, obj);
-    return hao_str_from_bytes(buf, n);
-}
+/* v0.79：Object.toString/hashCode/equals 已上移 Hao；保留 hao_fmt_* 供 panic/reflect 诊断 */
